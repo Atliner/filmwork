@@ -33,6 +33,16 @@ npm start
 
 The server binds to `0.0.0.0:$PORT`, serves the frontend itself, and uses relative `/api` calls. Node.js 18.18+ and MySQL 8 are required.
 
+## Product experience
+
+- Cinematic Obsidian mobile-first shell with an RTL header, four-item glass dock, cinematic hero, poster rails, and responsive search grid.
+- Search by title or genre with type, year, and IMDb filters.
+- Authenticated playback progress, resume-from-last-position, profile statistics, and Telegram download history.
+- Custom player with direct source binding, external SRT/VTT and dubbed audio synchronization, embedded-track selection, and related titles.
+- Hierarchical season/audio/resolution download picker and self-healing Telegram delivery.
+- Advertiser analytics, wallet, placement mockup, campaign creation, and pause/resume controls.
+- Owner-only manual content entry alongside automated Telegram ingestion; owner HTML and JavaScript remain outside public static hosting.
+
 ## Security model
 
 - Public sessions are short JWT claims hydrated from the database on each request.

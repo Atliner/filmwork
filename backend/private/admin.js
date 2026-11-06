@@ -80,6 +80,38 @@
   });
 
   document.addEventListener('submit', async (event) => {
+    const contentForm = event.target.closest('#content-form');
+    if (contentForm) {
+      event.preventDefault();
+      const button = contentForm.querySelector('button[type="submit"]');
+      const fields = Object.fromEntries(new FormData(contentForm));
+      const payload = {
+        title: fields.title,
+        originalTitle: fields.originalTitle,
+        contentType: fields.contentType,
+        genres: String(fields.genres || '').split(/[،,]/).map((value) => value.trim()).filter(Boolean),
+        releaseYear: fields.releaseYear || null,
+        imdbScore: fields.imdbScore === '' ? '' : Number(fields.imdbScore),
+        posterUrl: fields.posterUrl,
+        backdropUrl: fields.backdropUrl,
+        streamUrl: fields.streamUrl,
+        description: fields.description,
+        status: fields.status,
+      };
+      button.disabled = true;
+      try {
+        await api('/api/admin/contents', { method: 'POST', body: JSON.stringify(payload) });
+        contentForm.reset();
+        toast('اثر جدید ثبت شد.');
+        await load();
+      } catch (error) {
+        toast(error.message, true);
+      } finally {
+        button.disabled = false;
+      }
+      return;
+    }
+
     const form = event.target.closest('[data-credit-user]');
     if (!form) return;
     event.preventDefault();

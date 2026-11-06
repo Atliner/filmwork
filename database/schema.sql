@@ -161,6 +161,33 @@ CREATE TABLE IF NOT EXISTS favorites (
   CONSTRAINT fk_favorites_content FOREIGN KEY (content_id) REFERENCES contents(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS playback_progress (
+  user_id BIGINT UNSIGNED NOT NULL,
+  content_id BIGINT UNSIGNED NOT NULL,
+  position_seconds INT UNSIGNED NOT NULL DEFAULT 0,
+  duration_seconds INT UNSIGNED NOT NULL DEFAULT 0,
+  completed BOOLEAN NOT NULL DEFAULT FALSE,
+  last_watched_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (user_id, content_id),
+  KEY idx_progress_recent (user_id, completed, last_watched_at),
+  CONSTRAINT fk_progress_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_progress_content FOREIGN KEY (content_id) REFERENCES contents(id) ON DELETE CASCADE,
+  CONSTRAINT chk_progress_position CHECK (position_seconds <= duration_seconds OR duration_seconds = 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS download_history (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id BIGINT UNSIGNED NOT NULL,
+  media_link_id BIGINT UNSIGNED NOT NULL,
+  delivery_method ENUM('telegram_copy', 'telegram_link') NOT NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_download_history_user (user_id, created_at),
+  KEY idx_download_history_media (media_link_id),
+  CONSTRAINT fk_download_history_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_download_history_media FOREIGN KEY (media_link_id) REFERENCES media_links(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS advertiser_wallets (
   user_id BIGINT UNSIGNED NOT NULL,
   balance DECIMAL(15,2) NOT NULL DEFAULT 0.00,

@@ -45,7 +45,7 @@ npm run build:css
 mysql -u CPANEL_DB_USER -p CPANEL_DB_NAME < ~/filmwork/database/schema.sql
 ```
 
-Schema از InnoDB و `utf8mb4` استفاده می‌کند و جدول‌ها را idempotent می‌سازد. در پایان یک procedure نگه‌داری به نام `promote_media_fallback` ایجاد می‌شود. API برای بازیابی به procedure وابسته نیست و همان جابه‌جایی را داخل transaction و با `SELECT ... FOR UPDATE` انجام می‌دهد. اگر host اجازه `CREATE ROUTINE` نمی‌دهد، فقط بخش بین `DROP PROCEDURE` و آخر فایل را حذف و import را تکرار کنید.
+Schema از InnoDB و `utf8mb4` استفاده می‌کند و جدول‌ها را idempotent می‌سازد. جدول‌های `playback_progress` و `download_history` به‌ترتیب ادامه‌تماشا و تاریخچه ارسال فایل را نگه می‌دارند؛ شماره تلفن یا متن خصوصی تلگرام در این جدول‌ها ذخیره نمی‌شود. هنگام ارتقای نسخه قبلی نیز اجرای دوباره همین فایل، جدول‌های جدید را با `CREATE TABLE IF NOT EXISTS` اضافه می‌کند و داده‌های قبلی را حذف نمی‌کند. در پایان یک procedure نگه‌داری به نام `promote_media_fallback` ایجاد می‌شود. API برای بازیابی به procedure وابسته نیست و همان جابه‌جایی را داخل transaction و با `SELECT ... FOR UPDATE` انجام می‌دهد. اگر host اجازه `CREATE ROUTINE` نمی‌دهد، فقط بخش بین `DROP PROCEDURE` و آخر فایل را حذف و import را تکرار کنید.
 
 ## 4) ساخت کلیدها و `.env`
 

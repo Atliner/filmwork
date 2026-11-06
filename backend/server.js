@@ -210,6 +210,17 @@ function escapeLike(value) {
   return String(value).replace(/[!%_]/g, '!$&');
 }
 
+function contentSlug(title, uuid) {
+  const base = String(title)
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 220) || 'content';
+  return `${base}-${uuid.slice(0, 8)}`;
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -293,7 +304,7 @@ app.post('/api/auth/verify', asyncRoute(async (req, res) => {
   const user = await withTransaction(async (connection) => {
     const [codes] = await connection.execute(
       `SELECT lc.id AS code_id, lc.user_id, lc.failed_attempts,
-              u.id, u.tg_user_id, u.tg_chat_id, u.account_name, u.tg_username, u.role, u.status
+              u.id, u.tg_user_id, u.tg_chat_id, u.account_name, u.tg_username, u.role, u.status, u.created_at
        FROM login_codes lc
        JOIN users u ON u.id = lc.user_id
        WHERE lc.code_hash = :codeHash
@@ -328,6 +339,7 @@ app.post('/api/auth/verify', asyncRoute(async (req, res) => {
       id: String(user.id),
       accountName: user.account_name,
       role: user.role,
+      createdAt: user.created_at,
     },
   });
 }));
@@ -353,6 +365,111 @@ app.get('/api/me', requireUser, asyncRoute(async (req, res) => {
   });
 }));
 
+app.get('/api/me/stats', requireUser, asyncRoute(async (req, res) => {
+  const rows = await query(
+    `SELECT
+       (SELECT COUNT(*) FROM favorites f WHERE f.user_id = :userId) AS favorites_count,
+       (SELECT COUNT(*) FROM comments cm WHERE cm.user_id = :userId AND cm.status = 'visible') AS comments_count,
+       (SELECT COUNT(*) FROM download_history dh WHERE dh.user_id = :userId) AS downloads_count,
+       (SELECT COALESCE(SUM(pp.position_seconds), 0) FROM playback_progress pp WHERE pp.user_id = :userId) AS watched_seconds,
+       (SELECT COUNT(*) FROM playback_progress pp WHERE pp.user_id = :userId AND pp.completed = TRUE) AS completed_count`,
+    { userId: req.user.id },
+  );
+  const row = rows[0];
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    favorites: Number(row.favorites_count),
+    comments: Number(row.comments_count),
+    downloads: Number(row.downloads_count),
+    watchedSeconds: Number(row.watched_seconds),
+    completed: Number(row.completed_count),
+  });
+}));
+
+app.get('/api/progress', requireUser, asyncRoute(async (req, res) => {
+  const rows = await query(
+    `SELECT pp.position_seconds, pp.duration_seconds, pp.completed, pp.last_watched_at, c.*
+     FROM playback_progress pp
+     JOIN contents c ON c.id = pp.content_id
+     WHERE pp.user_id = :userId AND c.status = 'published'
+     ORDER BY pp.last_watched_at DESC LIMIT 30`,
+    { userId: req.user.id },
+  );
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    items: rows.map((row) => ({
+      content: contentDto(row),
+      positionSeconds: Number(row.position_seconds),
+      durationSeconds: Number(row.duration_seconds),
+      completed: Boolean(row.completed),
+      lastWatchedAt: row.last_watched_at,
+    })),
+  });
+}));
+
+app.post('/api/contents/:assetId/progress', requireUser, asyncRoute(async (req, res) => {
+  const position = Math.floor(asPositiveNumber(req.body?.positionSeconds ?? 0, 'موقعیت پخش', { min: 0, max: 10_000_000 }));
+  const duration = Math.floor(asPositiveNumber(req.body?.durationSeconds, 'مدت پخش', { min: 1, max: 10_000_000 }));
+  assert(position <= duration + 5, 422, 'INVALID_PROGRESS', 'موقعیت پخش از مدت فایل بیشتر است.');
+  const contents = await query(
+    "SELECT id FROM contents WHERE asset_uuid = :assetId AND status = 'published' LIMIT 1",
+    { assetId: req.params.assetId },
+  );
+  assert(contents[0], 404, 'CONTENT_NOT_FOUND', 'اثر پیدا نشد.');
+  const boundedPosition = duration > 0 ? Math.min(position, duration) : position;
+  const completed = duration > 0 && boundedPosition / duration >= 0.92;
+  await query(
+    `INSERT INTO playback_progress
+      (user_id, content_id, position_seconds, duration_seconds, completed)
+     VALUES (:userId, :contentId, :position, :duration, :completed)
+     ON DUPLICATE KEY UPDATE
+       position_seconds = VALUES(position_seconds),
+       duration_seconds = VALUES(duration_seconds),
+       completed = VALUES(completed),
+       last_watched_at = CURRENT_TIMESTAMP(3)`,
+    {
+      userId: req.user.id,
+      contentId: contents[0].id,
+      position: boundedPosition,
+      duration,
+      completed,
+    },
+  );
+  res.status(202).json({ saved: true, completed });
+}));
+
+app.get('/api/downloads', requireUser, asyncRoute(async (req, res) => {
+  const rows = await query(
+    `SELECT dh.id AS download_id, dh.delivery_method, dh.created_at AS downloaded_at,
+            ml.public_id AS media_public_id, ml.resolution, ml.version_label, ml.file_size_bytes,
+            ml.audio_type, ml.season_number, ml.episode_number, c.*
+     FROM download_history dh
+     JOIN media_links ml ON ml.id = dh.media_link_id
+     JOIN contents c ON c.id = ml.content_id
+     WHERE dh.user_id = :userId AND c.status = 'published'
+     ORDER BY dh.created_at DESC LIMIT 100`,
+    { userId: req.user.id },
+  );
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    items: rows.map((row) => ({
+      id: String(row.download_id),
+      content: contentDto(row),
+      media: {
+        id: row.media_public_id,
+        resolution: row.resolution,
+        version: row.version_label,
+        fileSizeBytes: Number(row.file_size_bytes),
+        audioType: row.audio_type,
+        season: row.season_number,
+        episode: row.episode_number,
+      },
+      deliveryMethod: row.delivery_method,
+      downloadedAt: row.downloaded_at,
+    })),
+  });
+}));
+
 app.get('/api/contents', asyncRoute(async (req, res) => {
   const { page, limit, offset } = parsePage(req.query);
   const filters = ["c.status = 'published'"];
@@ -370,6 +487,18 @@ app.get('/api/contents', asyncRoute(async (req, res) => {
     const genre = asString(req.query.genre, 'ژانر', { min: 1, max: 60 });
     filters.push('JSON_CONTAINS(c.genres, JSON_QUOTE(:genre))');
     params.genre = genre;
+  }
+  if (req.query.yearFrom) {
+    params.yearFrom = Math.round(asPositiveNumber(req.query.yearFrom, 'سال شروع', { min: 1888, max: 2200 }));
+    filters.push('c.release_year >= :yearFrom');
+  }
+  if (req.query.yearTo) {
+    params.yearTo = Math.round(asPositiveNumber(req.query.yearTo, 'سال پایان', { min: 1888, max: 2200 }));
+    filters.push('c.release_year <= :yearTo');
+  }
+  if (req.query.minRating) {
+    params.minRating = asPositiveNumber(req.query.minRating, 'حداقل امتیاز', { min: 0, max: 10 });
+    filters.push('c.imdb_score >= :minRating');
   }
   const where = filters.join(' AND ');
   const order = req.query.sort === 'rating'
@@ -501,7 +630,23 @@ app.delete('/api/contents/:assetId/favorite', requireUser, asyncRoute(async (req
 
 app.post('/api/download', requireUser, asyncRoute(async (req, res) => {
   const mediaId = asString(req.body?.mediaId, 'شناسه فایل', { min: 36, max: 36 });
+  const mediaRows = await query(
+    `SELECT ml.id FROM media_links ml
+     JOIN contents c ON c.id = ml.content_id
+     WHERE ml.public_id = :mediaId AND ml.is_active = TRUE AND c.status = 'published' LIMIT 1`,
+    { mediaId },
+  );
+  assert(mediaRows[0], 404, 'MEDIA_NOT_FOUND', 'فایل پیدا نشد.');
   const result = await deliverMedia(mediaId, req.user);
+  await query(
+    `INSERT INTO download_history (user_id, media_link_id, delivery_method)
+     VALUES (:userId, :mediaLinkId, :deliveryMethod)`,
+    {
+      userId: req.user.id,
+      mediaLinkId: mediaRows[0].id,
+      deliveryMethod: result.deliveryMethod,
+    },
+  ).catch((error) => console.error('Download was delivered but history logging failed', error));
   res.setHeader('Cache-Control', 'no-store');
   res.json({
     ...result,
@@ -645,9 +790,11 @@ app.get('/api/advertiser/profile', requireUser, requireRole('advertiser'), async
   const [walletRows, campaignRows, transactionRows] = await Promise.all([
     query('SELECT balance, currency FROM advertiser_wallets WHERE user_id = :userId LIMIT 1', { userId: req.user.id }),
     query(
-      `SELECT public_id, campaign_name, headline, placement, asset_type, budget, spent, status,
-              starts_at, ends_at, created_at
-       FROM ads WHERE advertiser_id = :userId ORDER BY created_at DESC LIMIT 50`,
+      `SELECT a.public_id, a.campaign_name, a.headline, a.placement, a.asset_type,
+              a.creative_url, a.budget, a.spent, a.status, a.starts_at, a.ends_at, a.created_at,
+              (SELECT COUNT(*) FROM ad_events ae WHERE ae.ad_id = a.id AND ae.event_type = 'impression') AS impressions,
+              (SELECT COUNT(*) FROM ad_events ae WHERE ae.ad_id = a.id AND ae.event_type = 'click') AS clicks
+       FROM ads a WHERE a.advertiser_id = :userId ORDER BY a.created_at DESC LIMIT 50`,
       { userId: req.user.id },
     ),
     query(
@@ -656,19 +803,32 @@ app.get('/api/advertiser/profile', requireUser, requireRole('advertiser'), async
       { userId: req.user.id },
     ),
   ]);
+  const analytics = campaignRows.reduce((total, row) => {
+    total.impressions += Number(row.impressions || 0);
+    total.clicks += Number(row.clicks || 0);
+    total.spent += Number(row.spent || 0);
+    return total;
+  }, { impressions: 0, clicks: 0, spent: 0 });
+  analytics.ctr = analytics.impressions > 0
+    ? Number(((analytics.clicks / analytics.impressions) * 100).toFixed(2))
+    : 0;
   res.setHeader('Cache-Control', 'no-store');
   res.json({
     wallet: walletRows[0]
       ? { balance: Number(walletRows[0].balance), currency: walletRows[0].currency }
       : { balance: 0, currency: 'IRR' },
+    analytics,
     campaigns: campaignRows.map((row) => ({
       id: row.public_id,
       name: row.campaign_name,
       headline: row.headline,
       placement: row.placement,
       assetType: row.asset_type,
+      creativeUrl: row.creative_url,
       budget: Number(row.budget),
       spent: Number(row.spent),
+      impressions: Number(row.impressions || 0),
+      clicks: Number(row.clicks || 0),
       status: row.status,
       startsAt: row.starts_at,
       endsAt: row.ends_at,
@@ -681,6 +841,18 @@ app.get('/api/advertiser/profile', requireUser, requireRole('advertiser'), async
       createdAt: row.created_at,
     })),
   });
+}));
+
+app.patch('/api/advertiser/campaigns/:adId', requireUser, requireRole('advertiser'), asyncRoute(async (req, res) => {
+  const status = asEnum(req.body?.status, 'وضعیت', ['active', 'paused']);
+  const result = await query(
+    `UPDATE ads SET status = :status
+     WHERE public_id = :adId AND advertiser_id = :userId
+       AND status IN ('active', 'paused') AND ends_at > UTC_TIMESTAMP(3)`,
+    { status, adId: req.params.adId, userId: req.user.id },
+  );
+  assert(result.affectedRows, 409, 'CAMPAIGN_NOT_CHANGEABLE', 'این کمپین قابل تغییر نیست.');
+  res.json({ updated: true, status });
 }));
 
 function parseButtons(value) {
@@ -867,6 +1039,51 @@ app.get('/api/admin/stats', requireAdmin, asyncRoute(async (_req, res) => {
     },
     healthEvents,
   });
+}));
+
+app.post('/api/admin/contents', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  const title = asString(req.body?.title, 'عنوان', { min: 1, max: 255 });
+  const originalTitle = asString(req.body?.originalTitle, 'عنوان اصلی', { max: 255, optional: true });
+  const contentType = asEnum(req.body?.contentType || 'movie', 'نوع اثر', ['movie', 'series']);
+  const description = asString(req.body?.description, 'توضیحات', { max: 20_000, optional: true });
+  const releaseYear = req.body?.releaseYear
+    ? Math.round(asPositiveNumber(req.body.releaseYear, 'سال انتشار', { min: 1888, max: 2200 }))
+    : null;
+  const imdbScore = req.body?.imdbScore !== undefined && req.body?.imdbScore !== ''
+    ? asPositiveNumber(req.body.imdbScore, 'امتیاز IMDb', { min: 0, max: 10 })
+    : null;
+  const rawGenres = Array.isArray(req.body?.genres) ? req.body.genres : [];
+  assert(rawGenres.length <= 12, 422, 'TOO_MANY_GENRES', 'حداکثر ۱۲ ژانر مجاز است.');
+  const genres = rawGenres.map((genre) => asString(genre, 'ژانر', { min: 1, max: 60 }));
+  const posterUrl = asHttpUrl(req.body?.posterUrl, 'لینک پوستر', { optional: true, httpsOnly: isProduction });
+  const backdropUrl = asHttpUrl(req.body?.backdropUrl, 'لینک تصویر پس‌زمینه', { optional: true, httpsOnly: isProduction });
+  const streamUrl = asHttpUrl(req.body?.streamUrl, 'لینک پخش', { optional: true, httpsOnly: isProduction });
+  const status = asEnum(req.body?.status || 'draft', 'وضعیت', ['draft', 'published']);
+  const assetUuid = crypto.randomUUID();
+  await query(
+    `INSERT INTO contents
+      (asset_uuid, content_type, title, original_title, slug, description, imdb_score,
+       release_year, genres, poster_url, backdrop_url, stream_url, status)
+     VALUES
+      (:assetUuid, :contentType, :title, :originalTitle, :slug, :description, :imdbScore,
+       :releaseYear, :genres, :posterUrl, :backdropUrl, :streamUrl, :status)`,
+    {
+      assetUuid,
+      contentType,
+      title,
+      originalTitle,
+      slug: contentSlug(originalTitle || title, assetUuid),
+      description,
+      imdbScore,
+      releaseYear,
+      genres: JSON.stringify(genres),
+      posterUrl,
+      backdropUrl,
+      streamUrl,
+      status,
+    },
+  );
+  res.status(201).json({ content: { id: assetUuid, title, status } });
 }));
 
 app.get('/api/admin/contents', requireAdmin, asyncRoute(async (_req, res) => {
