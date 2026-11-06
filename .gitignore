@@ -1,0 +1,19 @@
+# Secrets
+backend/.env
+*.pem
+*.key
+
+# Dependencies and generated caches
+backend/node_modules/
+node_modules/
+.npm/
+*.log
+.DS_Store
+
+# Runtime creative uploads (persist outside Git)
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Test/coverage output
+coverage/
+.nyc_output/
