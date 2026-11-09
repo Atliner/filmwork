@@ -247,8 +247,10 @@
       app.innerHTML = `<div class="page-shell page-top">${emptyState('کتابخانه آماده دریافت محتواست', 'اولین پست فیلم یا سریال را برای ربات خصوصی مدیریت فوروارد کنید؛ اثر بلافاصله در اینجا منتشر می‌شود.')}</div>`;
       return;
     }
-    const hero = items[0];
-    const latest = items.slice(1, 13);
+    // The owner console promotes one title into the hero banner; fall back to the
+    // newest published item so the homepage is never empty.
+    const hero = items.find((item) => item.featuredHero) || items[0];
+    const latest = items.filter((item) => item.id !== hero.id).slice(0, 12);
     const topRated = [...items].filter((item) => item.imdbScore !== null).sort((a, b) => b.imdbScore - a.imdbScore).slice(0, 12);
     app.innerHTML = `<div class="page-shell home-category-strip" aria-label="دسته‌بندی‌ها">
         <button class="chip active" data-route="/home">منتخب</button>

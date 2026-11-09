@@ -49,6 +49,8 @@ const {
 } = require('./middleware/auth');
 const { deliverMedia } = require('./services/mediaDelivery');
 const { changeCampaignStatus, settleExpiredCampaigns } = require('./services/adAccounting');
+const { buildParseDraft, normalizeContentPayload, updateContentPayload } = require('./lib/contentParams');
+const { contentStore } = require('./services/contentStoreIndex');
 const { authBotService } = require('./bots/authBot');
 const { adminBotService } = require('./bots/adminBot');
 
@@ -260,6 +262,15 @@ function contentDto(row) {
     trailerUrl: row.trailer_url,
     streamUrl: row.stream_url,
     mediaCount: row.media_count === undefined ? undefined : Number(row.media_count),
+    hasDub: row.has_dub === undefined ? undefined : Boolean(row.has_dub),
+    hasSub: row.has_sub === undefined ? undefined : Boolean(row.has_sub),
+    network: row.network,
+    currentSeason: row.current_season,
+    seriesRunning: row.series_running === undefined ? undefined : Boolean(row.series_running),
+    episodeCount: row.episode_count,
+    seasonCount: row.season_count,
+    posterGallery: parseJsonColumn(row.poster_gallery, []),
+    featuredHero: row.featured_hero === undefined ? undefined : Boolean(row.featured_hero),
     createdAt: row.created_at,
   };
 }
@@ -344,10 +355,17 @@ function verifyAdSession(session, expectedAdId) {
 }
 
 app.get('/api/health', asyncRoute(async (_req, res) => {
+  const demoMode = process.env.DEMO_DATA === '1';
   let database;
   try {
     database = { ...(await healthCheck()) };
   } catch (error) {
+    // DEMO_DATA runs on the in-memory store on purpose; report it as healthy.
+    if (demoMode) {
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ status: 'ok', mode: 'demo', database: { ok: true, demo: true }, timestamp: new Date().toISOString() });
+      return;
+    }
     // A monitoring probe needs a machine-readable answer, not an HTML error page.
     database = { ok: false, error: String(error.code || error.message || 'database_unreachable') };
   }
@@ -1122,90 +1140,100 @@ app.get('/api/admin/session', requireAdmin, asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/admin/stats', requireAdmin, asyncRoute(async (_req, res) => {
-  const [content, users, media, ads, healthEvents] = await Promise.all([
-    query('SELECT COUNT(*) AS total, SUM(status = \'published\') AS published FROM contents'),
-    query("SELECT COUNT(*) AS total, SUM(role = 'advertiser') AS advertisers FROM users WHERE status = 'active'"),
-    query("SELECT COUNT(*) AS total, SUM(health_status = 'unavailable') AS unavailable FROM media_links"),
-    query("SELECT COUNT(*) AS total, SUM(status = 'pending') AS pending, SUM(status = 'active') AS active FROM ads"),
-    query('SELECT mhe.reason, mhe.created_at, c.title FROM media_health_events mhe JOIN media_links ml ON ml.id = mhe.media_link_id JOIN contents c ON c.id = ml.content_id ORDER BY mhe.created_at DESC LIMIT 20'),
+  const store = contentStore();
+  const [overview, legacy] = await Promise.all([
+    store.overview(),
+    store.kind === 'demo'
+      ? Promise.resolve([])
+      : query("SELECT (SELECT COUNT(*) FROM media_links WHERE health_status = 'unavailable') AS unavailable"),
   ]);
   res.setHeader('Cache-Control', 'no-store');
   res.json({
+    overview,
     stats: {
-      contents: { total: Number(content[0].total), published: Number(content[0].published || 0) },
-      users: { total: Number(users[0].total), advertisers: Number(users[0].advertisers || 0) },
-      media: { total: Number(media[0].total), unavailable: Number(media[0].unavailable || 0) },
-      ads: { total: Number(ads[0].total), pending: Number(ads[0].pending || 0), active: Number(ads[0].active || 0) },
+      contents: { total: overview.totals.contents, published: overview.totals.published },
+      users: { total: overview.totals.users, advertisers: overview.totals.advertisers },
+      media: { total: overview.totals.media, unavailable: Number(legacy[0]?.unavailable || overview.totals.streams || 0) },
+      ads: { total: overview.totals.ads, pending: overview.totals.pendingAds, active: overview.totals.activeAds },
     },
-    healthEvents,
+    healthEvents: overview.health,
+    mode: contentStore().kind,
   });
 }));
 
-app.post('/api/admin/contents', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
-  const title = asString(req.body?.title, 'عنوان', { min: 1, max: 255 });
-  const originalTitle = asString(req.body?.originalTitle, 'عنوان اصلی', { max: 255, optional: true });
-  const contentType = asEnum(req.body?.contentType || 'movie', 'نوع اثر', ['movie', 'series']);
-  const description = asString(req.body?.description, 'توضیحات', { max: 20_000, optional: true });
-  const releaseYear = req.body?.releaseYear
-    ? Math.round(asPositiveNumber(req.body.releaseYear, 'سال انتشار', { min: 1888, max: 2200 }))
+/**
+ * Reads a pasted Telegram post (text and/or link) into an editable draft.
+ * Nothing is written: the owner reviews the parsed fields, then saves.
+ */
+app.post('/api/admin/parse', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  const text = typeof req.body?.text === 'string' ? req.body.text.slice(0, 40_000) : '';
+  const link = typeof req.body?.link === 'string' && req.body.link.trim()
+    ? asString(req.body.link, 'لینک پست', { min: 8, max: 512 })
     : null;
-  const imdbScore = req.body?.imdbScore !== undefined && req.body?.imdbScore !== ''
-    ? asPositiveNumber(req.body.imdbScore, 'امتیاز IMDb', { min: 0, max: 10 })
-    : null;
-  const rawGenres = Array.isArray(req.body?.genres) ? req.body.genres : [];
-  assert(rawGenres.length <= 12, 422, 'TOO_MANY_GENRES', 'حداکثر ۱۲ ژانر مجاز است.');
-  const genres = rawGenres.map((genre) => asString(genre, 'ژانر', { min: 1, max: 60 }));
-  const posterUrl = asHttpUrl(req.body?.posterUrl, 'لینک پوستر', { optional: true, httpsOnly: isProduction });
-  const backdropUrl = asHttpUrl(req.body?.backdropUrl, 'لینک تصویر پس‌زمینه', { optional: true, httpsOnly: isProduction });
-  const streamUrl = asHttpUrl(req.body?.streamUrl, 'لینک پخش', { optional: true, httpsOnly: isProduction });
-  const status = asEnum(req.body?.status || 'draft', 'وضعیت', ['draft', 'published']);
-  const assetUuid = crypto.randomUUID();
-  await query(
-    `INSERT INTO contents
-      (asset_uuid, content_type, title, original_title, slug, description, imdb_score,
-       release_year, genres, poster_url, backdrop_url, stream_url, status)
-     VALUES
-      (:assetUuid, :contentType, :title, :originalTitle, :slug, :description, :imdbScore,
-       :releaseYear, :genres, :posterUrl, :backdropUrl, :streamUrl, :status)`,
-    {
-      assetUuid,
-      contentType,
-      title,
-      originalTitle,
-      slug: contentSlug(originalTitle || title, assetUuid),
-      description,
-      imdbScore,
-      releaseYear,
-      genres: JSON.stringify(genres),
-      posterUrl,
-      backdropUrl,
-      streamUrl,
-      status,
-    },
-  );
-  res.status(201).json({ content: { id: assetUuid, title, status } });
+  if (!text.trim() && !link) {
+    throw new AppError(422, 'EMPTY_SOURCE', 'متن یا لینک پست تلگرام را وارد کنید.');
+  }
+  const draft = await buildParseDraft({ text, link });
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ draft });
 }));
 
-app.get('/api/admin/contents', requireAdmin, asyncRoute(async (_req, res) => {
-  const rows = await query(
-    `SELECT asset_uuid, title, content_type, status, created_at,
-            (SELECT COUNT(*) FROM media_links ml WHERE ml.content_id = c.id) AS media_count
-     FROM contents c ORDER BY created_at DESC LIMIT 200`,
-  );
-  res.json({ items: rows.map((row) => ({ ...row, media_count: Number(row.media_count) })) });
+app.get('/api/admin/contents', requireAdmin, asyncRoute(async (req, res) => {
+  const result = await contentStore().listContents({
+    page: req.query.page,
+    limit: req.query.limit,
+    q: typeof req.query.q === 'string' ? req.query.q.slice(0, 100) : '',
+    type: req.query.type,
+    status: req.query.status,
+    hero: req.query.hero,
+    running: req.query.running,
+    sort: req.query.sort,
+  });
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(result);
+}));
+
+app.get('/api/admin/contents/:assetId', requireAdmin, asyncRoute(async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(await contentStore().getContent(req.params.assetId));
+}));
+
+app.post('/api/admin/contents', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  const payload = normalizeContentPayload(req.body || {}, { statuses: ['draft', 'published'] });
+  const created = await contentStore().createContent(payload);
+  res.status(201).json(created);
 }));
 
 app.patch('/api/admin/contents/:assetId', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
-  const status = asEnum(req.body?.status, 'وضعیت', ['draft', 'published', 'archived']);
-  const result = await query(
-    'UPDATE contents SET status = :status WHERE asset_uuid = :assetId',
-    { status, assetId: req.params.assetId },
-  );
-  assert(result.affectedRows, 404, 'CONTENT_NOT_FOUND', 'اثر پیدا نشد.');
-  res.json({ updated: true });
+  // Status-only edits stay supported for the compact library toggle.
+  if (req.body?.status && Object.keys(req.body).length === 1) {
+    const status = asEnum(req.body.status, 'وضعیت', ['draft', 'published', 'archived']);
+    const payload = updateContentPayload(await contentStore().getContent(req.params.assetId), { status });
+    res.json(await contentStore().updateContent(req.params.assetId, payload));
+    return;
+  }
+  const payload = updateContentPayload(await contentStore().getContent(req.params.assetId), req.body || {});
+  res.json(await contentStore().updateContent(req.params.assetId, payload));
+}));
+
+app.post('/api/admin/contents/:assetId/hero', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  const enabled = Boolean(req.body?.enabled);
+  res.json(await contentStore().setHero(req.params.assetId, enabled));
+}));
+
+app.post('/api/admin/contents/:assetId/sync-media', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  res.json(await contentStore().syncFromMedia(req.params.assetId));
+}));
+
+app.delete('/api/admin/contents/:assetId', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  res.json(await contentStore().deleteContent(req.params.assetId));
 }));
 
 app.get('/api/admin/users', requireAdmin, asyncRoute(async (_req, res) => {
+  if (contentStore().kind === 'demo') {
+    res.json({ items: await contentStore().listUsers() });
+    return;
+  }
   const rows = await query(
     `SELECT u.id, u.account_name, u.tg_username, u.role, u.status, u.created_at,
             COALESCE(w.balance, 0) AS wallet_balance, COALESCE(w.currency, 'IRR') AS wallet_currency
@@ -1281,6 +1309,10 @@ app.post('/api/admin/users/:userId/wallet-credit', requireAdmin, requireAdminCsr
 }));
 
 app.get('/api/admin/ads', requireAdmin, asyncRoute(async (_req, res) => {
+  if (contentStore().kind === 'demo') {
+    res.json({ items: await contentStore().listAds() });
+    return;
+  }
   const rows = await query(
     `SELECT a.public_id, a.campaign_name, a.headline, a.placement, a.budget, a.status,
             a.created_at, u.account_name
@@ -1311,6 +1343,29 @@ app.get('/owner-console/app.js', requireAdmin, (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.type('application/javascript').sendFile(path.join(privateDirectory, 'admin.js'));
 });
+app.get('/owner-console/styles.css', requireAdmin, (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.type('text/css').sendFile(path.join(privateDirectory, 'admin.css'));
+});
+
+/**
+ * Preview sign-in. Only exists when the in-memory demo store is enabled outside
+ * production, so a real deployment can never hand out an owner session.
+ */
+app.get('/owner-console/demo-login', asyncRoute(async (_req, res) => {
+  const demoEnabled = process.env.DEMO_DATA === '1' && !isProduction;
+  if (!demoEnabled) throw new AppError(404, 'NOT_FOUND', 'صفحه پیدا نشد.');
+  const ownerId = [...ownerIds()][0] || '1';
+  const csrfToken = generateOpaqueToken(24);
+  res.cookie('filmwork_admin', signAdminToken(ownerId, csrfToken), {
+    httpOnly: true,
+    secure: false,
+    sameSite: 'strict',
+    maxAge: 2 * 60 * 60 * 1000,
+    path: '/',
+  });
+  res.redirect(303, '/owner-console');
+}));
 
 app.use(express.static(frontendDirectory, {
   index: false,
@@ -1445,7 +1500,14 @@ function scheduleBotRetry() {
 async function start({ listen = true } = {}) {
   installProcessGuards();
   // The database is the only hard dependency; nothing else can work without it.
-  await healthCheck();
+  // The in-memory demo store exists precisely because a review machine has no MySQL.
+  if (process.env.DEMO_DATA === '1') {
+    await healthCheck().catch((error) => {
+      console.warn('DEMO_DATA=1: starting without a reachable database.', error.message);
+    });
+  } else {
+    await healthCheck();
+  }
   await settleExpiredCampaigns().catch((error) => {
     console.error('Initial campaign settlement failed (continuing):', error);
   });

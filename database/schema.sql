@@ -13,16 +13,32 @@ CREATE TABLE IF NOT EXISTS contents (
   description TEXT NULL,
   imdb_score DECIMAL(3,1) NULL,
   release_year SMALLINT UNSIGNED NULL,
+  last_air_year SMALLINT UNSIGNED NULL,
+  series_running BOOLEAN NOT NULL DEFAULT FALSE,
+  current_season SMALLINT UNSIGNED NULL,
+  broadcast_note VARCHAR(120) NULL,
+  episode_count SMALLINT UNSIGNED NULL,
+  season_count SMALLINT UNSIGNED NULL,
   genres JSON NULL,
+  directors JSON NULL,
+  cast_members JSON NULL,
   language VARCHAR(80) NULL,
   country VARCHAR(100) NULL,
+  network VARCHAR(120) NULL,
   age_rating VARCHAR(20) NULL,
   runtime_minutes SMALLINT UNSIGNED NULL,
+  has_dub BOOLEAN NOT NULL DEFAULT FALSE,
+  has_sub BOOLEAN NOT NULL DEFAULT FALSE,
   poster_url VARCHAR(2048) NULL,
+  poster_gallery JSON NULL,
   backdrop_url VARCHAR(2048) NULL,
   trailer_url VARCHAR(2048) NULL,
   stream_url VARCHAR(2048) NULL,
   status ENUM('draft', 'published', 'archived') NOT NULL DEFAULT 'published',
+  featured_hero BOOLEAN NOT NULL DEFAULT FALSE,
+  hero_slot TINYINT GENERATED ALWAYS AS (IF(featured_hero AND status = 'published', 1, NULL)) STORED,
+  view_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  last_viewed_at TIMESTAMP(3) NULL,
   source_chat_id BIGINT NULL,
   source_message_id BIGINT NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -32,6 +48,8 @@ CREATE TABLE IF NOT EXISTS contents (
   UNIQUE KEY uq_contents_slug (slug),
   KEY idx_contents_listing (status, created_at),
   KEY idx_contents_year (release_year),
+  KEY idx_contents_hero (featured_hero, status, created_at),
+  UNIQUE KEY uq_contents_hero_slot (hero_slot),
   CONSTRAINT chk_contents_imdb CHECK (imdb_score IS NULL OR (imdb_score >= 0 AND imdb_score <= 10)),
   CONSTRAINT chk_contents_year CHECK (release_year IS NULL OR (release_year BETWEEN 1888 AND 2200))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -331,6 +349,54 @@ CREATE TABLE IF NOT EXISTS admin_login_tokens (
   PRIMARY KEY (id),
   UNIQUE KEY uq_admin_token_hash (token_hash),
   KEY idx_admin_tokens_owner (owner_tg_user_id, expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS content_versions (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  content_id BIGINT UNSIGNED NOT NULL,
+  kind ENUM('sub', 'dub') NOT NULL,
+  title VARCHAR(120) NOT NULL,
+  resolution VARCHAR(24) NULL,
+  sort_order SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_content_versions_tree (content_id, kind, sort_order),
+  CONSTRAINT fk_content_version_content FOREIGN KEY (content_id) REFERENCES contents(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS content_version_links (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  version_id BIGINT UNSIGNED NOT NULL,
+  season_number SMALLINT UNSIGNED NULL,
+  episode_number SMALLINT UNSIGNED NULL,
+  episode_title VARCHAR(255) NULL,
+  label VARCHAR(80) NULL,
+  size_text VARCHAR(60) NULL,
+  stream_url VARCHAR(2048) NULL,
+  subtitle_url VARCHAR(2048) NULL,
+  dub_url VARCHAR(2048) NULL,
+  telegram_url VARCHAR(2048) NULL,
+  media_link_id BIGINT UNSIGNED NULL,
+  source ENUM('manual', 'telegram_bot') NOT NULL DEFAULT 'manual',
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_version_links_tree (version_id, season_number, episode_number),
+  UNIQUE KEY uq_version_link_media (media_link_id),
+  CONSTRAINT fk_version_link_version FOREIGN KEY (version_id) REFERENCES content_versions(id) ON DELETE CASCADE,
+  CONSTRAINT fk_version_link_media FOREIGN KEY (media_link_id) REFERENCES media_links(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS admin_events (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  kind ENUM('content', 'media', 'user', 'ad', 'system') NOT NULL DEFAULT 'system',
+  title VARCHAR(180) NOT NULL,
+  detail VARCHAR(400) NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_admin_events_recent (created_at),
+  KEY idx_admin_events_kind (kind, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- The API performs this same shift inside a row-locked transaction and does not

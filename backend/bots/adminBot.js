@@ -12,15 +12,32 @@ const {
 } = require('../lib/telegram');
 const { ownerIds } = require('../middleware/auth');
 
-const DIGIT_MAP = Object.freeze({
-  '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4',
-  '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
-  '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
-  '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
-});
+const {
+  normalizeDigits,
+  parseContentPost,
+} = require('../lib/postParser');
 
-function normalizeDigits(value = '') {
-  return String(value).replace(/[۰-۹٠-٩]/g, (digit) => DIGIT_MAP[digit] || digit);
+/**
+ * Back-compat wrapper used by the bot: the shared post parser in `lib/postParser`
+ * understands far more label variants than the original bot-only regexes, and the
+ * owner console uses the exact same code path so both entry points agree.
+ */
+function parsePublicPost(rawText) {
+  const text = normalizeDigits(rawText).replace(/\r\n?/g, '\n').trim();
+  if (!text) return null;
+  const { fields } = parseContentPost(text);
+  const title = fields.titleFa || fields.titleEn;
+  if (!title) return null;
+  const meaningful = [fields.imdbScore, fields.releaseYear, fields.genres?.length, fields.description];
+  if (!meaningful.some(Boolean)) return null;
+  return {
+    title: title.slice(0, 255),
+    imdbScore: fields.imdbScore,
+    releaseYear: fields.releaseYear,
+    genres: fields.genres || [],
+    description: fields.description ? fields.description.slice(0, 20_000) : null,
+    contentType: fields.contentType || 'movie',
+  };
 }
 
 function cleanLabelValue(value) {
@@ -28,58 +45,6 @@ function cleanLabelValue(value) {
     .replace(/^\s*[:：\-–—|]+\s*/, '')
     .replace(/\s+$/g, '')
     .trim();
-}
-
-function firstMatch(text, patterns) {
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match?.[1]) return cleanLabelValue(match[1]);
-  }
-  return null;
-}
-
-/** Parse common Persian/English movie-channel post formats without relying on a single channel. */
-function parsePublicPost(rawText) {
-  const text = normalizeDigits(rawText).replace(/\r\n?/g, '\n').trim();
-  if (!text) return null;
-
-  const title = firstMatch(text, [
-    /(?:^|\n)\s*(?:🎬\s*)?(?:title|movie|series|نام\s*(?:فیلم|سریال)|عنوان)\s*[:：\-]\s*([^\n]+)/iu,
-    /(?:^|\n)\s*🎬\s*([^\n#]+)/u,
-  ]);
-  const imdbRaw = firstMatch(text, [
-    /(?:imdb(?:\s*rating)?|امتیاز(?:\s*آی[‌\s]?ام[‌\s]?دی[‌\s]?بی)?)\s*[:：\-]?\s*(\d{1,2}(?:\.\d)?)/iu,
-  ]);
-  const yearRaw = firstMatch(text, [
-    /(?:^|\n).*?(?:release\s*year|year|سال\s*(?:انتشار|ساخت)?|محصول)\s*[:：\-]?\s*((?:18|19|20|21)\d{2})/iu,
-  ]);
-  const genreRaw = firstMatch(text, [
-    /(?:^|\n)\s*(?:genre|genres|ژانر)\s*[:：\-]\s*([^\n]+)/iu,
-  ]);
-  const description = firstMatch(text, [
-    /(?:^|\n)\s*(?:description|summary|plot|خلاصه(?:\s*داستان)?|توضیحات)\s*[:：\-]\s*([\s\S]+?)(?=\n\s*(?:imdb|year|genre|country|director|مدت|امتیاز|سال|ژانر|کشور|کارگردان)\s*[:：\-]|$)/iu,
-  ]);
-
-  // A metadata post must contain an explicit title and at least one recognizable field.
-  if (!title || ![imdbRaw, yearRaw, genreRaw, description].some(Boolean)) return null;
-
-  const imdb = imdbRaw === null ? null : Number.parseFloat(imdbRaw);
-  const year = yearRaw === null ? null : Number.parseInt(yearRaw, 10);
-  const genres = genreRaw
-    ? genreRaw.split(/[,،|/؛]+/u).map((item) => item.trim()).filter(Boolean).slice(0, 12)
-    : [];
-  const contentType = /(?:series|سریال|فصل|S\d{1,2}\s*[.\-]?\s*E\d{1,3})/iu.test(text)
-    ? 'series'
-    : 'movie';
-
-  return {
-    title: title.slice(0, 255),
-    imdbScore: Number.isFinite(imdb) && imdb >= 0 && imdb <= 10 ? imdb : null,
-    releaseYear: Number.isInteger(year) && year >= 1888 && year <= 2200 ? year : null,
-    genres,
-    description: description ? description.slice(0, 20_000) : null,
-    contentType,
-  };
 }
 
 function directiveValue(text, name) {
@@ -136,19 +101,6 @@ function parseDirectives(rawText) {
     seasonNumber,
     episodeNumber,
   };
-}
-
-function decodeHtmlEntities(value) {
-  const named = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', zwnj: '\u200c', zwj: '\u200d', hellip: '…' };
-  return String(value).replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, code) => {
-    if (code[0] === '#') {
-      const numeric = code[1].toLowerCase() === 'x'
-        ? Number.parseInt(code.slice(2), 16)
-        : Number.parseInt(code.slice(1), 10);
-      return Number.isFinite(numeric) ? String.fromCodePoint(numeric) : entity;
-    }
-    return named[code.toLowerCase()] ?? entity;
-  });
 }
 
 async function fetchPublicTelegramPost(rawUrl) {
