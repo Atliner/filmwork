@@ -216,6 +216,8 @@
 
   function setActiveNav(section) {
     $$('.dock-item').forEach((item) => item.classList.toggle('active', item.dataset.nav === section));
+    // Desktop header mirrors the dock; keep both in sync from one place.
+    $$('.header-nav-item').forEach((item) => item.classList.toggle('active', Boolean(section) && item.dataset.nav === section));
   }
 
   function setHeaderLabel(label, back = false) {
@@ -273,7 +275,7 @@
     const remaining = duration > position ? Math.max(1, Math.round((duration - position) / 60)) : 0;
     return `<article class="resume-card" role="button" tabindex="0" data-route="/player/${encodeURIComponent(content.id)}">
       <div class="resume-media">${image ? `<img src="${image}" alt="" loading="lazy">` : `<span class="poster-letter">${escapeHtml(firstLetter(titleFa(content) || titleEn(content)))}</span>`}<span class="resume-play">${icons.play}</span>${remaining ? `<small>${formatNumber(remaining)} دقیقه باقی‌مانده</small>` : ''}<i><b style="width:${progress.toFixed(1)}%"></b></i></div>
-      <div class="resume-copy"><strong>${escapeHtml(titleFa(content) || titleEn(content))}</strong>${titleEn(content) && titleEn(content) !== titleFa(content) ? `<small class="title-en title-en--card" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</small>` : ''}<span>${formatTime(position)} از ${formatTime(duration)}</span></div>
+      <div class="resume-copy"><div class="resume-names"><strong>${escapeHtml(titleFa(content) || titleEn(content))}</strong>${titleEn(content) && titleEn(content) !== titleFa(content) ? `<small class="title-en title-en--card" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</small>` : ''}</div><span>${formatTime(position)} از ${formatTime(duration)}</span></div>
     </article>`;
   }
 
@@ -322,7 +324,14 @@
     const hero = items.find((item) => item.featuredHero) || items[0];
     const latest = items.filter((item) => item.id !== hero.id).slice(0, 12);
     const topRated = [...items].filter((item) => item.imdbScore !== null).sort((a, b) => b.imdbScore - a.imdbScore).slice(0, 12);
-    app.innerHTML = `<div class="page-shell home-category-strip" aria-label="دسته‌بندی‌ها">
+    app.innerHTML = `<div class="page-shell home-desktop-top">
+        <div><div class="home-greeting">کتابخانه شخصی شما</div><h1 class="home-title">امشب چه ببینیم؟</h1></div>
+        <form class="home-search" id="home-search" role="search">
+          ${icons.search}<input type="search" name="q" maxlength="100" autocomplete="off" aria-label="جستجو در فیلم‌ورک" placeholder="نام فیلم، سریال، بازیگر یا کارگردان…">
+          <button class="primary-button" type="submit">جستجو</button>
+        </form>
+      </div>
+      <div class="page-shell home-category-strip" aria-label="دسته‌بندی‌ها">
         <button class="chip active" data-route="/home">منتخب</button>
         <button class="chip" data-route="/search?genre=درام">درام</button>
         <button class="chip" data-route="/search?genre=علمی تخیلی">علمی‌تخیلی</button>
@@ -1362,6 +1371,11 @@
     if (event.target.id === 'auth-form') { event.preventDefault(); verifyLogin(event.target); }
     if (event.target.id === 'comment-form') { event.preventDefault(); submitComment(event.target); }
     if (event.target.id === 'campaign-form') { event.preventDefault(); submitCampaign(event.target); }
+    if (event.target.id === 'home-search') {
+      event.preventDefault();
+      const term = String(new FormData(event.target).get('q') || '').trim();
+      navigate(term ? `/search?q=${encodeURIComponent(term)}` : '/search');
+    }
   });
 
   window.addEventListener('hashchange', route);
