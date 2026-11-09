@@ -108,6 +108,77 @@ test('suggested versions follow the detected audio and qualities', () => {
   ]);
 });
 
+test('reads a real channel post with bullets, emoji labels and a #hashtag header', () => {
+  const { fields, meta } = parseContentPost(`🎬 #سریال | امتیاز: 8.9
+
+▪️ نام فارسی: پیت
+
+▪️ نام انگلیسی: The Pitt
+
+⭐️ امتیاز: 8.9 از 10 (172K رای)
+
+📢 وضعیت پخش: اتمام پخش
+
+📅 سال تولید: 2025 - 2026
+
+⏱️ مدت زمان: میانگین 50 دقیقه هر قسمت
+
+🔞 رده سنی: +18
+
+🎭 ژانر: پزشکی، درام، روان‌شناختی
+
+📼 شبکه: HBO Max
+
+🌐 محصول کشور: آمریکا
+
+🎬 کارگردان: دامین مارکانو، جان ولز | Damian Marcano, John Wells
+
+👥 ستارگان: نوآ وایلی، پاتریک بال | Noah Wyle, Patrick Ball
+
+📝 خلاصه داستان: با بازگشت دکتر لنگدن به اورژانس، رابطه او با رابینوویچ پرتنش می‌شود.
+
+📥 برای دانلود سریال کلیک کنید
+
+📌 @Vizosten`);
+
+  assert.equal(fields.titleFa, 'پیت');
+  assert.equal(fields.titleEn, 'The Pitt');
+  assert.equal(fields.contentType, 'series');
+  assert.equal(fields.releaseYear, 2025);
+  assert.equal(fields.lastAirYear, 2026);
+  assert.equal(fields.seriesRunning, false);
+  assert.equal(fields.broadcastStatus, 'اتمام پخش');
+  assert.equal(fields.imdbScore, 8.9);
+  assert.equal(fields.runtimeMinutes, 50);
+  assert.equal(fields.network, 'HBO Max');
+  assert.deepEqual(fields.countries, ['آمریکا']);
+  assert.equal(fields.ageRating, '+18');
+  assert.deepEqual(fields.genres, ['پزشکی', 'درام', 'روان‌شناختی']);
+  assert.ok(fields.directors.includes('Damian Marcano'));
+  assert.ok(fields.cast.includes('Noah Wyle'));
+  assert.match(fields.description, /بازگشت دکتر لنگدن/);
+  assert.ok(!/دانلود|@Vizosten/u.test(fields.description));
+  assert.ok(!fields.directors.some((name) => /سریال|امتیاز/u.test(name)));
+  assert.ok(meta.confidence >= 70);
+});
+
+test('the running switch understands the phrasings channels actually use', () => {
+  const running = (status) => parseContentPost(`X\nنوع: سریال\nوضعیت پخش: ${status}`).fields.seriesRunning;
+  assert.equal(running('در حال پخش'), true);
+  assert.equal(running('در حال انتشار'), true);
+  assert.equal(running('اتمام پخش'), false);
+  assert.equal(running('پایان یافته'), false);
+  assert.equal(running('پخش فصل دوم پایان یافته است'), false);
+  assert.equal(running('Ongoing'), true);
+  assert.equal(running('Ended'), false);
+});
+
+test('a footer line is never mistaken for the title', () => {
+  const { fields } = parseContentPost('🎬\n\n📥 برای دانلود سریال کلیک کنید\n\n📌 @Vizosten');
+  assert.equal(fields.titleFa, '');
+  assert.equal(fields.titleEn, '');
+});
+
 test('an empty post produces an empty report rather than throwing', () => {
   const { fields, meta } = parseContentPost('   ');
   assert.deepEqual(fields, {});

@@ -27,12 +27,15 @@ function toFaDigits(value) {
 const PERSIAN_RANGE = /[\u0600-\u06FF]/;
 const LATIN_RANGE = /[A-Za-z]/;
 
-const EMOJI = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{2190}-\u{21FF}]/gu;
+const EMOJI = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{25A0}-\u{25FF}\u{2300}-\u{23FF}\u{FE0F}\u{2190}-\u{21FF}]/gu;
+// Bullets and pictographs a channel puts in front of a label: `▪️ نام فارسی:`.
+const LEADING_SYMBOLS = /^[\s\p{So}\p{Sk}\p{Mn}\u200d\u20e3]+/u;
 
 function clean(value) {
   return String(value || '')
     .replace(/\u200f|\u200e|\u202a|\u202b|\u202c/g, '')
     .replace(EMOJI, '')
+    .replace(LEADING_SYMBOLS, '')
     .replace(/^[#*\s]+/, '')
     .replace(/^[\s|•·,،:：\-–—]+/, '')
     .replace(/[\s|•·,،:：\-–—]+$/, '')
@@ -65,7 +68,7 @@ const FIELDS = [
   { key: 'genres', aliases: ['ژانرها', 'ژانر', 'گونه', 'دسته‌بندی', 'genres', 'genre'], kind: 'list' },
   { key: 'directors', aliases: ['کارگردانان', 'کارگردان', 'کارگردان‌ها', 'directors', 'director'], kind: 'list' },
   { key: 'cast', aliases: ['بازیگران', 'بازیگر', 'ستارگان', 'cast', 'actors', 'stars'], kind: 'list' },
-  { key: 'countries', aliases: ['کشورها', 'کشور تولید', 'کشور سازنده', 'کشور', 'country', 'countries'], kind: 'list' },
+  { key: 'countries', aliases: ['کشورها', 'کشور تولید', 'کشور سازنده', 'محصول کشور', 'کشور محصول', 'کشور', 'محصول', 'country', 'countries'], kind: 'list' },
   { key: 'ageRating', aliases: ['رده سنی', 'رده‌بندی سنی', 'رده‌بندی', 'age rating', 'rated', 'certificate'], kind: 'text' },
   { key: 'network', aliases: ['شبکه', 'پلتفرم', 'اکران', 'network', 'platform', 'studio', 'channel'], kind: 'text' },
   { key: 'imdbScore', aliases: ['امتیاز imdb', 'امتیاز آی‌ام‌دی‌بی', 'امتیاز IMDb', 'imdb', 'imdb rating', 'imdb score', 'rating', 'score'], kind: 'score' },
@@ -101,7 +104,7 @@ function labelEntry(rawLabel) {
  * are never mistaken for the label delimiter.
  */
 function labelOf(line) {
-  const text = normalizeDigits(clean(line));
+  const text = normalizeDigits(clean(line)).replace(LEADING_SYMBOLS, '');
   if (!text || text.length > 400) return null;
   const candidates = [
     /^([^:：]{1,40})[:：]\s*([\s\S]*)$/u,
@@ -121,10 +124,15 @@ function labelOf(line) {
 }
 
 function normalizeContentType(value, fullText) {
-  const text = String(value || '');
-  if (/سریال|series|season|فصل|episode|قسمت/i.test(text)) return 'series';
-  if (/فیلم|movie|film/i.test(text)) return 'movie';
-  if (/(?:^|\n)\s*(?:فصل|season)\s*\d|S\d{1,2}\s*[.\-]?\s*E\d{1,3}/iu.test(fullText)) return 'series';
+  const explicit = String(value || '');
+  if (/سریال|series|season|فصل|episode|قسمت/i.test(explicit)) return 'series';
+  if (/فیلم|movie|film/i.test(explicit)) return 'movie';
+  const body = String(fullText || '');
+  // Channel posts open with `🎬 #سریال | ...`: the hashtag is the strongest signal.
+  if (/#(?:سریال|series)\b/iu.test(body)) return 'series';
+  if (/#(?:فیلم|movie|film)\b/iu.test(body)) return 'movie';
+  if (/(?:^|\n)\s*(?:فصل|season)\s*\d|S\d{1,2}\s*[.\-]?\s*E\d{1,3}/iu.test(body)) return 'series';
+  if (/سریال/iu.test(body)) return 'series';
   return 'movie';
 }
 
@@ -214,6 +222,9 @@ function looksLikeTitleLine(line) {
   if (!text || text.length < 2 || text.length > 120) return false;
   if (NOISE_LINE.test(text) && !/^#/.test(text)) return false;
   if (/\b(?:ساعت|دقیقه|قسمت|فصل|امتیاز|کیفیت)\b/u.test(text)) return false;
+  // Footers every channel posts: "برای دانلود کلیک کنید", "@channel", "ادمین".
+  if (/دانلود|کلیک|کانال|عضو\s*شوید|ادمین|تبلیغ|join|download|click/iu.test(text)) return false;
+  if (/^@/.test(text)) return false;
   return PERSIAN_RANGE.test(text) || LATIN_RANGE.test(text);
 }
 
@@ -337,8 +348,10 @@ function parseContentPost(rawText) {
   }
   fields.genres = [...new Set(genres.filter((genre) => genre.length <= 40))].slice(0, 12);
 
-  fields.directors = splitList(values.directors, 8);
-  fields.cast = splitList(values.cast, 30);
+  // Channel posts often list every name twice (Persian | English), so the caps are
+  // generous rather than tuned to one language.
+  fields.directors = splitList(values.directors, 24);
+  fields.cast = splitList(values.cast, 60);
   fields.countries = splitList(values.countries, 8);
   fields.ageRating = clean(values.ageRating).slice(0, 20);
   fields.network = clean(values.network).slice(0, 120);
@@ -382,6 +395,9 @@ function parseContentPost(rawText) {
     if (Array.isArray(value) ? !value.length : !value) missing.push(label);
   }
   if (!foundLabels.size) notes.push('برچسب شناخته‌شده‌ای پیدا نشد؛ فیلدها با حدس متن پر شدند.');
+  if (fields.contentType === 'series' && fields.broadcastStatus) {
+    notes.push(`وضعیت پخش از پست: ${fields.broadcastStatus}`);
+  }
   if (fields.contentType === 'series' && !fields.currentSeason && fields.seriesRunning) {
     notes.push('فصل در حال پخش تشخیص داده نشد؛ مقدار پیش‌فرض ۱ در نظر گرفته شد.');
   }

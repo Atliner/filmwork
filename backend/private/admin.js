@@ -848,7 +848,7 @@
         ${isSeries ? `<div class="section-card section-card--attention" style="border-radius:18px">
           <div class="section-card__head" style="padding:13px 15px">
             <div><h2 style="font-size:13px">${ICONS.clock} وضعیت پخش سریال</h2>
-              <p>با روشن شدن این گزینه، فصل در حال پخش و متن دلخواه فعال می‌شوند.</p></div>
+              <p>با روشن شدن این گزینه، فصل در حال پخش و متن دلخواه فعال می‌شوند.${editor.sourceKind === 'telegram_link' && editor.meta?.notes?.length ? ' وضعیت تشخیص‌داده‌شده در گزارش سمت چپ آمده است.' : ''}</p></div>
             <label class="switch">
               <input type="checkbox" data-field="seriesRunning" data-structural ${draft.seriesRunning ? 'checked' : ''}>
               <span class="switch__track"></span>
@@ -945,7 +945,13 @@
 
         <div class="version-list">
           ${editor.versions.length ? editor.versions.map((version, index) => versionCard(version, index, editor)).join('')
-    : '<div class="version-empty">هنوز نسخه‌ای ساخته نشده است. کیفیت‌ها را وارد کنید و «ایجاد نسخه‌ها» را بزنید.</div>'}
+    : `<div class="version-empty">
+            <p style="margin:0 0 8px">هنوز نسخه‌ای ساخته نشده است.</p>
+            <p style="margin:0 0 10px;color:var(--muted)">پست تلگرام درباره دوبله/زیرنویس چیزی نگفته بود؛ نوع فایل و کیفیت‌ها را انتخاب کنید و نسخه‌ها را بسازید. لینک‌ها بعداً یا دستی یا با دکمه «دریافت لینک‌ها از ربات» پر می‌شوند.</p>
+            <div class="chip-set" style="justify-content:center">
+              ${['1080p', '720p', '480p'].map((quality) => `<button class="chip" type="button" data-quick-quality="${quality}">${quality}</button>`).join('')}
+            </div>
+          </div>`}
         </div>
       </div>
     </article>`;
@@ -1301,22 +1307,27 @@
   function renderGuide() {
     const root = $('#view-root');
     const addCopyTargets = {
-      'post-sample': `🎬 The Pitt | پیت
-نوع: سریال
-سال شروع: 2026
-ژانر: درام، پزشکی
-کارگردان: R. Scott Gemmill
-بازیگران: Noah Wyle، Tracy Ifeachor
-کشور: آمریکا
-رده سنی: TV-MA
-شبکه: HBO Max
-امتیاز IMDb: 8.9
-مدت: 50 دقیقه
-وضعیت پخش: در حال پخش
-فصل در حال پخش: 2
-کیفیت: 1080p، 720p، 480p
-دوبله و زیرنویس فارسی
-خلاصه داستان: پزشکان اورژانس پیتسبورگ در یک شیفت پرتنش دوازده‌ساعته.`,
+      'post-sample': `🎬 #سریال | امتیاز: 8.9
+
+▪️ نام فارسی: پیت
+▪️ نام انگلیسی: The Pitt
+
+⭐️ امتیاز: 8.9 از 10 (172K رای)
+📢 وضعیت پخش: اتمام پخش
+📅 سال تولید: 2025 - 2026
+⏱️ مدت زمان: میانگین 50 دقیقه هر قسمت
+🔞 رده سنی: +18
+
+🎭 ژانر: پزشکی، درام، روان‌شناختی
+📼 شبکه: HBO Max
+🌐 محصول کشور: آمریکا
+🎬 کارگردان: دامین مارکانو، جان ولز | Damian Marcano, John Wells
+👥 ستارگان: نوآ وایلی، پاتریک بال | Noah Wyle, Patrick Ball
+
+📝 خلاصه داستان: با بازگشت دکتر لنگدن به اورژانس، رابطه او با رابینوویچ پرتنش می‌شود.
+
+📥 برای دانلود سریال کلیک کنید
+📌 @Vizosten`,
 
       'directive': `#اثر 5f0c8f1e-3d4b-4c6a-9a7e-2b1d9c4f7a10 #نسخه DigiMovies #نوع دوبله #زیرنویس مجزا #رزولوشن 1080p #سریال S01.E07 #کیفیت WEB-DL #انکودر x265`,
       'directive-movie': `#اثر 5f0c8f1e-3d4b-4c6a-9a7e-2b1d9c4f7a10 #نسخه DigiMovies #نوع دوبله #زیرنویس داخلی #رزولوشن 1080p #کیفیت WEB-DL #انکودر x265`,
@@ -1353,7 +1364,8 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
           <div class="guide__body">
             <p>پست را در کانال عمومی بگذارید یا متنش را در مرحله ۱ پنل بچسبانید. هر خط باید به شکل «برچسب: مقدار» باشد. برچسب‌های پشتیبانی‌شده:</p>
             ${CODE(addCopyTargets['post-sample'], 'post-sample')}
-            <div class="callout">${ICONS.info}<span>نسخه انگلیسی برچسب‌ها هم شناخته می‌شود: <code>Title</code>، <code>Type</code>، <code>Year</code>، <code>Genre</code>، <code>Director</code>، <code>Cast</code>، <code>Country</code>، <code>Age rating</code>، <code>Network</code>، <code>IMDb</code>، <code>Runtime</code>، <code>Quality</code>، <code>Description</code>. اگر عنوان فارسی و انگلیسی با <code>|</code> جدا شوند، خودکار تفکیک می‌شوند.</span></div>
+            <div class="callout">${ICONS.info}<span>خواندن پست سخت‌گیر نیست: بولت‌ها و ایموجی ابتدای خط (<code>▪️</code>، <code>⏱️</code>، <code>🌐</code>)، برچسب ساده یا پرانتزی، ارقام فارسی، بازه سال (<code>2025 - 2026</code>)، «میانگین ۵۰ دقیقه هر قسمت»، خط تیره‌دار <code>|</code> در لیست بازیگران، هدر <code>#سریال</code> و خط‌های تبلیغاتی انتهایی («برای دانلود کلیک کنید»، <code>@channel</code>) همه مدیریت می‌شوند. نسخه انگلیسی برچسب‌ها هم شناخته می‌شود: <code>Title</code>، <code>Type</code>، <code>Year</code>، <code>Genre</code>، <code>Director</code>، <code>Cast</code>، <code>Country</code>، <code>Age rating</code>، <code>Network</code>، <code>IMDb</code>، <code>Runtime</code>، <code>Quality</code>، <code>Description</code>.</span></div>
+            <div class="callout callout--warn">${ICONS.info}<span>اگر پست درباره دوبله یا زیرنویس چیزی نگوید، هیچ نسخه‌ای خودکار ساخته نمی‌شود؛ در مرحله ۳ با دکمه‌های سریع کیفیت، نسخهٔ مورد نظر را بسازید. عبارت‌هایی مثل «دوبله فارسی» یا «زیرنویس چسبیده» در متن، نوع نسخه‌ها را خودکار تعیین می‌کنند.</span></div>
           </div>
         </details>
 
@@ -1383,6 +1395,7 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
               <li><code>#نوع</code>: دوبله / سافت‌ساب / هاردساب / زبان اصلی</li>
               <li><code>#زیرنویس</code>: مجزا (فایل SRT جدا) یا داخلی (چسبیده)</li>
               <li><code>#رزولوشن</code>: 480p / 720p / 1080p / 2160p</li>
+              <li>در پست کانال، کلمه «اتمام پخش» یا «پایان یافته» وضعیت پخش را خاموش می‌کند و «در حال پخش/انتشار» روشن.</li>
               <li>ابتدای متن یک دستور، یعنی ربات منتظر فایل ویدیو است (۳۰ دقیقه فرصت).</li>
             </ul>
             <ol start="3">
@@ -1500,6 +1513,13 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
 
     document.addEventListener('change', async (event) => {
       const target = event.target;
+      // Some browsers only fire `change` (not `input`) for <select>, so the same
+      // field assignment runs here as a safety net.
+      if (state.editor && target.matches('[data-field]')) {
+        state.editor.draft[target.dataset.field] = target.type === 'checkbox' ? target.checked : target.value;
+        if (target.dataset.structural || target.dataset.field === 'status') paintEditor();
+        return;
+      }
       if (target.matches('[data-version-kind]')) {
         state.editor.kind = target.value;
         return;
@@ -1631,6 +1651,11 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
       if (button.matches('[data-skip-import]')) { state.editor.step = 2; paintEditor(); return; }
       if (button.matches('[data-save-content]')) { await saveEditor(); return; }
       if (button.matches('[data-create-versions]')) { createVersions(); return; }
+      if (button.matches('[data-quick-quality]')) {
+        state.editor.qualities = button.dataset.quickQuality;
+        createVersions();
+        return;
+      }
       if (button.matches('[data-toggle-version]')) {
         const index = Number(button.dataset.toggleVersion);
         state.editor.collapsed = state.editor.collapsed || {};

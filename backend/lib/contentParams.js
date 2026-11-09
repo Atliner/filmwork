@@ -106,8 +106,8 @@ function normalizeContentPayload(body = {}, options = {}) {
     episodeCount: contentType === 'series' ? optionalInt(body.episodeCount, 'تعداد قسمت', 1, 5000) : null,
     broadcastNote,
     genres: listOf(body.genres, 12, 'ژانرها'),
-    directors: listOf(body.directors, 12, 'کارگردان'),
-    castMembers: listOf(body.cast ?? body.castMembers, 40, 'بازیگران'),
+    directors: listOf(body.directors, 24, 'کارگردان'),
+    castMembers: listOf(body.cast ?? body.castMembers, 60, 'بازیگران'),
     countries: listOf(body.countries ?? body.country, 8, 'کشور'),
     network: optionalText(body.network, 120, 'شبکه'),
     ageRating: optionalText(body.ageRating, 20, 'رده سنی'),
@@ -222,7 +222,9 @@ async function buildParseDraft({ text, link }) {
   }
 
   const { fields, meta } = parseContentPost(sourceText);
-  const suggestedVersions = buildVersionSuggestions(fields);
+  // A post that says nothing about audio must not pre-create subtitle versions the
+  // owner never asked for; explicit "دوبله/زیرنویس" mentions still drive the kinds.
+  const suggestedVersions = fields.hasDub || fields.hasSub ? buildVersionSuggestions(fields) : [];
   return {
     source: { label: sourceLabel, url: resolvedLink, textLength: sourceText.length },
     fields: {
