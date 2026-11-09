@@ -6,6 +6,7 @@ Filmwork is a production-oriented, RTL movie and series platform with a Node.js/
 
 ```text
 backend/
+  app.js                    hosting-safe entry point (Passenger/cPanel startup file)
   server.js                 Express API, SPA host, owner-only routes
   bots/adminBot.js          metadata parser, media replication, owner login
   bots/authBot.js           contact login codes and Telegram delivery
@@ -32,6 +33,8 @@ npm start
 ```
 
 The server binds to `0.0.0.0:$PORT`, serves the frontend itself, and uses relative `/api` calls. Node.js 18.18+ and MySQL 8 are required.
+
+`app.js` is the entry point for every runtime: `npm start` runs it, and Passenger (cPanel "Setup Node.js App") must be pointed at `app.js`, not `server.js` — Passenger imports the startup file instead of running it as the main module, so a `require.main === module` guard leaves the port unbound and the domain returns 503. If startup fails, the process keeps serving a diagnostic page that names the cause instead of a bare 503, and swaps the real application in automatically once it can start.
 
 ## Product experience
 

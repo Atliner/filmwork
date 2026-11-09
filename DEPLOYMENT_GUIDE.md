@@ -123,7 +123,9 @@ curl -s "https://api.telegram.org/bot${TOKEN}/getUpdates"
 - **Application mode:** Production
 - **Application root:** `filmwork/backend`
 - **Application URL:** دامنه/زیردامنه موردنظر، بدون sub-path ترجیحاً
-- **Application startup file:** `server.js`
+- **Application startup file:** `app.js`  ← **نه** `server.js`
+
+> **مهم:** Passenger (که cPanel از آن استفاده می‌کند) فایل startup را با `require()` بارگذاری می‌کند و آن را به‌عنوان ماژول اصلی اجرا نمی‌کند. اگر startup file را روی `server.js` بگذارید، شرط `if (require.main === module)` هرگز برقرار نمی‌شود، هیچ پورتی باز نمی‌شود و دامنه پاسخ **503 Service Unavailable** می‌دهد. فایل `app.js` دقیقاً برای همین ساخته شده و در هر حالتی سرور را بالا می‌آورد.
 
 روی **Create** و سپس **Run NPM Install** بزنید. اگر UI وابستگی dev را نصب می‌کند مشکلی ندارد، ولی در SSH `npm ci --omit=dev` کم‌حجم‌تر است.
 
@@ -176,18 +178,28 @@ curl -i https://stream.example.com/api/health
 ```json
 {
   "status": "ok",
-  "database": { "ok": true },
-  "bots": { "authentication": true, "administration": true }
+  "database": { "ok": true, "latencyMs": 3 },
+  "bots": { "authentication": true, "administration": true },
+  "timestamp": "..."
 }
 ```
 
-اگر یکی از botها `false` است، token و log اپ را بررسی کنید. در production شکست startup ربات باعث fail شدن startup می‌شود تا سرویس نیمه‌فعال نماند.
+اگر دیتابیس در دسترس نباشد، همان endpoint کد `503` و `status: "degraded"` برمی‌گرداند تا مانیتورینگ آن را از 503 دامنه تشخیص دهد. اگر یکی از botها `false` است، `bots.status.lastError` و log اپ را ببینید. اکنون شکست ربات، سایت را از کار نمی‌اندازد: فقط همان ربات در پس‌زمینه هر پنج دقیقه دوباره تلاش می‌کند.
+
+### اگر دامنه 503 داد
+
+1. در cPanel → **Setup Node.js App** مقدار **Application startup file** باید `app.js` باشد؛ اگر `server.js` است عوض کنید و Restart بزنید.
+2. دامنه را باز کنید. به‌جای صفحه 503 خالی، صفحه‌ای فارسی با **علت دقیق** و فهرست متغیرهای تنظیم‌نشده نمایش داده می‌شود (هیچ مقدار محرمانه‌ای در آن صفحه نیست). همان متن را رفع کنید و Restart بزنید.
+3. اگر پیام `EADDRINUSE` دیدید، یک instance قدیمی هنوز روی پورت است: در cPanel روی **Stop Application** بزنید و دوباره Start کنید.
+4. اگر پیام `409 Conflict` دیدید، بیش از یک process همان bot token را poll می‌کند؛ instance را روی 1 نگه دارید.
+5. لاگ خطای Passenger در `stderr.log` پوشه Application یا بخش **Errors** در cPanel است.
 
 ### تست محلی سورس
 
 ```bash
 cd ~/filmwork/backend
 npm test
+node --check app.js
 node --check server.js
 ```
 
@@ -252,6 +264,7 @@ node --check server.js
 
 | نشانه | بررسی |
 |---|---|
+| `503` روی دامنه | startup file روی `app.js` تنظیم شده باشد؛ log اپ، نسخه Node، syntax `.env` و اتصال MySQL |
 | `502` پس از restart | log اپ، نسخه Node، syntax `.env` و اتصال MySQL |
 | bot با `409 Conflict` | process دیگری همان token را poll می‌کند؛ instance را به 1 کاهش دهید |
 | فایل به کاربر کپی نمی‌شود | ربات عمومی باید در channel مربوط administrator و کاربر قبلاً `/start` کرده باشد |

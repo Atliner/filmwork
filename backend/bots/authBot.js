@@ -15,6 +15,16 @@ function normalizePhone(phone) {
   return cleaned.startsWith('+') ? cleaned : `+${cleaned}`;
 }
 
+/** Telegraf throws "Bot is not running!" when stop() precedes a successful launch. */
+function safeStop(bot, reason) {
+  if (!bot) return;
+  try {
+    bot.stop(reason);
+  } catch {
+    // Nothing was polling, so there is nothing to stop.
+  }
+}
+
 function accountName(from) {
   return [from.first_name, from.last_name]
     .map((part) => String(part || '').trim())
@@ -35,12 +45,25 @@ class AuthBotService {
       console.warn('AUTH_BOT_TOKEN is not configured; login and file delivery bot is disabled.');
       return false;
     }
+    if (!/^\d{6,}:[A-Za-z0-9_-]{30,}$/.test(token)) {
+      throw new Error('AUTH_BOT_TOKEN does not look like a BotFather token (expected 123456789:AAAA...)');
+    }
     this.bot = new Telegraf(token);
     this.registerHandlers();
-    await this.bot.launch({
-      dropPendingUpdates: false,
-      allowedUpdates: ['message'],
-    });
+    try {
+      await this.bot.launch({
+        dropPendingUpdates: false,
+        allowedUpdates: ['message'],
+      });
+    } catch (error) {
+      safeStop(this.bot, 'startup-failure');
+      this.bot = null;
+      this.started = false;
+      const conflict = /409|terminated by other getUpdates request/i.test(telegramErrorDescription(error));
+      throw new Error(conflict
+        ? 'Public authentication bot cannot poll: another process is already polling AUTH_BOT_TOKEN (Telegram 409). Run a single instance or use a webhook.'
+        : `Public authentication bot could not start: ${telegramErrorDescription(error)}`);
+    }
     this.started = true;
     console.log('Public authentication bot started.');
     return true;

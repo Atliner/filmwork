@@ -4,7 +4,10 @@ const path = require('path');
 const dotenv = require('dotenv');
 const mysql = require('mysql2/promise');
 
-dotenv.config({ path: path.join(__dirname, '..', '.env') });
+dotenv.config({
+  path: process.env.DOTENV_CONFIG_PATH || path.join(__dirname, '..', '.env'),
+  quiet: true,
+});
 
 const required = ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'];
 for (const name of required) {

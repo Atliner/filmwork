@@ -5,7 +5,11 @@ const fs = require('fs');
 const crypto = require('crypto');
 const dotenv = require('dotenv');
 
-dotenv.config({ path: path.join(__dirname, '.env') });
+// `DOTENV_CONFIG_PATH` lets a host (or a test) point at another env file.
+dotenv.config({
+  path: process.env.DOTENV_CONFIG_PATH || path.join(__dirname, '.env'),
+  quiet: true,
+});
 
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -50,30 +54,91 @@ const { adminBotService } = require('./bots/adminBot');
 
 const app = express();
 const isProduction = process.env.NODE_ENV === 'production';
-const port = Number(process.env.PORT || 3000);
+
+/**
+ * Numeric env values are frequently pasted with a trailing newline or a stray quote
+ * from a control panel. `Number('3000 ')` is NaN, and `app.listen(NaN)` silently picks
+ * a random port — the site then answers 503 because nothing listens where the host
+ * expects. Parse defensively and fall back to the documented default.
+ */
+function numberFromEnv(name, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
+  const raw = String(process.env[name] ?? '').trim().replace(/^["']|["']$/g, '');
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < min || parsed > max) {
+    console.warn(`Ignoring invalid ${name}=${JSON.stringify(raw)}; using ${fallback}.`);
+    return fallback;
+  }
+  return parsed;
+}
+
+const port = numberFromEnv('PORT', 3000, { min: 1, max: 65535 });
 const frontendDirectory = path.join(__dirname, '..', 'frontend');
 const privateDirectory = path.join(__dirname, 'private');
 const uploadDirectory = path.join(__dirname, 'uploads');
 fs.mkdirSync(uploadDirectory, { recursive: true, mode: 0o750 });
 
+/**
+ * Validates the runtime configuration at import time.
+ *
+ * This runs before the app is exported, so a bad value must not crash the process
+ * inside a hosting runtime (Passenger answers 503) — the caller reports it instead.
+ */
 function validateRuntimeConfiguration() {
   requireSecret('JWT_SECRET');
   requireSecret('AUTH_CODE_PEPPER');
   requireSecret('PHONE_ENCRYPTION_KEY');
+  const configuredAppUrl = String(process.env.APP_URL || '').trim();
+  if (configuredAppUrl) {
+    let parsedAppUrl;
+    try {
+      parsedAppUrl = new URL(configuredAppUrl);
+    } catch {
+      throw new Error('APP_URL must be an absolute URL, for example https://stream.example.com');
+    }
+    if (!['http:', 'https:'].includes(parsedAppUrl.protocol)) {
+      throw new Error('APP_URL must use http or https');
+    }
+    if (isProduction && parsedAppUrl.protocol !== 'https:') {
+      throw new Error('APP_URL must use HTTPS in production');
+    }
+  }
   if (isProduction) {
-    const appUrl = new URL(process.env.APP_URL || '');
-    if (appUrl.protocol !== 'https:') throw new Error('APP_URL must use HTTPS in production');
-    for (const name of ['AUTH_BOT_TOKEN', 'AUTH_BOT_USERNAME', 'ADMIN_BOT_TOKEN']) {
+    for (const name of [
+      'APP_URL',
+      'AUTH_BOT_TOKEN',
+      'AUTH_BOT_USERNAME',
+      'ADMIN_BOT_TOKEN',
+      'ADMIN_OWNER_IDS',
+      'TELEGRAM_PRIMARY_CHAT_ID',
+      'TELEGRAM_FALLBACK_1_CHAT_ID',
+      'TELEGRAM_FALLBACK_2_CHAT_ID',
+    ]) {
       if (!process.env[name]) throw new Error(`${name} is required in production`);
     }
-    if (ownerIds().size === 0) throw new Error('ADMIN_OWNER_IDS is required in production');
+    for (const name of [
+      'ADMIN_SOURCE_CHAT_ID',
+      'TELEGRAM_PRIMARY_CHAT_ID',
+      'TELEGRAM_FALLBACK_1_CHAT_ID',
+      'TELEGRAM_FALLBACK_2_CHAT_ID',
+    ]) {
+      const value = String(process.env[name] || '');
+      if (value && !/^-?\d+$/.test(value)) {
+        throw new Error(`${name} must be a numeric Telegram chat id (for example -1001234567890)`);
+      }
+    }
+    if (!/^[\d,\s]+$/.test(String(process.env.ADMIN_OWNER_IDS))) {
+      throw new Error('ADMIN_OWNER_IDS must be a comma-separated list of numeric Telegram user ids');
+    }
   }
 }
 
 validateRuntimeConfiguration();
 
 app.disable('x-powered-by');
-app.set('trust proxy', Number(process.env.TRUST_PROXY || (isProduction ? 1 : 0)));
+app.set('trust proxy', process.env.TRUST_PROXY === undefined
+  ? (isProduction ? 1 : 0)
+  : numberFromEnv('TRUST_PROXY', isProduction ? 1 : 0, { min: 0, max: 10 }));
 app.use((req, res, next) => {
   req.requestId = crypto.randomUUID();
   res.setHeader('X-Request-Id', req.requestId);
@@ -104,9 +169,24 @@ app.use(helmet({
 const allowedOrigins = new Set(
   String(process.env.CORS_ORIGINS || process.env.APP_URL || '')
     .split(',')
-    .map((origin) => origin.trim().replace(/\/$/, ''))
+    .map((origin) => origin.trim().replace(/^["']|["']$/g, '').replace(/\/$/, ''))
     .filter(Boolean),
 );
+for (const origin of allowedOrigins) {
+  // A path or a trailing slash turns into an origin that never matches, and every
+  // cross-origin call then fails with 403 ORIGIN_REJECTED.
+  try {
+    const parsed = new URL(origin);
+    if (parsed.pathname !== '/' || parsed.search || parsed.hash) {
+      console.warn(`CORS_ORIGINS entry ${JSON.stringify(origin)} contains a path; use only the origin (scheme + host).`);
+    }
+    if (parsed.origin !== origin) {
+      console.warn(`CORS_ORIGINS entry ${JSON.stringify(origin)} should be written as ${JSON.stringify(parsed.origin)}.`);
+    }
+  } catch {
+    console.warn(`CORS_ORIGINS entry ${JSON.stringify(origin)} is not a valid origin.`);
+  }
+}
 app.use(cors({
   origin(origin, callback) {
     if (!origin || allowedOrigins.has(origin.replace(/\/$/, '')) || (!isProduction && /^https?:\/\/localhost(?::\d+)?$/.test(origin))) {
@@ -264,15 +344,25 @@ function verifyAdSession(session, expectedAdId) {
 }
 
 app.get('/api/health', asyncRoute(async (_req, res) => {
-  const database = await healthCheck();
+  let database;
+  try {
+    database = { ...(await healthCheck()) };
+  } catch (error) {
+    // A monitoring probe needs a machine-readable answer, not an HTML error page.
+    database = { ok: false, error: String(error.code || error.message || 'database_unreachable') };
+  }
+  const bots = {
+    authentication: authBotService.started,
+    administration: adminBotService.started,
+    status: { ...botStatus },
+  };
+  const healthy = database.ok === true;
+  res.status(healthy ? 200 : 503);
   res.setHeader('Cache-Control', 'no-store');
   res.json({
-    status: 'ok',
+    status: healthy ? 'ok' : 'degraded',
     database,
-    bots: {
-      authentication: authBotService.started,
-      administration: adminBotService.started,
-    },
+    bots,
     timestamp: new Date().toISOString(),
   });
 }));
@@ -775,15 +865,25 @@ const upload = multer({
   },
 });
 
-app.use('/uploads', express.static(uploadDirectory, {
+// `fallthrough: false` used to let a missing creative fall through to the JSON error
+// handler, which replied 500 for a plain 404 file GET (and confused uptime checks).
+const creativeFiles = express.static(uploadDirectory, {
   dotfiles: 'deny',
-  fallthrough: false,
   immutable: true,
   maxAge: '30d',
-  setHeaders(res) {
-    res.setHeader('X-Content-Type-Options', 'nosniff');
+  setHeaders(response) {
+    response.setHeader('X-Content-Type-Options', 'nosniff');
   },
-}));
+});
+app.use('/uploads', (req, res, next) => {
+  creativeFiles(req, res, (error) => {
+    if (error) return next(error);
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return next(new AppError(404, 'NOT_FOUND', 'مسیر پیدا نشد.'));
+    }
+    return res.status(404).type('text/plain; charset=utf-8').send('پیدا نشد');
+  });
+});
 
 app.get('/api/advertiser/profile', requireUser, requireRole('advertiser'), asyncRoute(async (req, res) => {
   await settleExpiredCampaigns(req.user.id);
@@ -1221,12 +1321,29 @@ app.use(express.static(frontendDirectory, {
     if (filename.endsWith('index.html')) res.setHeader('Cache-Control', 'no-store');
   },
 }));
+const frontendIndexFile = path.join(frontendDirectory, 'index.html');
+
+/**
+ * A submission that only uploads `backend/` is a very common cPanel mistake: the API
+ * works but every page request dies on sendFile and returns 500/503. Reply with an
+ * actionable page instead.
+ */
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api/') || req.path.startsWith('/owner-console') || req.path.startsWith('/uploads/')) {
     return next(new AppError(404, 'NOT_FOUND', 'مسیر پیدا نشد.'));
   }
   res.setHeader('Cache-Control', 'no-store');
-  res.sendFile(path.join(frontendDirectory, 'index.html'));
+  if (!fs.existsSync(frontendIndexFile)) {
+    res.status(500).type('text/html; charset=utf-8').send(
+      '<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><title>Filmwork</title>'
+      + '<body style="font-family:system-ui;background:#08080a;color:#f4f4f5;padding:32px;line-height:2">'
+      + '<h1>پوشه frontend پیدا نشد</h1>'
+      + '<p>فایل <code>frontend/index.html</code> کنار پوشه <code>backend</code> قرار نگرفته است. '
+      + 'کل مخزن را (نه فقط پوشه backend) روی هاست قرار دهید و سپس Application را Restart کنید.</p></body></html>',
+    );
+    return;
+  }
+  res.sendFile(frontendIndexFile);
 });
 
 app.use((req, _res, next) => next(new AppError(404, 'NOT_FOUND', 'مسیر پیدا نشد.')));
@@ -1255,32 +1372,118 @@ app.use((error, req, res, next) => {
 
 let httpServer;
 let campaignSettlementTimer;
+// Set by the hosting entry point (app.js) when it already owns the listening port.
+const hooks = { listenOnceReady: null };
+let botRetryTimer;
+let processGuardsInstalled = false;
 let shuttingDown = false;
+let botsStarting = false;
+const botStatus = { authentication: 'pending', administration: 'pending', lastError: null };
 
-async function start() {
+/**
+ * Bots are started *after* HTTP is already serving, and their failure never takes the
+ * website down: a bot token that Telegram rejects (revoked token, host IP blocked,
+ * `409 Conflict` from a second polling instance) used to abort `start()` and leave
+ * Passenger without a running app, i.e. 503 on the whole domain. The site keeps
+ * working and the bots retry in the background instead.
+ */
+async function startBots() {
+  if (botsStarting) return;
+  botsStarting = true;
+  // Telegram can take several seconds (or hang behind a blocked network); never let
+  // that delay the first HTTP response.
+  for (const key of ['authentication', 'administration']) {
+    if (botStatus[key] === 'pending') botStatus[key] = 'starting';
+  }
+  try {
+    // Only start what is not already polling: launching the same token twice makes
+    // Telegram answer 409 Conflict and kills the bot that was working.
+    const pending = [];
+    if (!authBotService.started && authBotService.bot === null) pending.push(['authentication', authBotService]);
+    if (!adminBotService.started && adminBotService.bot === null) pending.push(['administration', adminBotService]);
+    if (!pending.length) {
+      botStatus.authentication = authBotService.started ? 'started' : botStatus.authentication;
+      botStatus.administration = adminBotService.started ? 'started' : botStatus.administration;
+      return;
+    }
+    const results = await Promise.allSettled(pending.map(([, service]) => service.start()));
+    let failed = false;
+    results.forEach((result, index) => {
+      const [key] = pending[index];
+      // `start()` returns false when the token is not configured at all.
+      if (result.status === 'fulfilled') {
+        botStatus[key] = result.value === false ? 'disabled' : 'started';
+        return;
+      }
+      botStatus[key] = 'failed';
+      failed = true;
+      botStatus.lastError = String(result.reason?.message || result.reason).slice(0, 500);
+      console.error(`Telegram bot (${key}) failed to start; the website stays online:`, result.reason);
+    });
+    if (failed) scheduleBotRetry();
+  } finally {
+    botsStarting = false;
+  }
+}
+
+function scheduleBotRetry() {
+  if (botRetryTimer || shuttingDown) return;
+  const delayMs = Math.max(60_000, Number(process.env.BOT_RETRY_SECONDS || 300) * 1000);
+  botRetryTimer = setTimeout(() => {
+    botRetryTimer = null;
+    startBots().catch((error) => console.error('Telegram bot retry failed:', error));
+  }, delayMs);
+  botRetryTimer.unref?.();
+}
+
+/**
+ * Starts the database-dependent services, then binds HTTP.
+ *
+ * `listen: false` lets a host (app.js while it shows the startup diagnostic page)
+ * prepare the app and take over the port itself once `start()` succeeds on a retry.
+ */
+async function start({ listen = true } = {}) {
+  installProcessGuards();
+  // The database is the only hard dependency; nothing else can work without it.
   await healthCheck();
-  await settleExpiredCampaigns();
-  campaignSettlementTimer = setInterval(() => {
-    settleExpiredCampaigns().catch((error) => console.error('Expired campaign settlement failed', error));
-  }, 5 * 60_000);
-  campaignSettlementTimer.unref?.();
-  httpServer = app.listen(port, '0.0.0.0', () => {
-    console.log(`Filmwork API listening on 0.0.0.0:${port}`);
+  await settleExpiredCampaigns().catch((error) => {
+    console.error('Initial campaign settlement failed (continuing):', error);
   });
-  httpServer.keepAliveTimeout = 65_000;
-  httpServer.headersTimeout = 66_000;
-
-  const botResults = await Promise.allSettled([
-    authBotService.start(),
-    adminBotService.start(),
-  ]);
-  for (const result of botResults) {
-    if (result.status === 'rejected') {
-      console.error('Telegram bot startup failed:', result.reason);
-      if (isProduction) throw result.reason;
+  if (!campaignSettlementTimer) {
+    campaignSettlementTimer = setInterval(() => {
+      settleExpiredCampaigns().catch((error) => console.error('Expired campaign settlement failed', error));
+    }, 5 * 60_000);
+    campaignSettlementTimer.unref?.();
+  }
+  // Adopt a listener that was opened to show the startup diagnostic page, then hand
+  // it the real app: this is how a retried boot takes over the port without a clash.
+  if (listen && !httpServer && hooks.listenOnceReady) {
+    const adopted = hooks.listenOnceReady();
+    if (adopted) {
+      httpServer = adopted;
+      httpServer.on('error', (error) => {
+        console.error(`HTTP server error on port ${port}:`, error);
+      });
     }
   }
-  return httpServer;
+  if (listen && !httpServer) {
+    await new Promise((resolve, reject) => {
+      httpServer = app.listen(port, '0.0.0.0', () => {
+        console.log(`Filmwork API listening on 0.0.0.0:${port}`);
+        resolve();
+      });
+      httpServer.keepAliveTimeout = 65_000;
+      httpServer.headersTimeout = 66_000;
+      httpServer.once('error', reject);
+    });
+    httpServer.on('error', (error) => {
+      console.error(`HTTP server error on port ${port}:`, error);
+    });
+  }
+  if (listen) {
+    startBots().catch((error) => console.error('Telegram bot startup failed (the website stays online):', error));
+  }
+  return httpServer || app;
 }
 
 async function shutdown(signal) {
@@ -1290,6 +1493,7 @@ async function shutdown(signal) {
   const forceTimer = setTimeout(() => process.exit(1), 15_000);
   forceTimer.unref();
   if (campaignSettlementTimer) clearInterval(campaignSettlementTimer);
+  if (botRetryTimer) clearTimeout(botRetryTimer);
   await Promise.allSettled([
     authBotService.stop(signal),
     adminBotService.stop(signal),
@@ -1301,7 +1505,28 @@ async function shutdown(signal) {
   clearTimeout(forceTimer);
 }
 
+// `node server.js` stays supported for PM2/systemd and for `npm run dev`. The
+// Passenger/LiteSpeed entry point is `app.js`, which always calls `start()`.
+
+/**
+ * A single rejected promise in a background task (Telegram update, media sweeper,
+ * campaign settlement) used to crash the process; Passenger then shows 503 until the
+ * next request respawns it. Log and keep serving instead — an uncaught exception in a
+ * handler is a bug to fix, not a reason to take the whole site offline.
+ */
+function installProcessGuards() {
+  if (processGuardsInstalled) return;
+  processGuardsInstalled = true;
+  process.on('unhandledRejection', (reason) => {
+    console.error('Unhandled promise rejection (server keeps running):', reason);
+  });
+  process.on('uncaughtException', (error) => {
+    console.error('Uncaught exception (server keeps running):', error);
+  });
+}
+
 if (require.main === module) {
+  installProcessGuards();
   start().catch(async (error) => {
     console.error('Filmwork failed to start:', error);
     await shutdown('startup-failure').catch(() => {});
@@ -1311,4 +1536,4 @@ if (require.main === module) {
   process.once('SIGINT', () => shutdown('SIGINT').then(() => process.exit(0)));
 }
 
-module.exports = { app, start, shutdown };
+module.exports = { app, start, shutdown, botStatus, numberFromEnv, hooks };

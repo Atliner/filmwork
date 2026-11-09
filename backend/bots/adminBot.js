@@ -232,6 +232,16 @@ function authorized(ctx) {
   return Boolean(fromOwner || trustedChannel);
 }
 
+/** Telegraf throws "Bot is not running!" when stop() precedes a successful launch. */
+function safeStop(bot, reason) {
+  if (!bot) return;
+  try {
+    bot.stop(reason);
+  } catch {
+    // Nothing was polling, so there is nothing to stop.
+  }
+}
+
 async function safeReply(ctx, message) {
   try {
     await ctx.reply(message, { link_preview_options: { is_disabled: true } });
@@ -255,14 +265,28 @@ class AdminBotService {
       return false;
     }
     if (ownerIds().size === 0) throw new Error('ADMIN_OWNER_IDS must contain at least one Telegram user id');
+    if (!/^\d{6,}:[A-Za-z0-9_-]{30,}$/.test(token)) {
+      throw new Error('ADMIN_BOT_TOKEN does not look like a BotFather token (expected 123456789:AAAA...)');
+    }
     storageTargets();
 
     this.bot = new Telegraf(token);
     this.registerHandlers();
-    await this.bot.launch({
-      dropPendingUpdates: false,
-      allowedUpdates: ['message', 'channel_post'],
-    });
+    try {
+      await this.bot.launch({
+        dropPendingUpdates: false,
+        allowedUpdates: ['message', 'channel_post'],
+      });
+    } catch (error) {
+      // A second polling instance yields "409 Conflict"; a revoked token yields 401.
+      safeStop(this.bot, 'startup-failure');
+      this.bot = null;
+      this.started = false;
+      const conflict = /409|terminated by other getUpdates request/i.test(telegramErrorDescription(error));
+      throw new Error(conflict
+        ? 'Private admin bot cannot poll: another process is already polling ADMIN_BOT_TOKEN (Telegram 409). Run a single instance or use a webhook.'
+        : `Private admin bot could not start: ${telegramErrorDescription(error)}`);
+    }
     this.started = true;
     this.sweeper = setInterval(() => this.finalizeDueBundles().catch((error) => {
       console.error('Bundle sweeper failed', error);
