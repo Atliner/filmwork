@@ -254,6 +254,8 @@ function summary(item) {
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
     qualities: item.qualities,
+    directors: item.directors,
+    cast: item.cast,
     hasDub: item.hasDub,
     hasSub: item.hasSub,
     mediaCount: item.mediaCount,
@@ -359,9 +361,18 @@ const store = {
     if (filters.hero === '1') rows = rows.filter((item) => item.featuredHero);
     if (filters.running === '1') rows = rows.filter((item) => item.seriesRunning);
     if (filters.q) {
+      // Same contract as the SQL search: titles in both scripts, crew, genres,
+      // country and network all answer the one box.
       const term = String(filters.q).toLowerCase();
-      rows = rows.filter((item) => `${item.title} ${item.originalTitle}`.toLowerCase().includes(term));
+      rows = rows.filter((item) => [
+        item.title, item.originalTitle, item.network, item.ageRating,
+        ...(item.genres || []), ...(item.directors || []), ...(item.cast || []), ...(item.countries || []),
+      ].filter(Boolean).join(' ').toLowerCase().includes(term));
     }
+    if (filters.genre) rows = rows.filter((item) => (item.genres || []).includes(filters.genre));
+    if (filters.yearFrom) rows = rows.filter((item) => (item.releaseYear || 0) >= Number(filters.yearFrom));
+    if (filters.yearTo) rows = rows.filter((item) => (item.releaseYear || 9999) <= Number(filters.yearTo));
+    if (filters.minRating) rows = rows.filter((item) => (item.imdbScore || 0) >= Number(filters.minRating));
     if (filters.sort === 'views') rows.sort((a, b) => b.views - a.views);
     else if (filters.sort === 'title') rows.sort((a, b) => a.title.localeCompare(b.title, 'fa'));
     else rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));

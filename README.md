@@ -49,6 +49,7 @@ The server binds to `0.0.0.0:$PORT`, serves the frontend itself, and uses relati
 ## Product experience
 
 - Cinematic Obsidian mobile-first shell with an RTL header, four-item glass dock, cinematic hero, poster rails, and responsive search grid.
+- Bilingual presentation: every title and credit carries Persian and English, so the Persian H1 sits above an LTR English line and the single search box matches either language (titles, directors, cast, genres, country, network, age rating).
 - Search by title or genre with type, year, and IMDb filters.
 - Authenticated playback progress, resume-from-last-position, profile statistics, and Telegram download history.
 - Custom player with direct source binding, external SRT/VTT and dubbed audio synchronization, embedded-track selection, and related titles.

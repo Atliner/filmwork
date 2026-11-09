@@ -36,6 +36,72 @@
     close: '×',
   };
 
+  const PERSIAN = /[\u0600-\u06FF]/;
+  const LATIN = /[A-Za-z]/;
+  const byScript = (value, wanted) => String(value || '').split(/[,،؛;|/]+/u)
+    .map((part) => part.trim())
+    .filter((part) => part && (wanted === 'fa' ? PERSIAN.test(part) : LATIN.test(part)));
+
+  function titleFa(content) {
+    const title = String(content?.title || '').trim();
+    const original = String(content?.originalTitle || '').trim();
+    if (PERSIAN.test(title) || !original || !PERSIAN.test(original)) return title;
+    return original;
+  }
+
+  function titleEn(content) {
+    const title = String(content?.title || '').trim();
+    const original = String(content?.originalTitle || '').trim();
+    if (LATIN.test(title)) return title;
+    return LATIN.test(original) ? original : '';
+  }
+
+  /** Filmwork shows both scripts wherever a title fits: `پیت` above `The Pitt`. */
+  function titleMarkup(content, { tag = 'h3', className = '', enClass = 'title-en' } = {}) {
+    const fa = titleFa(content);
+    const en = titleEn(content);
+    const showEn = en && en !== fa;
+    const main = `<${tag} class="${className}">${escapeHtml(fa || en)}</${tag}>`;
+    return showEn
+      ? `${main}<p class="${enClass}" dir="ltr" lang="en">${escapeHtml(en)}</p>`
+      : main;
+  }
+
+  /**
+   * Crew names arrive as `Persian | English` for the same person. Rendering both
+   * scripts side by side keeps the site consistent with the channel post and makes
+   * either spelling findable.
+   */
+  function bilingualNames(values) {
+    const list = Array.isArray(values) ? values.flatMap((value) => String(value || '').split(/\s*\|\s*/u)) : [];
+    const seen = new Set();
+    const fa = [];
+    const en = [];
+    for (const raw of list) {
+      const name = String(raw || '').trim();
+      const key = name.toLowerCase();
+      if (!name || seen.has(key)) continue;
+      seen.add(key);
+      if (PERSIAN.test(name) && !LATIN.test(name)) fa.push(name);
+      else if (LATIN.test(name)) en.push(name);
+      else if (name) fa.push(name);
+    }
+    return { fa, en };
+  }
+
+  function namesMarkup(values, { limit = 6 } = {}) {
+    const { fa, en } = bilingualNames(values);
+    if (!fa.length && !en.length) return 'ثبت نشده';
+    const faPart = fa.slice(0, limit).map(escapeHtml).join('، ');
+    const enPart = en.slice(0, limit).map(escapeHtml).join('، ');
+    if (faPart && enPart) {
+      return `<span class="name-pair"><span class="name-fa">${faPart}</span><span class="name-en" dir="ltr" lang="en">${enPart}</span></span>`;
+    }
+    return faPart
+      ? `<span class="name-fa">${faPart}</span>`
+      : `<span class="name-en" dir="ltr" lang="en">${enPart}</span>`;
+  }
+
   function escapeHtml(value) {
     return String(value ?? '')
       .replace(/&/g, '&amp;')
@@ -181,16 +247,19 @@
   function posterMarkup(content, className = '') {
     const poster = safeUrl(content.posterUrl);
     return `<div class="poster-frame ${className}">
-      ${poster ? `<img src="${poster}" alt="پوستر ${escapeHtml(content.title)}" loading="lazy">` : `<span class="poster-letter" aria-hidden="true">${escapeHtml(firstLetter(content.title))}</span>`}
+      ${poster ? `<img src="${poster}" alt="پوستر ${escapeHtml(titleFa(content) || titleEn(content))}" loading="lazy">` : `<span class="poster-letter" aria-hidden="true">${escapeHtml(firstLetter(titleFa(content) || titleEn(content)))}</span>`}
       ${content.imdbScore !== null && content.imdbScore !== undefined ? `<span class="card-rating"><b>★</b> ${escapeHtml(content.imdbScore)}</span>` : ''}
       <span class="card-type">${content.type === 'series' ? 'سریال' : 'فیلم'}</span>
     </div>`;
   }
 
   function mediaCard(content) {
-    return `<article class="media-card" tabindex="0" role="button" data-route="/content/${encodeURIComponent(content.id)}" aria-label="${escapeHtml(content.title)}">
+    const fa = titleFa(content);
+    const en = titleEn(content);
+    const label = [fa, en].filter(Boolean).join(' / ');
+    return `<article class="media-card" tabindex="0" role="button" data-route="/content/${encodeURIComponent(content.id)}" aria-label="${escapeHtml(label)}">
       ${posterMarkup(content)}
-      <h3>${escapeHtml(content.title)}</h3>
+      ${titleMarkup(content, { enClass: 'title-en title-en--card' })}
       <p>${content.releaseYear ? escapeHtml(content.releaseYear) : 'سال نامشخص'}${content.genres?.[0] ? ` · ${escapeHtml(content.genres[0])}` : ''}</p>
     </article>`;
   }
@@ -203,8 +272,8 @@
     const progress = duration > 0 ? Math.min(100, Math.max(0, (position / duration) * 100)) : 0;
     const remaining = duration > position ? Math.max(1, Math.round((duration - position) / 60)) : 0;
     return `<article class="resume-card" role="button" tabindex="0" data-route="/player/${encodeURIComponent(content.id)}">
-      <div class="resume-media">${image ? `<img src="${image}" alt="" loading="lazy">` : `<span class="poster-letter">${escapeHtml(firstLetter(content.title))}</span>`}<span class="resume-play">${icons.play}</span>${remaining ? `<small>${formatNumber(remaining)} دقیقه باقی‌مانده</small>` : ''}<i><b style="width:${progress.toFixed(1)}%"></b></i></div>
-      <div class="resume-copy"><strong>${escapeHtml(content.title)}</strong><span>${formatTime(position)} از ${formatTime(duration)}</span></div>
+      <div class="resume-media">${image ? `<img src="${image}" alt="" loading="lazy">` : `<span class="poster-letter">${escapeHtml(firstLetter(titleFa(content) || titleEn(content)))}</span>`}<span class="resume-play">${icons.play}</span>${remaining ? `<small>${formatNumber(remaining)} دقیقه باقی‌مانده</small>` : ''}<i><b style="width:${progress.toFixed(1)}%"></b></i></div>
+      <div class="resume-copy"><strong>${escapeHtml(titleFa(content) || titleEn(content))}</strong>${titleEn(content) && titleEn(content) !== titleFa(content) ? `<small class="title-en title-en--card" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</small>` : ''}<span>${formatTime(position)} از ${formatTime(duration)}</span></div>
     </article>`;
   }
 
@@ -216,7 +285,8 @@
       <div class="hero-vignette"></div>
       <div class="page-shell hero-content">
         <div class="eyebrow">انتخاب ویژه Filmwork</div>
-        <h1>${escapeHtml(content.title)}</h1>
+        <h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>
+        ${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="hero-en-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}
         <div class="hero-meta">
           ${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}
           ${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}</span>` : ''}
@@ -276,7 +346,8 @@
     const genres = ['اکشن', 'درام', 'کمدی', 'جنایی', 'علمی تخیلی', 'انیمیشن'];
     app.innerHTML = `<div class="page-shell page-top search-page">
       <div class="section-head search-title"><div><h1 class="page-title">جستجو</h1><p>در میان فیلم‌ها و سریال‌های فیلم‌ورک</p></div></div>
-      <label class="search-box">${icons.search}<input id="search-input" type="search" maxlength="100" autocomplete="off" placeholder="نام فیلم، سریال یا ژانر…" value="${escapeHtml(initialQuery)}"><span class="sr-only">جستجو</span></label>
+      <label class="search-box">${icons.search}<input id="search-input" type="search" maxlength="100" autocomplete="off" placeholder="نام فارسی یا انگلیسی فیلم، سریال، بازیگر یا کارگردان…" value="${escapeHtml(initialQuery)}"><span class="sr-only">جستجو</span></label>
+      <p class="search-hint">هر دو زبان جستجو می‌شود: «پیت» و «The Pitt» هر دو همین اثر را پیدا می‌کنند؛ نام بازیگران و کارگردانان هم در فهرست نتایج می‌آید.</p>
       <section class="search-discovery"><h2>ژانرهای محبوب</h2><div class="genre-chip-row">
         <button class="genre-chip ${initialGenre ? '' : 'active'}" data-search-genre="">همه</button>
         ${genres.map((genre) => `<button class="genre-chip ${initialGenre === genre ? 'active' : ''}" data-search-genre="${escapeHtml(genre)}">${escapeHtml(genre)}</button>`).join('')}
@@ -316,7 +387,7 @@
       status.textContent = `${formatNumber(data.pagination.total)} نتیجه`;
       results.innerHTML = data.items.length
         ? data.items.map(mediaCard).join('')
-        : `<div style="grid-column:1/-1">${emptyState('نتیجه‌ای پیدا نشد', 'عبارت دیگری را امتحان کنید یا فیلتر نوع را تغییر دهید.')}</div>`;
+        : `<div style="grid-column:1/-1">${emptyState('نتیجه‌ای پیدا نشد', 'عبارت دیگری را امتحان کنید؛ جستجو عنوان فارسی، عنوان انگلیسی، بازیگران، کارگردانان و ژانرها را هم می‌گردد.')}</div>`;
     } catch (error) {
       status.textContent = apiErrorMessage(error);
       results.innerHTML = '';
@@ -351,7 +422,7 @@
         const image = safeUrl(item.content.posterUrl);
         return `<article class="download-history-card">
           <button type="button" class="download-history-poster" data-route="/content/${encodeURIComponent(item.content.id)}">${image ? `<img src="${image}" alt="">` : `<span>${escapeHtml(firstLetter(item.content.title))}</span>`}</button>
-          <div><h2>${escapeHtml(item.content.title)}</h2><p>${[item.media.season ? `فصل ${formatNumber(item.media.season)}` : '', item.media.episode ? `قسمت ${formatNumber(item.media.episode)}` : '', item.media.resolution, item.media.version].filter(Boolean).map(escapeHtml).join(' · ')}</p><small>${formatBytes(item.media.fileSizeBytes)} · ${formatDate(item.downloadedAt)}</small></div>
+          <div><h2>${escapeHtml(titleFa(item.content) || titleEn(item.content))}</h2>${titleEn(item.content) && titleEn(item.content) !== titleFa(item.content) ? `<p class="title-en" dir="ltr" lang="en">${escapeHtml(titleEn(item.content))}</p>` : ''}<p>${[item.media.season ? `فصل ${formatNumber(item.media.season)}` : '', item.media.episode ? `قسمت ${formatNumber(item.media.episode)}` : '', item.media.resolution, item.media.version].filter(Boolean).map(escapeHtml).join(' · ')}</p><small>${formatBytes(item.media.fileSizeBytes)} · ${formatDate(item.downloadedAt)}</small></div>
           <button type="button" class="secondary-button compact" data-open-download="${escapeHtml(item.content.id)}">${icons.download} دریافت دوباره</button>
         </article>`;
       }).join('')}</div>` : emptyState('هنوز فایلی دریافت نکرده‌اید', 'از صفحه یک اثر، نسخه دلخواه را انتخاب کنید تا ربات فایل را برایتان بفرستد.', '<button class="primary-button" style="margin-top:18px" data-route="/home">مرور آثار</button>')}
@@ -382,17 +453,25 @@
     const poster = safeUrl(content.posterUrl || content.backdropUrl);
     const facts = [
       ['نوع', content.type === 'series' ? 'سریال' : 'فیلم سینمایی'],
-      ['سال انتشار', content.releaseYear || 'نامشخص'],
+      ['سال انتشار', content.releaseYear ? `${content.releaseYear}${content.lastAirYear ? ` – ${content.lastAirYear}` : ''}` : 'نامشخص'],
       ['امتیاز IMDb', content.imdbScore ?? 'ثبت نشده'],
       ['ژانر', (content.genres || []).join('، ') || 'ثبت نشده'],
+      ['کارگردان', namesMarkup(content.directors, { limit: 4 })],
+      ['بازیگران', namesMarkup(content.cast, { limit: 8 })],
+      ['کشور', (content.countries || []).map(escapeHtml).join('، ') || 'ثبت نشده'],
+      ['شبکه', content.network ? escapeHtml(content.network) : 'ثبت نشده'],
+      ['رده سنی', content.ageRating ? escapeHtml(content.ageRating) : 'ثبت نشده'],
       ['تعداد نسخه‌ها', formatNumber(media.length)],
     ];
     app.innerHTML = `<section class="detail-hero">
       ${backdrop ? `<img class="detail-backdrop" src="${backdrop}" alt="">` : '<div class="hero-placeholder"></div>'}<div class="detail-overlay"></div>
       <div class="page-shell detail-content">
-        ${poster ? `<img class="detail-poster" src="${poster}" alt="پوستر ${escapeHtml(content.title)}">` : `<div class="detail-poster poster-frame"><span class="poster-letter">${escapeHtml(firstLetter(content.title))}</span></div>`}
-        <div class="detail-copy"><div class="eyebrow">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</div><h1>${escapeHtml(content.title)}</h1>
-          <div class="meta-row">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}</span>` : ''}${content.runtimeMinutes ? `<span class="meta-dot">${formatNumber(content.runtimeMinutes)} دقیقه</span>` : ''}</div>
+        ${poster ? `<img class="detail-poster" src="${poster}" alt="پوستر ${escapeHtml(titleFa(content) || titleEn(content))}">` : `<div class="detail-poster poster-frame"><span class="poster-letter">${escapeHtml(firstLetter(titleFa(content) || titleEn(content)))}</span></div>`}
+        <div class="detail-copy"><div class="eyebrow">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</div><h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>
+          ${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="detail-en-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}
+          <div class="meta-row">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}${content.lastAirYear ? `–${escapeHtml(content.lastAirYear)}` : ''}</span>` : ''}${content.runtimeMinutes ? `<span class="meta-dot">${formatNumber(content.runtimeMinutes)} دقیقه</span>` : ''}${content.seriesRunning && content.currentSeason ? `<span class="meta-dot status-live">فصل ${formatNumber(content.currentSeason)} در حال پخش</span>` : ''}</div>
+          ${(content.directors?.length || content.cast?.length) ? `<div class="credit-line"><span>کارگردان</span> ${namesMarkup(content.directors, { limit: 3 })}</div>` : ''}
+          ${content.cast?.length ? `<div class="credit-line"><span>بازیگران</span> ${namesMarkup(content.cast, { limit: 5 })}</div>` : ''}
           ${content.description ? `<p class="description">${escapeHtml(content.description)}</p>` : ''}
           <div class="action-row"><button class="primary-button" data-route="/player/${encodeURIComponent(content.id)}">${icons.play} پخش آنلاین</button><button class="secondary-button" data-open-download="${escapeHtml(content.id)}">${icons.download} انتخاب نسخه</button><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="علاقه‌مندی">${icons.heart}</button></div>
         </div>
@@ -403,7 +482,7 @@
         ${state.user ? '<form class="comment-form" id="comment-form"><input name="body" maxlength="1200" required placeholder="دیدگاه خود را بنویسید…"><button class="primary-button" type="submit">ارسال</button></form>' : '<button class="secondary-button" data-login style="margin-bottom:16px">برای ثبت دیدگاه وارد شوید</button>'}
         <div class="comments" id="comments-list">${commentsMarkup(comments)}</div>
       </section>
-      <aside class="surface-panel"><h2>اطلاعات اثر</h2><div class="fact-list">${facts.map(([label, value]) => `<div class="fact"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('')}</div></aside>
+      <aside class="surface-panel"><h2>اطلاعات اثر</h2><div class="fact-list">${facts.map(([label, value]) => `<div class="fact"><span>${escapeHtml(label)}</span><div class="fact-value">${String(value).startsWith('<span') ? value : escapeHtml(value)}</div></div>`).join('')}</div></aside>
     </div>`;
   }
 
@@ -457,7 +536,7 @@
       </details>
       <div id="timed-banner-slot"></div>
       <section class="player-info">
-        <div class="player-info-main"><div class="player-title-row"><div><h1>${escapeHtml(content.title)}</h1>${content.originalTitle ? `<p class="original-title">${escapeHtml(content.originalTitle)}</p>` : ''}</div><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="نشان کردن">${icons.heart}</button></div>
+        <div class="player-info-main"><div class="player-title-row"><div><h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="original-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}</div><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="نشان کردن">${icons.heart}</button></div>
           <div class="hero-meta">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}</span>` : ''}<span class="meta-dot">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</span>${content.genres?.length ? `<span class="meta-dot">${content.genres.slice(0, 3).map(escapeHtml).join('، ')}</span>` : ''}</div>
           ${content.description ? `<p class="player-description">${escapeHtml(content.description)}</p>` : ''}
         </div>

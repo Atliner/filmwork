@@ -350,6 +350,9 @@ a { color: inherit; }
 .content-card__meta em { font-style: normal; display: inline-flex; align-items: center; gap: 4px; }
 .content-card__meta svg { width: 13px; height: 13px; color: var(--muted); }
 .content-card__meta b { color: var(--text); font-weight: 600; }
+.content-card__crew { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11px; color: var(--muted); }
+.crew-pair i { font-style: normal; color: #5f5f6b; margin-inline-end: 3px; }
+.crew-pair span[dir="ltr"] { color: #8b8b96; }
 .quality-set { display: flex; flex-wrap: wrap; gap: 5px; }
 .quality-badge { display: inline-flex; padding: 1px 8px; border-radius: 7px; font-size: 10px; font-weight: 700; letter-spacing: .03em; direction: ltr; background: rgba(168, 85, 247, .14); color: #d8b4fe; border: 1px solid rgba(168, 85, 247, .25); }
 .quality-badge--dub { background: rgba(56, 189, 248, .13); color: #7dd3fc; border-color: rgba(56, 189, 248, .25); }

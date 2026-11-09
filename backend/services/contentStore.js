@@ -59,9 +59,17 @@ function listRow(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     qualities: (jsonColumn(row.qualities) || []).filter(Boolean),
+    directors: row.directors === undefined ? undefined : (jsonColumn(row.directors) || []),
+    cast: row.cast_members === undefined ? undefined : (jsonColumn(row.cast_members) || []),
     hasDub: Boolean(row.has_dub),
     hasSub: Boolean(row.has_sub),
     mediaCount: row.media_count === undefined ? undefined : Number(row.media_count),
+    genres: row.genres === undefined ? undefined : (jsonColumn(row.genres) || []),
+    countries: row.country ? String(row.country).split(/[,،]\s*/).filter(Boolean) : [],
+    network: row.network || null,
+    ageRating: row.age_rating || null,
+    runtimeMinutes: row.runtime_minutes || null,
+    description: row.description || null,
   };
 }
 

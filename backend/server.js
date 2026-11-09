@@ -253,8 +253,12 @@ function contentDto(row) {
     imdbScore: row.imdb_score === null ? null : Number(row.imdb_score),
     releaseYear: row.release_year,
     genres: parseJsonColumn(row.genres, []),
+    directors: parseJsonColumn(row.directors, []),
+    cast: parseJsonColumn(row.cast_members, []),
     language: row.language,
     country: row.country,
+    countries: row.country ? String(row.country).split(/[,،]\s*/).filter(Boolean) : [],
+    network: row.network,
     ageRating: row.age_rating,
     runtimeMinutes: row.runtime_minutes,
     posterUrl: row.poster_url,
@@ -578,7 +582,68 @@ app.get('/api/downloads', requireUser, asyncRoute(async (req, res) => {
   });
 }));
 
+/**
+ * Serves the public catalog from the in-memory store when DEMO_DATA is on, so the
+ * storefront and the owner console always show the same library during a preview.
+ */
+async function publicContentList(queryParams) {
+  const store = contentStore();
+  const { page, limit } = parsePage(queryParams);
+  const result = await store.listContents({
+    page,
+    limit,
+    q: typeof queryParams.q === 'string' ? queryParams.q.slice(0, 100) : '',
+    type: queryParams.type,
+    status: 'published',
+    sort: queryParams.sort === 'rating' ? 'views' : queryParams.sort === 'year' ? 'recent' : queryParams.sort,
+    genre: queryParams.genre,
+    yearFrom: queryParams.yearFrom,
+    yearTo: queryParams.yearTo,
+    minRating: queryParams.minRating,
+  });
+  return {
+    items: result.items.filter((item) => item.status === 'published').map(contentFromStoreItem),
+    pagination: result.pagination,
+  };
+}
+
+function contentFromStoreItem(item) {
+  return {
+    id: item.id,
+    type: item.type,
+    title: item.title,
+    originalTitle: item.originalTitle,
+    description: item.description,
+    imdbScore: item.imdbScore,
+    releaseYear: item.releaseYear,
+    lastAirYear: item.lastAirYear,
+    genres: item.genres || [],
+    directors: item.directors || [],
+    cast: item.cast || [],
+    countries: item.countries || [],
+    network: item.network || null,
+    ageRating: item.ageRating || null,
+    runtimeMinutes: item.runtimeMinutes || null,
+    seasonCount: item.seasons,
+    episodeCount: item.episodes,
+    currentSeason: item.currentSeason,
+    seriesRunning: Boolean(item.seriesRunning),
+    hasDub: Boolean(item.hasDub),
+    hasSub: Boolean(item.hasSub),
+    posterUrl: item.posterUrl,
+    posterGallery: item.posterGallery || [],
+    featuredHero: Boolean(item.featuredHero),
+    mediaCount: item.mediaCount,
+    createdAt: item.createdAt,
+  };
+}
+
 app.get('/api/contents', asyncRoute(async (req, res) => {
+  if (contentStore().kind === 'demo') {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(await publicContentList(req.query));
+    return;
+  }
   const { page, limit, offset } = parsePage(req.query);
   const filters = ["c.status = 'published'"];
   const params = { limit, offset };
@@ -588,8 +653,21 @@ app.get('/api/contents', asyncRoute(async (req, res) => {
   }
   if (req.query.q) {
     const search = asString(req.query.q, 'جستجو', { min: 1, max: 100 });
-    filters.push("(c.title LIKE :search ESCAPE '!' OR c.original_title LIKE :search ESCAPE '!')");
+    // The same box must find a Persian title, its English original title, a director
+    // or actor in either script, a genre, a network or a country.
+    const jsonTerm = `%${search.replace(/[%_\\]/g, '')}%`;
+    filters.push(`(
+      c.title LIKE :search ESCAPE '!'
+      OR c.original_title LIKE :search ESCAPE '!'
+      OR c.country LIKE :search ESCAPE '!'
+      OR c.network LIKE :search ESCAPE '!'
+      OR c.age_rating LIKE :search ESCAPE '!'
+      OR JSON_SEARCH(c.directors, 'one', :jsonTerm) IS NOT NULL
+      OR JSON_SEARCH(c.cast_members, 'one', :jsonTerm) IS NOT NULL
+      OR JSON_SEARCH(c.genres, 'one', :jsonTerm) IS NOT NULL
+    )`);
     params.search = `%${escapeLike(search)}%`;
+    params.jsonTerm = jsonTerm;
   }
   if (req.query.genre) {
     const genre = asString(req.query.genre, 'ژانر', { min: 1, max: 60 });
@@ -634,6 +712,13 @@ app.get('/api/contents', asyncRoute(async (req, res) => {
 
 app.get('/api/contents/:assetId', asyncRoute(async (req, res) => {
   const assetId = asString(req.params.assetId, 'شناسه اثر', { min: 36, max: 36 });
+  if (contentStore().kind === 'demo') {
+    const detail = await contentStore().getContent(assetId);
+    if (detail.content.status !== 'published') throw new AppError(404, 'CONTENT_NOT_FOUND', 'اثر پیدا نشد.');
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ content: contentFromStoreItem({ ...detail.content, genres: detail.content.genres || [] }) });
+    return;
+  }
   const rows = await query(
     `SELECT c.*,
             (SELECT COUNT(*) FROM media_links ml WHERE ml.content_id = c.id AND ml.is_active = TRUE) AS media_count
@@ -646,6 +731,28 @@ app.get('/api/contents/:assetId', asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/contents/:assetId/media-options', asyncRoute(async (req, res) => {
+  if (contentStore().kind === 'demo') {
+    const detail = await contentStore().getContent(req.params.assetId).catch(() => null);
+    const items = detail ? detail.versions.flatMap((version) => version.links.map((link) => ({
+      id: link.id,
+      season: link.season,
+      episode: link.episode,
+      episodeTitle: link.title,
+      version: version.title,
+      audioType: version.kind === 'dub' ? 'dubbed' : 'soft_sub',
+      audioLabel: version.kind === 'dub' ? 'دوبله' : 'سافت‌ساب',
+      subtitleType: version.kind === 'dub' ? 'none' : 'separate',
+      resolution: version.resolution || version.title,
+      quality: link.label,
+      encoder: null,
+      fileSizeBytes: 0,
+      subtitleFileSizeBytes: null,
+      streamUrl: link.streamUrl,
+    }))) : [];
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ items });
+    return;
+  }
   const rows = await query(
     `SELECT ml.*
      FROM media_links ml
@@ -663,6 +770,12 @@ app.get('/api/contents/:assetId/media-options', asyncRoute(async (req, res) => {
 
 app.get('/api/contents/:assetId/comments', asyncRoute(async (req, res) => {
   const { page, limit, offset } = parsePage({ ...req.query, limit: req.query.limit || 20 });
+  if (contentStore().kind === 'demo') {
+    // The demo store has no user accounts, so the thread starts empty.
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ items: [], pagination: { page, limit, total: 0 } });
+    return;
+  }
   const rows = await query(
     `SELECT cm.id, cm.body, cm.created_at, u.account_name
      FROM comments cm
@@ -1355,7 +1468,7 @@ app.get('/owner-console/styles.css', requireAdmin, (_req, res) => {
 app.get('/owner-console/demo-login', asyncRoute(async (_req, res) => {
   const demoEnabled = process.env.DEMO_DATA === '1' && !isProduction;
   if (!demoEnabled) throw new AppError(404, 'NOT_FOUND', 'صفحه پیدا نشد.');
-  const ownerId = [...ownerIds()][0] || '1';
+  const ownerId = [...ownerIds()][0] || 'demo';
   const csrfToken = generateOpaqueToken(24);
   res.cookie('filmwork_admin', signAdminToken(ownerId, csrfToken), {
     httpOnly: true,

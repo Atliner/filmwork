@@ -523,6 +523,7 @@
           <span class="status-badge status-badge--${esc(item.status)}">${statusLabel(item.status)}</span>
         </div>
         <div class="content-card__meta">${meta}</div>
+        ${(item.directors?.length || item.cast?.length) ? `<div class="content-card__crew">${crewPair(item.directors, 2, 'کارگردان')}${crewPair(item.cast, 3, 'بازیگران')}</div>` : ''}
         <div class="quality-set">${qualityBadges}${audioBadges}</div>
       </div>
       <div class="content-card__views">
@@ -539,6 +540,28 @@
           data-delete-title="${esc(item.title)}" title="حذف">${ICONS.trash}</button>
       </div>
     </article>`;
+  }
+
+  /** Splits `Persian names | English names` into a two-line bilingual pair. */
+  function namePair(value) {
+    const parts = String(value || '').split(/\s*\|\s*/u).map((part) => part.trim()).filter(Boolean);
+    const fa = [];
+    const en = [];
+    for (const part of parts) {
+      for (const piece of part.split(/[,،]+/u).map((entry) => entry.trim()).filter(Boolean)) {
+        (/[\u0600-\u06FF]/.test(piece) && !/[A-Za-z]/.test(piece) ? fa : en).push(piece);
+      }
+    }
+    return { fa: fa.slice(0, 4), en: en.slice(0, 4) };
+  }
+
+  function crewPair(values, limit, label) {
+    const list = Array.isArray(values) ? values : String(values || '').split(/[,،]+/u);
+    if (!list.length) return '';
+    const { fa, en } = namePair(list.join(' | '));
+    const short = (items) => items.slice(0, limit).map(esc).join('، ');
+    const text = [short(fa), short(en) && `<span dir="ltr">${short(en)}</span>`].filter(Boolean).join(' · ');
+    return text ? `<span class="crew-pair"><i>${esc(label)}:</i> ${text}</span>` : '';
   }
 
   function statusLabel(status) {
@@ -830,9 +853,11 @@
       <div class="section-card__body">
         <div class="field-grid">
           <label class="field"><span>عنوان فارسی <em>*</em></span>
-            <input class="input" name="titleFa" data-field="titleFa" value="${esc(draft.titleFa)}" maxlength="255" placeholder="مثلاً پیت"></label>
+            <input class="input" name="titleFa" data-field="titleFa" value="${esc(draft.titleFa)}" maxlength="255" placeholder="مثلاً پیت">
+            <small>در سایت به همین شکل نمایش داده می‌شود.</small></label>
           <label class="field"><span>عنوان انگلیسی <em>*</em></span>
-            <input class="input" dir="ltr" name="titleEn" data-field="titleEn" value="${esc(draft.titleEn)}" maxlength="255" placeholder="The Pitt"></label>
+            <input class="input" dir="ltr" name="titleEn" data-field="titleEn" value="${esc(draft.titleEn)}" maxlength="255" placeholder="The Pitt">
+            <small>زیر عنوان فارسی می‌آید و در جستجو هم پیدا می‌شود.</small></label>
           <label class="field"><span>نوع</span>
             <select class="select" name="contentType" data-field="contentType" data-structural>
               <option value="movie" ${draft.contentType === 'movie' ? 'selected' : ''}>فیلم</option>
@@ -869,9 +894,11 @@
           <label class="field"><span>ژانرها (با ویرگول)</span>
             <input class="input" data-field="genres" value="${esc(draft.genres)}" placeholder="درام، معمایی، علمی تخیلی"></label>
           <label class="field"><span>کارگردان(ها)</span>
-            <input class="input" data-field="directors" value="${esc(draft.directors)}" placeholder="با ویرگول جدا کنید"></label>
+            <input class="input" data-field="directors" value="${esc(draft.directors)}" placeholder="دامین مارکانو، جان ولز | Damian Marcano, John Wells">
+            <small>فارسی و انگلیسی، با ویرگول و یک <code dir="ltr">|</code> بین دو زبان. هر دو در سایت نمایش داده و جستجو می‌شوند.</small></label>
           <label class="field span-2"><span>بازیگران</span>
-            <input class="input" data-field="cast" value="${esc(draft.cast)}" placeholder="با ویرگول جدا کنید"></label>
+            <input class="input" data-field="cast" value="${esc(draft.cast)}" placeholder="نوآ وایلی، پاتریک بال | Noah Wyle, Patrick Ball">
+            <small>همان قاعده: نام‌های فارسی، سپس <code dir="ltr">|</code> و نام‌های انگلیسی.</small></label>
           <label class="field"><span>کشور(ها)</span>
             <input class="input" data-field="countries" value="${esc(draft.countries)}" placeholder="آمریکا"></label>
           <label class="field"><span>رده سنی</span>
@@ -1366,6 +1393,19 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
             ${CODE(addCopyTargets['post-sample'], 'post-sample')}
             <div class="callout">${ICONS.info}<span>خواندن پست سخت‌گیر نیست: بولت‌ها و ایموجی ابتدای خط (<code>▪️</code>، <code>⏱️</code>، <code>🌐</code>)، برچسب ساده یا پرانتزی، ارقام فارسی، بازه سال (<code>2025 - 2026</code>)، «میانگین ۵۰ دقیقه هر قسمت»، خط تیره‌دار <code>|</code> در لیست بازیگران، هدر <code>#سریال</code> و خط‌های تبلیغاتی انتهایی («برای دانلود کلیک کنید»، <code>@channel</code>) همه مدیریت می‌شوند. نسخه انگلیسی برچسب‌ها هم شناخته می‌شود: <code>Title</code>، <code>Type</code>، <code>Year</code>، <code>Genre</code>، <code>Director</code>، <code>Cast</code>، <code>Country</code>، <code>Age rating</code>، <code>Network</code>، <code>IMDb</code>، <code>Runtime</code>، <code>Quality</code>، <code>Description</code>.</span></div>
             <div class="callout callout--warn">${ICONS.info}<span>اگر پست درباره دوبله یا زیرنویس چیزی نگوید، هیچ نسخه‌ای خودکار ساخته نمی‌شود؛ در مرحله ۳ با دکمه‌های سریع کیفیت، نسخهٔ مورد نظر را بسازید. عبارت‌هایی مثل «دوبله فارسی» یا «زیرنویس چسبیده» در متن، نوع نسخه‌ها را خودکار تعیین می‌کنند.</span></div>
+          </div>
+        </details>
+
+        <details>
+          <summary>۲.۱ دوزبانه بودن سایت و جستجو</summary>
+          <div class="guide__body">
+            <p style="margin:0 0 8px">هر اثر دو عنوان دارد و سایت هر دو را نشان می‌دهد: عنوان فارسی تیتر اصلی است و عنوان انگلیسی با فونت لاتین زیر آن می‌آید. کارگردان و بازیگران هم در دو خط («فارسی، فارسی» و سپس «English, English») نمایش داده می‌شوند.</p>
+            <ul>
+              <li>در پنل، نام‌های فارسی و انگلیسی را با یک <code>|</code> از هم جدا کنید: <code>نوآ وایلی، پاتریک بال | Noah Wyle, Patrick Ball</code>.</li>
+              <li>کادر جستجوی سایت با یک عبارت، هر دو زبان را می‌گردد: <code>پیت</code> و <code>The Pitt</code> هر دو همان اثر را برمی‌گردانند؛ همچنین نام کارگردان و بازیگر (فارسی یا انگلیسی)، ژانر، کشور، شبکه و رده سنی.</li>
+              <li>اگر عنوان فارسی را خالی بگذارید یا اشتباهاً لاتین پر کنید، سایت خودش عنوان لاتین را به‌عنوان تیتر اصلی نشان می‌دهد.</li>
+            </ul>
+            <div class="callout">${ICONS.info}<span>پس هر دو زبان را همیشه پر کنید؛ اگر فقط یکی ثبت شود، جستجو با زبان دیگر همان اثر را پیدا نمی‌کند.</span></div>
           </div>
         </details>
 

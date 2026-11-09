@@ -96,6 +96,53 @@ test('the library filters and paginates', async () => {
   assert.equal(page.data.items.length, 2);
 });
 
+test('the public detail payload carries both scripts and the crew', async () => {
+  const list = await call('/api/admin/contents?limit=50');
+  const series = list.data.items.find((item) => item.type === 'series');
+  assert.ok(series.directors.length, 'directors should reach the public DTO');
+  assert.ok(series.cast.length, 'cast should reach the public DTO');
+});
+
+test('the library search answers Persian and English, titles and crew alike', async () => {
+  const created = await call('/api/admin/contents', {
+    method: 'POST',
+    body: {
+      titleFa: 'پیت', titleEn: 'The Pitt', contentType: 'series', releaseYear: 2026,
+      genres: 'درام', directors: 'دامین مارکانو | Damian Marcano', cast: 'نوآ وایلی | Noah Wyle',
+      countries: 'آمریکا', network: 'HBO Max', status: 'published',
+    },
+  });
+  assert.equal(created.status, 201);
+  const byFa = await call('/api/admin/contents?q=پیت');
+  assert.ok(byFa.data.items.some((item) => item.id === created.data.content.id));
+  const byEn = await call('/api/admin/contents?q=The%20Pitt');
+  assert.ok(byEn.data.items.some((item) => item.id === created.data.content.id));
+  const byDirectorFa = await call('/api/admin/contents?q=مارکانو');
+  assert.ok(byDirectorFa.data.items.some((item) => item.id === created.data.content.id));
+  const byDirectorEn = await call('/api/admin/contents?q=Marcano');
+  assert.ok(byDirectorEn.data.items.some((item) => item.id === created.data.content.id));
+  const byCastEn = await call('/api/admin/contents?q=Noah%20Wyle');
+  assert.ok(byCastEn.data.items.some((item) => item.id === created.data.content.id));
+  await call(`/api/admin/contents/${created.data.content.id}`, { method: 'DELETE' });
+});
+
+test('bilingual crew stays separate through validation instead of being merged', async () => {
+  const created = await call('/api/admin/contents', {
+    method: 'POST',
+    body: {
+      titleFa: 'دوزبانه', titleEn: 'Bilingual', contentType: 'movie',
+      directors: 'دامین مارکانو، جان ولز | Damian Marcano, John Wells',
+      cast: 'نوآ وایلی | Noah Wyle', status: 'draft',
+    },
+  });
+  const detail = await call(`/api/admin/contents/${created.data.content.id}`);
+  assert.deepEqual(detail.data.content.directors, [
+    'دامین مارکانو', 'جان ولز', 'Damian Marcano', 'John Wells',
+  ]);
+  assert.deepEqual(detail.data.content.cast, ['نوآ وایلی', 'Noah Wyle']);
+  await call(`/api/admin/contents/${created.data.content.id}`, { method: 'DELETE' });
+});
+
 test('a Telegram post is parsed into an editable draft', async () => {
   const { status, data } = await call('/api/admin/parse', {
     method: 'POST',

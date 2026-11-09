@@ -57,6 +57,10 @@ function requireRole(role) {
   };
 }
 
+function demoEnabled() {
+  return process.env.DEMO_DATA === '1' && process.env.NODE_ENV !== 'production';
+}
+
 function ownerIds() {
   return new Set(
     String(process.env.ADMIN_OWNER_IDS || '')
@@ -71,7 +75,11 @@ function requireAdmin(req, _res, next) {
     const token = req.cookies?.filmwork_admin;
     if (!token) throw new AppError(404, 'NOT_FOUND', 'صفحه پیدا نشد.');
     const payload = verifyToken(token, 'filmwork-admin');
-    if (payload.kind !== 'admin' || payload.role !== 'admin' || !ownerIds().has(String(payload.sub))) {
+    // In demo mode the console is opened through /owner-console/demo-login, which
+    // signs a token even when ADMIN_OWNER_IDS is unset; accept exactly that token.
+    const demoOwner = demoEnabled() && String(payload.sub) === 'demo';
+    const knownOwner = ownerIds().has(String(payload.sub)) || demoOwner;
+    if (payload.kind !== 'admin' || payload.role !== 'admin' || !knownOwner) {
       throw new AppError(404, 'NOT_FOUND', 'صفحه پیدا نشد.');
     }
     req.admin = payload;
