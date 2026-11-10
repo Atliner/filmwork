@@ -246,16 +246,36 @@ const store = {
         : 'c.created_at DESC';
     const rows = await query(
       `SELECT ${CONTENT_COLUMNS},
-              (SELECT COUNT(*) FROM media_links ml WHERE ml.content_id = c.id AND ml.is_active = TRUE) AS media_count,
-              (SELECT JSON_ARRAYAGG(resolution) FROM (
-                  SELECT DISTINCT ml2.resolution FROM media_links ml2
-                  WHERE ml2.content_id = c.id AND ml2.is_active = TRUE
-                    AND ml2.resolution IS NOT NULL AND ml2.resolution <> ''
-                  ORDER BY CAST(REGEXP_REPLACE(ml2.resolution, '[^0-9]', '') AS UNSIGNED) DESC
-                  LIMIT 6) qualities) AS qualities
+              (SELECT COUNT(*) FROM media_links ml WHERE ml.content_id = c.id AND ml.is_active = TRUE) AS media_count
        FROM contents c WHERE ${clause} ORDER BY ${order} LIMIT ${limit} OFFSET ${(page - 1) * limit}`,
       params,
     );
+    // Keep resolution aggregation out of a derived table: MariaDB cannot resolve
+    // the outer c.id reference from inside that derived table (ER_BAD_FIELD_ERROR).
+    // Fetch distinct qualities for this page separately, then attach them in JS.
+    if (rows.length) {
+      const qualityParams = Object.fromEntries(rows.map((row, index) => [`contentId${index}`, row.id]));
+      const ids = Object.keys(qualityParams).map((key) => `:${key}`).join(', ');
+      const qualityRows = await query(
+        `SELECT content_id, resolution FROM media_links
+         WHERE content_id IN (${ids}) AND is_active = TRUE
+           AND resolution IS NOT NULL AND resolution <> ''
+         GROUP BY content_id, resolution`,
+        qualityParams,
+      );
+      const byContent = new Map();
+      for (const quality of qualityRows) {
+        const key = String(quality.content_id);
+        if (!byContent.has(key)) byContent.set(key, []);
+        byContent.get(key).push(quality.resolution);
+      }
+      for (const row of rows) {
+        row.qualities = (byContent.get(String(row.id)) || [])
+          .sort((a, b) => (Number.parseInt(String(b).replace(/\D/g, ''), 10) || 0)
+            - (Number.parseInt(String(a).replace(/\D/g, ''), 10) || 0))
+          .slice(0, 6);
+      }
+    }
     const total = await query(`SELECT COUNT(*) AS total FROM contents c WHERE ${clause}`, params);
     return {
       items: rows.map(listRow),
