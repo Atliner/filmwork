@@ -175,13 +175,22 @@ function buildState() {
     })),
   }));
 
-  const users = Array.from({ length: 148 }, (_unused, index) => ({
-    id: String(index + 1),
-    accountName: `کاربر ${index + 1}`,
-    role: index % 9 === 0 ? 'advertiser' : 'user',
-    status: 'active',
-    createdAt: iso(index % 60, index % 24),
-  }));
+  const users = Array.from({ length: 148 }, (_unused, index) => {
+    const handle = index % 4 === 0 ? null : `user_${index + 1}`;
+    return {
+      id: String(index + 1),
+      accountName: `کاربر ${index + 1}`,
+      telegramUsername: handle,
+      telegramUserId: String(700_000_000 + index),
+      phone: `۰۹${String(12 + (index % 80)).padStart(2, '0')}${String(1000000 + index * 137).slice(0, 7)}`,
+      role: index % 9 === 0 ? 'advertiser' : 'user',
+      status: index % 41 === 0 ? 'suspended' : 'active',
+      walletBalance: index % 9 === 0 ? 12_500_000 + index * 1000 : 0,
+      walletCurrency: 'IRR',
+      lastLoginAt: iso(index % 5, index % 24),
+      createdAt: iso(index % 60, index % 24),
+    };
+  });
 
   const ads = [
     { id: 'ad-1', campaign: 'اسپانسر پخش زنده', advertiser: 'دیجی‌مارکت', placement: 'pre_roll', budget: 320_000_000, spent: 180_000_000, status: 'active', createdAt: iso(6) },
@@ -532,16 +541,61 @@ const store = {
 };
 
 // Ops helpers used by the console routes when the demo store is active.
-store.listUsers = async () => ensureState().users.map((user) => ({
+function maskDemoPhone(phone) {
+  const digits = String(phone || '');
+  return digits.length >= 7 ? `${digits.slice(0, 4)}••••${digits.slice(-2)}` : null;
+}
+
+store.listUsers = async (filters = {}) => ensureState().users
+  .filter((user) => (filters.role ? user.role === filters.role : true))
+  .filter((user) => {
+    const term = String(filters.q || '').trim().toLowerCase();
+    if (!term) return true;
+    return [user.accountName, user.telegramUsername, user.telegramUserId, user.phone]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(term));
+  })
+  .map((user) => ({
   id: user.id,
   accountName: user.accountName,
+  telegramUsername: user.telegramUsername || null,
+  telegramUserId: user.telegramUserId || null,
+  telegramProfileUrl: user.telegramUsername ? `https://t.me/${user.telegramUsername}` : null,
+  phoneMasked: maskDemoPhone(user.phone),
+  phoneLast4: user.phone ? user.phone.slice(-4) : null,
   role: user.role,
   status: user.status,
   createdAt: user.createdAt,
-  walletBalance: user.role === 'advertiser' ? 12_500_000 : 0,
-  walletCurrency: 'IRR',
+  lastLoginAt: user.lastLoginAt,
+  walletBalance: user.walletBalance || 0,
+  walletCurrency: user.walletCurrency || 'IRR',
 }));
+
+store.revealUserPhone = async (userId) => {
+  const user = ensureState().users.find((entry) => entry.id === userId);
+  if (!user) throw new AppError(404, 'USER_NOT_FOUND', 'کاربر پیدا نشد.');
+  if (!user.phone) throw new AppError(404, 'PHONE_UNAVAILABLE', 'شماره‌ای برای این کاربر ثبت نشده است.');
+  return { phone: user.phone };
+};
+
+store.creditUserWallet = async (userId, amount) => {
+  const user = ensureState().users.find((entry) => entry.id === userId);
+  if (!user) throw new AppError(404, 'USER_NOT_FOUND', 'کاربر پیدا نشد.');
+  user.walletBalance = Number(user.walletBalance || 0) + Number(amount);
+  pushEvent('user', `کیف پول شارژ شد`, `${user.accountName} · ${amount} ${user.walletCurrency || 'IRR'}`);
+  return { balance: user.walletBalance, currency: user.walletCurrency || 'IRR', added: Number(amount) };
+};
+
+store.deleteUser = async (userId) => {
+  const data = ensureState();
+  const index = data.users.findIndex((entry) => entry.id === userId);
+  if (index === -1) throw new AppError(404, 'USER_NOT_FOUND', 'کاربر پیدا نشد.');
+  const [removed] = data.users.splice(index, 1);
+  pushEvent('user', `کاربر حذف شد: ${removed.accountName}`, 'حذف کامل همراه داده‌های وابسته');
+  return { id: removed.id, accountName: removed.accountName };
+};
 store.listAds = async () => ensureState().ads;
+store.diagnostics = async () => null;
 store.listEvents = async () => ensureState().events;
 
 module.exports = { store };

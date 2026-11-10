@@ -140,8 +140,20 @@ const store = {
 
   async overview() {
     const count = async (sql, params = {}) => (await query(sql, params))[0] || {};
+    // A single unsupported statement used to blank the whole dashboard. Shared
+    // hosting often runs MariaDB, which lacks MySQL-8-only features (JSON_TABLE),
+    // so every block degrades to an empty value instead of a 500.
+    const safe = async (label, run, fallback) => {
+      try {
+        return await run();
+      } catch (error) {
+        overviewWarnings.push({ block: label, message: error.sqlMessage || error.message });
+        return fallback;
+      }
+    };
+    const overviewWarnings = [];
     const [contents, media, resolutions, users, ads, views, timeline, genres, topContents, weekly, activity, health] = await Promise.all([
-      count(`SELECT COUNT(*) AS total,
+      safe('contents', () => count(`SELECT COUNT(*) AS total,
                     SUM(content_type = 'movie') AS movies,
                     SUM(content_type = 'series') AS series,
                     SUM(status = 'published') AS published,
@@ -149,42 +161,62 @@ const store = {
                     SUM(status = 'archived') AS archived,
                     SUM(content_type = 'series' AND series_running = TRUE) AS seriesRunning,
                     SUM(featured_hero = TRUE) AS hero
-             FROM contents`),
-      count(`SELECT COUNT(*) AS total, SUM(health_status = 'unavailable') AS unavailable FROM media_links`),
-      query(`SELECT resolution, COUNT(*) AS count FROM media_links WHERE is_active = TRUE
-             GROUP BY resolution ORDER BY count DESC LIMIT 6`),
-      count(`SELECT COUNT(*) AS total,
+             FROM contents`), {}),
+      safe('media', () => count(`SELECT COUNT(*) AS total, SUM(health_status = 'unavailable') AS unavailable FROM media_links`), {}),
+      safe('resolutions', () => query(`SELECT resolution, COUNT(*) AS count FROM media_links WHERE is_active = TRUE
+             GROUP BY resolution ORDER BY count DESC LIMIT 6`), []),
+      safe('users', () => count(`SELECT COUNT(*) AS total,
                     SUM(role = 'advertiser') AS advertisers,
                     SUM(created_at >= DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 30 DAY)) AS newThisMonth
-             FROM users WHERE status = 'active'`),
-      count(`SELECT COUNT(*) AS total, SUM(status = 'pending') AS pending,
-                    SUM(status = 'active') AS active, COALESCE(SUM(spent), 0) AS spent FROM ads`),
-      count(`SELECT COALESCE(SUM(view_count), 0) AS total,
+             FROM users WHERE status = 'active'`), {}),
+      safe('ads', () => count(`SELECT COUNT(*) AS total, SUM(status = 'pending') AS pending,
+                    SUM(status = 'active') AS active, COALESCE(SUM(spent), 0) AS spent FROM ads`), {}),
+      safe('views', () => count(`SELECT COALESCE(SUM(view_count), 0) AS total,
                     COALESCE(SUM(CASE WHEN last_viewed_at >= DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 7 DAY)
-                                      THEN view_count ELSE 0 END), 0) AS last7 FROM contents`),
-      query(`SELECT DATE(created_at) AS day, COUNT(*) AS contents, 0 AS users FROM contents
+                                      THEN view_count ELSE 0 END), 0) AS last7 FROM contents`), {}),
+      safe('timeline', () => query(`SELECT DATE(created_at) AS day, COUNT(*) AS contents, 0 AS users FROM contents
              WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 14 DAY) GROUP BY DATE(created_at)
              UNION ALL
              SELECT DATE(created_at) AS day, 0 AS contents, COUNT(*) AS users FROM users
-             WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 14 DAY) GROUP BY DATE(created_at)`),
-      query(`SELECT jt.genre, COUNT(*) AS count
-             FROM contents c, JSON_TABLE(COALESCE(c.genres, JSON_ARRAY()), '$[*]' COLUMNS (genre VARCHAR(60) PATH '$')) jt
-             WHERE c.status = 'published' GROUP BY jt.genre ORDER BY count DESC LIMIT 12`),
-      query(`SELECT asset_uuid, title, content_type, view_count, poster_url FROM contents
-             WHERE status = 'published' ORDER BY view_count DESC, created_at DESC LIMIT 5`),
-      query(`SELECT asset_uuid, title, current_season, broadcast_note FROM contents
+             WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 14 DAY) GROUP BY DATE(created_at)`), []),
+      // Portable genre count: read the JSON arrays and tally them in JS so the same
+      // query works on MySQL 8 and MariaDB.
+      safe('genres', async () => {
+        const rows = await query("SELECT genres FROM contents WHERE status = 'published' AND genres IS NOT NULL");
+        const tally = new Map();
+        for (const row of rows) {
+          let list = row.genres;
+          if (typeof list === 'string') {
+            try { list = JSON.parse(list); } catch { list = []; }
+          }
+          for (const genre of Array.isArray(list) ? list : []) {
+            const key = String(genre || '').trim();
+            if (key) tally.set(key, (tally.get(key) || 0) + 1);
+          }
+        }
+        return [...tally.entries()]
+          .map(([genre, count]) => ({ genre, count }))
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 12);
+      }, []),
+      safe('topContents', () => query(`SELECT asset_uuid, title, content_type, view_count, poster_url FROM contents
+             WHERE status = 'published' ORDER BY view_count DESC, created_at DESC LIMIT 5`), []),
+      safe('weeklySeries', () => query(`SELECT asset_uuid, title, current_season, broadcast_note FROM contents
              WHERE content_type = 'series' AND series_running = TRUE AND status = 'published'
-             ORDER BY updated_at DESC LIMIT 6`),
-      query('SELECT kind, title, detail, created_at FROM admin_events ORDER BY created_at DESC LIMIT 12'),
-      query(`SELECT c.title, mhe.reason, mhe.created_at FROM media_health_events mhe
+             ORDER BY updated_at DESC LIMIT 6`), []),
+      safe('activity', () => query('SELECT kind, title, detail, created_at FROM admin_events ORDER BY created_at DESC LIMIT 12'), []),
+      safe('health', () => query(`SELECT c.title, mhe.reason, mhe.created_at FROM media_health_events mhe
              JOIN media_links ml ON ml.id = mhe.media_link_id
              JOIN contents c ON c.id = ml.content_id
-             ORDER BY mhe.created_at DESC LIMIT 8`),
+             ORDER BY mhe.created_at DESC LIMIT 8`), []),
     ]);
-    return composeOverview({
-      contents, media, resolutions, users, ads, views, timeline, genres, topContents, weekly, activity, health,
-      weeklySeries: weekly,
-    });
+    return {
+      ...composeOverview({
+        contents, media, resolutions, users, ads, views, timeline, genres, topContents, weekly, activity, health,
+        weeklySeries: weekly,
+      }),
+      warnings: overviewWarnings,
+    };
   },
 
   async listContents(filters = {}) {

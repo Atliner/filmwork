@@ -2,6 +2,9 @@
 
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const fsp = fs.promises;
+const { spawn } = require('child_process');
 const crypto = require('crypto');
 const dotenv = require('dotenv');
 
@@ -29,6 +32,7 @@ const {
   hashIp,
   requireSecret,
   timingSafeHexEqual,
+  decryptPhone,
 } = require('./lib/security');
 const {
   asString,
@@ -1258,7 +1262,7 @@ app.get('/api/admin/stats', requireAdmin, asyncRoute(async (_req, res) => {
     store.overview(),
     store.kind === 'demo'
       ? Promise.resolve([])
-      : query("SELECT (SELECT COUNT(*) FROM media_links WHERE health_status = 'unavailable') AS unavailable"),
+      : query("SELECT (SELECT COUNT(*) FROM media_links WHERE health_status = 'unavailable') AS unavailable").catch(() => []),
   ]);
   res.setHeader('Cache-Control', 'no-store');
   res.json({
@@ -1271,6 +1275,7 @@ app.get('/api/admin/stats', requireAdmin, asyncRoute(async (_req, res) => {
     },
     healthEvents: overview.health,
     mode: contentStore().kind,
+    warnings: overview.warnings || [],
   });
 }));
 
@@ -1289,6 +1294,231 @@ app.post('/api/admin/parse', requireAdmin, requireAdminCsrf, asyncRoute(async (r
   const draft = await buildParseDraft({ text, link });
   res.setHeader('Cache-Control', 'no-store');
   res.json({ draft });
+}));
+
+/**
+ * Host self-check: tells the owner what this server actually has, so a failing
+ * dashboard can be explained without shell access (wrong schema version, MariaDB
+ * instead of MySQL, migration not run, keys missing, ...).
+ */
+/**
+ * GitHub → host sync.
+ *
+ * Updating a cPanel/LiteSpeed deployment used to mean opening File Manager and
+ * overwriting files by hand. This endpoint pulls the repository archive for the
+ * configured branch and applies every file that belongs to the application code
+ * (`backend/`, `frontend/`, `database/`), then reports what changed. It never
+ * touches `.env`, `node_modules`, `uploads` or anything outside those trees, and
+ * refuses to run when a checkout/redeploy is not safe.
+ *
+ * GET  /api/admin/deploy/status  → current ref, upstream latest commit, drift
+ * POST /api/admin/deploy/github  → pull and apply { branch?, dryRun? }
+ *
+ * Requires `GITHUB_REPO` (e.g. `Atliner/filmwork`) and, for private repositories,
+ * `GITHUB_TOKEN`. See DEPLOYMENT_GUIDE.md.
+ */
+const DEPLOY_TREES = ['backend', 'frontend', 'database'];
+const DEPLOY_SKIP = new Set(['node_modules', '.git', 'uploads', '.env', '.env.local']);
+const DEPLOY_PATHS = [
+  'backend', 'frontend', 'database',
+  'README.md', 'DEPLOYMENT_GUIDE.md', 'package.json',
+];
+
+function githubRepo() {
+  const repo = String(process.env.GITHUB_REPO || '').trim();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+    throw new AppError(422, 'DEPLOY_NOT_CONFIGURED', 'متغیر GITHUB_REPO را مثل Atliner/filmwork در .env تنظیم کنید.');
+  }
+  return repo;
+}
+
+function deployBranch() {
+  return String(process.env.GITHUB_BRANCH || 'main').trim();
+}
+
+async function githubFetch(pathname) {
+  const headers = {
+    'User-Agent': 'filmwork-deploy',
+    Accept: 'application/vnd.github+json',
+  };
+  if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  let response;
+  try {
+    response = await fetch(`https://api.github.com${pathname}`, { headers });
+  } catch (error) {
+    throw new AppError(502, 'GITHUB_UNREACHABLE', `دسترسی سرور به گیت‌هاب برقرار نشد (${error.message}). اگر host اجازه خروج نمی‌دهد، از «به‌روزرسانی دستی» پایین صفحه استفاده کنید.`);
+  }
+  if (!response.ok) {
+    throw new AppError(502, 'GITHUB_UNAVAILABLE', `ارتباط با گیت‌هاب ناموفق بود (${response.status}).`);
+  }
+  return response;
+}
+
+const deployState = { lastRunAt: null, lastResult: null, currentRef: null };
+
+app.get('/api/admin/deploy/status', requireAdmin, asyncRoute(async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const repo = process.env.GITHUB_REPO || null;
+  const base = {
+    configured: Boolean(repo),
+    repo,
+    branch: deployBranch(),
+    appRoot: path.resolve(__dirname, '..'),
+    lastRunAt: deployState.lastRunAt,
+    lastResult: deployState.lastResult,
+  };
+  if (!repo) {
+    res.json(base);
+    return;
+  }
+  try {
+    const branch = await (await githubFetch(`/repos/${repo}/branches/${encodeURIComponent(deployBranch())}`)).json();
+    base.upstream = {
+      sha: branch.commit.sha,
+      message: branch.commit.commit.message,
+      date: branch.commit.commit.author?.date,
+      url: branch.commit.html_url,
+    };
+  } catch (error) {
+    base.upstreamError = error.message;
+  }
+  res.json(base);
+}));
+
+app.post('/api/admin/deploy/github', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  const fail = (message, code = 'DEPLOY_FAILED') => new AppError(502, code, message);
+  const repo = githubRepo();
+  const branch = typeof req.body?.branch === 'string' && req.body.branch.trim()
+    ? asString(req.body.branch, 'شاخه', { min: 1, max: 120 })
+    : deployBranch();
+  const dryRun = req.body?.dryRun === true;
+  const appRoot = path.resolve(__dirname, '..');
+  const branchInfo = await (await githubFetch(`/repos/${repo}/branches/${encodeURIComponent(branch)}`)).json();
+  const sha = branchInfo.commit.sha;
+  let archive;
+  try {
+    archive = await fetch(`https://codeload.github.com/${repo}/tar.gz/${sha}`, {
+      headers: process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {},
+    });
+  } catch (error) {
+    throw fail(`دریافت آرشیو از گیت‌هاب ممکن نشد (${error.message}).`);
+  }
+  if (!archive.ok) throw fail(`دریافت آرشیو ناموفق بود (${archive.status}).`, 'GITHUB_UNAVAILABLE');
+  const tarball = Buffer.from(await archive.arrayBuffer());
+  const staging = await fsp.mkdtemp(path.join(os.tmpdir(), 'filmwork-deploy-'));
+  const written = [];
+  const skipped = [];
+  try {
+    const tarPath = path.join(staging, 'source.tar.gz');
+    await fsp.writeFile(tarPath, tarball);
+    const extractDir = path.join(staging, 'extract');
+    await fsp.mkdir(extractDir, { recursive: true });
+    await new Promise((resolve, reject) => {
+      const child = spawn('tar', ['-xzf', tarPath, '-C', extractDir, '--strip-components=1'], { stdio: 'ignore' });
+      child.on('error', reject);
+      child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`tar exited with ${code}`))));
+    });
+    const walk = async (relative) => {
+      const entries = await fsp.readdir(path.join(extractDir, relative), { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        const child = relative ? `${relative}/${entry.name}` : entry.name;
+        if (DEPLOY_SKIP.has(entry.name)) continue;
+        if (entry.isDirectory()) {
+          if (!relative && !DEPLOY_TREES.includes(entry.name)) continue;
+          await walk(child);
+        } else if (DEPLOY_PATHS.some((allowed) => child === allowed || child.startsWith(`${allowed}/`))) {
+          const source = path.join(extractDir, child);
+          const target = path.join(appRoot, child);
+          const incoming = await fsp.readFile(source);
+          const existing = await fsp.readFile(target).catch(() => null);
+          if (existing && existing.equals(incoming)) continue;
+          if (!dryRun) {
+            await fsp.mkdir(path.dirname(target), { recursive: true });
+            await fsp.writeFile(target, incoming);
+          }
+          written.push({ path: child, status: existing ? 'updated' : 'added' });
+        } else {
+          skipped.push(child);
+        }
+      }
+    };
+    await walk('');
+    // Keep the prebuilt CSS in step with the Tailwind sources when they changed.
+    const cssChanged = written.some((file) => file.path === 'frontend/tailwind.css' || file.path === 'backend/tailwind.config.js');
+    deployState.lastRunAt = new Date().toISOString();
+    deployState.lastResult = { sha, branch, dryRun, files: written.length, cssNeedsBuild: cssChanged };
+    res.json({
+      deployed: !dryRun,
+      sha,
+      branch,
+      commit: branchInfo.commit.commit.message,
+      files: written,
+      skipped: skipped.slice(0, 50),
+      cssNeedsBuild: cssChanged,
+      restartRequired: written.length > 0,
+    });
+  } finally {
+    await fsp.rm(staging, { recursive: true, force: true }).catch(() => {});
+  }
+}));
+
+app.get('/api/admin/diagnostics', requireAdmin, asyncRoute(async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const store = contentStore();
+  const report = {
+    mode: store.kind,
+    node: process.version,
+    migrations: { contentVersions: false, mediaLinkColumn: false },
+    database: { version: null, engine: null, ok: false, error: null },
+    checks: [],
+  };
+  const check = (name, ok, detail) => report.checks.push({ name, ok, detail: detail || null });
+  if (store.kind === 'demo') {
+    check('حالت نمایشی', true, 'DEMO_DATA=1 است؛ داده‌ها در حافظه نگه داشته می‌شوند و به دیتابیس وصل نمی‌شویم.');
+    res.json(report);
+    return;
+  }
+  try {
+    const [row] = await query('SELECT VERSION() AS version');
+    report.database.version = row.version;
+    report.database.engine = /mariadb/i.test(String(row.version)) ? 'mariadb' : 'mysql';
+    report.database.ok = true;
+  } catch (error) {
+    report.database.error = error.message;
+  }
+  const tableExists = async (table) => {
+    const rows = await query(
+      `SELECT COUNT(*) AS found FROM information_schema.tables
+       WHERE table_schema = DATABASE() AND table_name = :table`,
+      { table },
+    );
+    return Number(rows[0]?.found || 0) > 0;
+  };
+  const columnExists = async (table, column) => {
+    const rows = await query(
+      `SELECT COUNT(*) AS found FROM information_schema.columns
+       WHERE table_schema = DATABASE() AND table_name = :table AND column_name = :column`,
+      { table, column },
+    );
+    return Number(rows[0]?.found || 0) > 0;
+  };
+  try {
+    for (const table of ['contents', 'users', 'media_links', 'ads', 'admin_events', 'content_versions', 'content_version_links']) {
+      check(`جدول ${table}`, await tableExists(table), null);
+    }
+    report.migrations.contentVersions = await tableExists('content_versions') && await tableExists('content_version_links');
+    report.migrations.mediaLinkColumn = await columnExists('media_links', 'content_version_link_id');
+    check('مهاجرت پنل نسخه ۲', report.migrations.contentVersions && report.migrations.mediaLinkColumn,
+      report.migrations.mediaLinkColumn ? null : 'فایل database/migrations/2026-11-owner-console-v2.sql اجرا نشده است.');
+    check('ستون ژانر', await columnExists('contents', 'genres'), null);
+  } catch (error) {
+    check('بررسی ساختار دیتابیس', false, error.message);
+  }
+  const overview = await store.overview().catch((error) => ({ error }));
+  check('داشبورد', !overview.error, overview.error ? overview.error.message : (overview.warnings?.length
+    ? `بخش‌های ناموفق: ${overview.warnings.map((item) => item.block).join('، ')}`
+    : null));
+  res.json(report);
 }));
 
 app.get('/api/admin/contents', requireAdmin, asyncRoute(async (req, res) => {
@@ -1342,27 +1572,165 @@ app.delete('/api/admin/contents/:assetId', requireAdmin, requireAdminCsrf, async
   res.json(await contentStore().deleteContent(req.params.assetId));
 }));
 
-app.get('/api/admin/users', requireAdmin, asyncRoute(async (_req, res) => {
-  if (contentStore().kind === 'demo') {
-    res.json({ items: await contentStore().listUsers() });
-    return;
+/**
+ * The owner sees the Telegram identity a visitor shared with the login bot.
+ * The phone number is stored encrypted (AES-256-GCM); only the masked tail is
+ * exposed by default and the full number only through the explicit reveal route,
+ * so a stolen browser session never dumps the whole address book at once.
+ */
+function safeDecryptPhone(payload) {
+  try {
+    return decryptPhone(payload);
+  } catch {
+    return null;
   }
-  const rows = await query(
-    `SELECT u.id, u.account_name, u.tg_username, u.role, u.status, u.created_at,
-            COALESCE(w.balance, 0) AS wallet_balance, COALESCE(w.currency, 'IRR') AS wallet_currency
-     FROM users u LEFT JOIN advertiser_wallets w ON w.user_id = u.id
-     ORDER BY u.created_at DESC LIMIT 200`,
-  );
-  res.json({ items: rows.map((row) => ({
+}
+
+function maskPhone(phone) {
+  if (!phone) return null;
+  const digits = String(phone).replace(/[^\d+]/g, '');
+  return digits.length >= 7 ? `${digits.slice(0, 4)}••••${digits.slice(-2)}` : '••••';
+}
+
+function ownerUserDto(row) {
+  const phone = safeDecryptPhone(row.encrypted_phone);
+  return {
     id: String(row.id),
     accountName: row.account_name,
     telegramUsername: row.tg_username,
+    telegramUserId: row.tg_user_id === undefined || row.tg_user_id === null ? null : String(row.tg_user_id),
+    telegramProfileUrl: row.tg_username ? `https://t.me/${row.tg_username}` : null,
+    telegramChatUrl: row.tg_username ? `https://t.me/${row.tg_username}` : `tg://user?id=${row.tg_user_id}`,
+    phoneMasked: maskPhone(phone),
+    phoneLast4: row.phone_last4 || null,
     role: row.role,
     status: row.status,
-    walletBalance: Number(row.wallet_balance),
-    walletCurrency: row.wallet_currency,
+    walletBalance: Number(row.wallet_balance || 0),
+    walletCurrency: row.wallet_currency || 'IRR',
+    lastLoginAt: row.last_login_at || null,
     createdAt: row.created_at,
-  })) });
+  };
+}
+
+app.get('/api/admin/users', requireAdmin, asyncRoute(async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (contentStore().kind === 'demo') {
+    res.json({
+      items: await contentStore().listUsers({ q: req.query.q, role: req.query.role }),
+      mode: 'demo',
+    });
+    return;
+  }
+  const search = typeof req.query.q === 'string' ? req.query.q.slice(0, 80) : '';
+  const role = ['user', 'advertiser'].includes(req.query.role) ? req.query.role : '';
+  const where = ["u.status <> 'deleted'"];
+  const params = {};
+  if (role) {
+    where.push('u.role = :role');
+    params.role = role;
+  }
+  if (search) {
+    where.push("(u.account_name LIKE :search ESCAPE '!' OR u.tg_username LIKE :search ESCAPE '!' OR u.phone_last4 LIKE :search ESCAPE '!' OR CAST(u.tg_user_id AS CHAR) LIKE :search ESCAPE '!')");
+    params.search = `%${String(search).replace(/[!%_]/g, (match) => `!${match}`)}%`;
+  }
+  const rows = await query(
+    `SELECT u.id, u.account_name, u.tg_username, u.tg_user_id, u.encrypted_phone, u.phone_last4,
+            u.role, u.status, u.last_login_at, u.created_at,
+            COALESCE(w.balance, 0) AS wallet_balance, COALESCE(w.currency, 'IRR') AS wallet_currency
+     FROM users u LEFT JOIN advertiser_wallets w ON w.user_id = u.id
+     WHERE ${where.join(' AND ')}
+     ORDER BY u.created_at DESC LIMIT 500`,
+    params,
+  );
+  res.json({ items: rows.map(ownerUserDto), mode: 'mysql' });
+}));
+
+/** Reveals one full phone number on demand; always logged in the owner audit trail. */
+app.get('/api/admin/users/:userId/phone', requireAdmin, asyncRoute(async (req, res) => {
+  assert(/^\d+$/.test(req.params.userId), 422, 'INVALID_USER_ID', 'شناسه کاربر نامعتبر است.');
+  if (contentStore().kind === 'demo') {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(await contentStore().revealUserPhone(req.params.userId));
+    return;
+  }
+  const rows = await query('SELECT encrypted_phone FROM users WHERE id = :userId LIMIT 1', { userId: req.params.userId });
+  const phone = rows[0] ? safeDecryptPhone(rows[0].encrypted_phone) : null;
+  assert(phone, 404, 'PHONE_UNAVAILABLE', 'شماره‌ای برای این کاربر ثبت نشده است.');
+  await query(
+    "INSERT INTO admin_events (kind, title, detail) VALUES ('user', :title, :detail)",
+    { title: 'شماره کاربر نمایش داده شد', detail: `شناسه ${req.params.userId}` },
+  ).catch(() => {});
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ phone });
+}));
+
+/** Wallet top-up straight from the console (creates the wallet when needed). */
+app.post('/api/admin/users/:userId/wallet', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  assert(/^\d+$/.test(req.params.userId), 422, 'INVALID_USER_ID', 'شناسه کاربر نامعتبر است.');
+  const amount = asPositiveNumber(req.body?.amount, 'مبلغ', { min: 1, max: 1_000_000_000_000_000 });
+  const rawNote = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
+  const note = rawNote ? cleanPlainText(rawNote, 180) : '';
+  if (contentStore().kind === 'demo') {
+    res.status(201).json({ wallet: await contentStore().creditUserWallet(req.params.userId, amount) });
+    return;
+  }
+  const result = await withTransaction(async (connection) => {
+    const [users] = await connection.execute(
+      "SELECT id, account_name, role, status FROM users WHERE id = :userId AND status <> 'deleted' FOR UPDATE",
+      { userId: req.params.userId },
+    );
+    assert(users[0], 404, 'USER_NOT_FOUND', 'کاربر پیدا نشد.');
+    await connection.execute(
+      'INSERT INTO advertiser_wallets (user_id, balance) VALUES (:userId, 0) ON DUPLICATE KEY UPDATE user_id = VALUES(user_id)',
+      { userId: req.params.userId },
+    );
+    const [wallets] = await connection.execute(
+      'SELECT balance, currency FROM advertiser_wallets WHERE user_id = :userId FOR UPDATE',
+      { userId: req.params.userId },
+    );
+    const balance = Number(wallets[0].balance) + amount;
+    await connection.execute('UPDATE advertiser_wallets SET balance = :balance WHERE user_id = :userId', { balance, userId: req.params.userId });
+    await connection.execute(
+      "INSERT INTO wallet_transactions (user_id, transaction_type, amount, balance_after, reference) VALUES (:userId, 'credit', :amount, :balance, :reference)",
+      { userId: req.params.userId, amount, balance, reference: `owner-topup:${req.params.userId}:${generateOpaqueToken(10)}` },
+    );
+    await connection.execute(
+      "INSERT INTO admin_events (kind, title, detail) VALUES ('user', :title, :detail)",
+      { title: 'کیف پول شارژ شد', detail: `${users[0].account_name} · ${amount} ${wallets[0].currency}${note ? ` · ${note}` : ''}` },
+    ).catch(() => {});
+    return { balance, currency: wallets[0].currency, added: amount };
+  }, { isolationLevel: 'READ COMMITTED' });
+  res.status(201).json({ wallet: result });
+}));
+
+/**
+ * Hard delete: removes the account and everything hanging off it (wallets,
+ * transactions, favorites, progress, downloads, login codes, ad events). Ads the
+ * user created are cascaded to wallet-safe deletes first because `ads` uses
+ * ON DELETE RESTRICT for accounting integrity.
+ */
+app.delete('/api/admin/users/:userId', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  assert(/^\d+$/.test(req.params.userId), 422, 'INVALID_USER_ID', 'شناسه کاربر نامعتبر است.');
+  if (contentStore().kind === 'demo') {
+    res.json({ deleted: true, user: await contentStore().deleteUser(req.params.userId) });
+    return;
+  }
+  const removed = await withTransaction(async (connection) => {
+    const [users] = await connection.execute(
+      'SELECT id, account_name, tg_user_id FROM users WHERE id = :userId FOR UPDATE',
+      { userId: req.params.userId },
+    );
+    assert(users[0], 404, 'USER_NOT_FOUND', 'کاربر پیدا نشد.');
+    await connection.execute('DELETE FROM ad_events WHERE user_id = :userId', { userId: req.params.userId });
+    await connection.execute('DELETE FROM ads WHERE advertiser_id = :userId', { userId: req.params.userId });
+    await connection.execute('DELETE FROM users WHERE id = :userId', { userId: req.params.userId });
+    await connection.execute(
+      "INSERT INTO admin_events (kind, title, detail) VALUES ('user', :title, :detail)",
+      { title: 'کاربر حذف شد', detail: `${users[0].account_name} · شناسه ${req.params.userId}` },
+    ).catch(() => {});
+    return { id: String(users[0].id), accountName: users[0].account_name };
+  }, { isolationLevel: 'READ COMMITTED' });
+  res.json({ deleted: true, user: removed });
 }));
 
 app.patch('/api/admin/users/:userId/role', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {

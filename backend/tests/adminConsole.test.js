@@ -143,6 +143,82 @@ test('bilingual crew stays separate through validation instead of being merged',
   await call(`/api/admin/contents/${created.data.content.id}`, { method: 'DELETE' });
 });
 
+test('the owner sees Telegram identity, masked phone and wallet per user', async () => {
+  const list = await call('/api/admin/users');
+  assert.equal(list.status, 200);
+  const user = list.data.items[0];
+  assert.ok(user.accountName);
+  assert.ok('telegramUsername' in user);
+  assert.ok('telegramUserId' in user);
+  assert.match(user.phoneMasked, /•/);
+  assert.equal(user.walletCurrency, 'IRR');
+  assert.ok(!('phone' in user), 'the full phone must not ride along with the list');
+});
+
+test('users can be filtered by role and searched, and their phone revealed on demand', async () => {
+  const advertisers = await call('/api/admin/users?role=advertiser');
+  assert.ok(advertisers.data.items.every((user) => user.role === 'advertiser'));
+  const target = advertisers.data.items[0];
+  const revealed = await call(`/api/admin/users/${target.id}/phone`);
+  assert.equal(revealed.status, 200);
+  assert.ok(revealed.data.phone.length > 6);
+});
+
+test('the owner tops up a wallet and the balance moves', async () => {
+  const list = await call('/api/admin/users');
+  const user = list.data.items[0];
+  const before = user.walletBalance;
+  const credit = await call(`/api/admin/users/${user.id}/wallet`, { method: 'POST', body: { amount: 2_500_000 } });
+  assert.equal(credit.status, 201);
+  assert.equal(credit.data.wallet.balance, before + 2_500_000);
+  const after = (await call('/api/admin/users')).data.items.find((entry) => entry.id === user.id);
+  assert.equal(after.walletBalance, before + 2_500_000);
+});
+
+test('wallet top-up rejects a zero or negative amount and needs CSRF', async () => {
+  const list = await call('/api/admin/users');
+  const user = list.data.items[0];
+  assert.equal((await call(`/api/admin/users/${user.id}/wallet`, { method: 'POST', body: { amount: 0 } })).status, 422);
+  const saved = csrf;
+  csrf = 'wrong';
+  assert.equal((await call(`/api/admin/users/${user.id}/wallet`, { method: 'POST', body: { amount: 1000 } })).status, 403);
+  csrf = saved;
+});
+
+test('deleting a user removes the account and every dependent row', async () => {
+  const list = await call('/api/admin/users');
+  const victim = list.data.items[list.data.items.length - 1];
+  const removed = await call(`/api/admin/users/${victim.id}`, { method: 'DELETE' });
+  assert.equal(removed.status, 200);
+  assert.equal(removed.data.deleted, true);
+  const after = await call('/api/admin/users');
+  assert.ok(!after.data.items.some((entry) => entry.id === victim.id));
+  assert.equal((await call(`/api/admin/users/${victim.id}`, { method: 'DELETE' })).status, 404);
+  // A deleted id must not authenticate anything either.
+  assert.equal((await call(`/api/admin/users/${victim.id}/phone`)).status, 404);
+});
+
+test('the host self-check reports the runtime, not a crash', async () => {
+  const report = await call('/api/admin/diagnostics');
+  assert.equal(report.status, 200);
+  assert.ok(['demo', 'mysql'].includes(report.data.mode));
+  assert.ok(Array.isArray(report.data.checks));
+});
+
+test('the deploy panel stays inert until GITHUB_REPO is configured', async () => {
+  // The developer .env may already point at the repository; the contract under
+  // test is the unconfigured answer, so hide it for this case.
+  const savedRepo = process.env.GITHUB_REPO;
+  delete process.env.GITHUB_REPO;
+  const status = await call('/api/admin/deploy/status');
+  assert.equal(status.status, 200);
+  assert.equal(status.data.configured, false);
+  const run = await call('/api/admin/deploy/github', { method: 'POST', body: {} });
+  assert.equal(run.status, 422);
+  assert.equal(run.data.error.code, 'DEPLOY_NOT_CONFIGURED');
+  if (savedRepo !== undefined) process.env.GITHUB_REPO = savedRepo;
+});
+
 test('a Telegram post is parsed into an editable draft', async () => {
   const { status, data } = await call('/api/admin/parse', {
     method: 'POST',

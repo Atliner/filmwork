@@ -135,8 +135,13 @@
     }
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const message = data?.error?.message || `درخواست ناموفق بود (${response.status})`;
-      throw new Error(message);
+      const base = data?.error?.message || `درخواست ناموفق بود (${response.status})`;
+      const code = data?.error?.code ? ` · ${data.error.code}` : '';
+      const requestId = data?.error?.requestId ? ` · کد پیگیری ${data.error.requestId}` : '';
+      const error = new Error(`${base}${code}${requestId}`);
+      error.status = response.status;
+      error.code = data?.error?.code;
+      throw error;
     }
     return data;
   }
@@ -198,6 +203,7 @@
     edit: (assetId) => renderEditor(assetId),
     users: renderUsers,
     ads: renderAds,
+    deploy: renderDeploy,
     guide: renderGuide,
   };
 
@@ -314,6 +320,13 @@
         </span>
       </button>`).join('') : '<p style="font-size:11.5px;color:var(--muted);margin:0">هنوز بازدیدی ثبت نشده است.</p>';
 
+    const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+    const warningPanel = warnings.length ? `
+      <div class="callout callout--warn" style="margin-bottom:16px">${ICONS.warn}<span>
+        ${esc('این بخش از داشبورد روی سرور شما کامل خوانده نشد')}: ${esc(warnings.map((item) => item.block).join('، '))}.
+        <button class="button button--ghost button--xs" type="button" data-diagnostics>بررسی سرور</button>
+      </span></div>` : '';
+
     const resolutionTotal = Math.max(1, overview.resolutions.reduce((sum, row) => sum + row.value, 0));
     const resolutionRows = overview.resolutions.length ? overview.resolutions.map((row) => `
       <div class="split-row">
@@ -345,6 +358,7 @@
       </div>`).join('') : '<p style="font-size:11.5px;color:var(--muted);margin:0">همه لینک‌ها سالم هستند.</p>';
 
     root.innerHTML = `<section class="view">
+      ${warningPanel}
       <div class="hero-banner">
         <div>
           <h1>سلام مالک 👋</h1>
@@ -419,6 +433,50 @@
       </div>
     </section>`;
   }
+
+  /** Opens the host self-check: database engine, migrations and failing blocks. */
+  async function openDiagnostics() {
+    const { root } = openOverlay(`
+      <div class="modal" role="dialog" aria-modal="true" aria-label="بررسی سرور">
+        <div class="modal__head">
+          <div><h2>بررسی سرور</h2><p>وضعیت دیتابیس، جداول و بخش‌های داشبورد</p></div>
+          <button class="icon-button" type="button" data-close aria-label="بستن">${ICONS.close}</button>
+        </div>
+        <div class="modal__body" id="diagnostics-body"><div class="skeleton" style="height:180px"></div></div>
+        <div class="modal__foot">
+          <button class="button button--ghost button--sm" type="button" data-diagnostics-again>بررسی دوباره</button>
+          <button class="button button--sm" type="button" data-close>بستن</button>
+        </div>
+      </div>`);
+    const load = async () => {
+      const body = $('#diagnostics-body', root);
+      if (!body) return;
+      body.innerHTML = '<div class="skeleton" style="height:180px"></div>';
+      try {
+        const report = await api('/api/admin/diagnostics');
+        const rows = (report.checks || []).map((item) => `<div class="check-row ${item.ok ? 'is-ok' : 'is-bad'}">
+          <span class="check-row__dot"></span>
+          <div><strong>${esc(item.name)}</strong>${item.detail ? `<p>${esc(item.detail)}</p>` : ''}</div>
+        </div>`).join('');
+        body.innerHTML = `
+          <div class="check-summary">
+            <span class="pill">حالت: ${report.mode === 'demo' ? 'نمایشی' : 'دیتابیس'}</span>
+            ${report.database?.engine ? `<span class="pill">${esc(report.database.engine)} ${esc(report.database.version || '')}</span>` : ''}
+            <span class="pill">Node ${esc(report.node || '')}</span>
+          </div>
+          <div class="check-list">${rows || '<p class="muted">بررسی‌ای انجام نشد.</p>'}</div>
+          ${report.database?.error ? `<p class="muted" style="font-size:11.5px">خطای دیتابیس: ${esc(report.database.error)}</p>` : ''}`;
+      } catch (error) {
+        body.innerHTML = `<p class="muted" style="font-size:12.5px">${esc(error.message)}</p>`;
+      }
+    };
+    root.addEventListener('click', (event) => { if (event.target.closest('[data-diagnostics-again]')) load(); });
+    load();
+  }
+
+  document.addEventListener('click', (event) => {
+    if (event.target.closest('[data-diagnostics]')) openDiagnostics();
+  });
 
   function cardIcon(key) {
     return {
@@ -1273,32 +1331,224 @@
   }
 
   /* ---------------------------------------------------------------- users */
+  /* ---------------------------------------------------------------- users */
+  const userFilters = { q: '', role: '', layout: 'cards' };
+
+  function userAvatar(user) {
+    const letter = String(user.accountName || '?').trim().slice(0, 1);
+    return `<span class="user-avatar" aria-hidden="true">${esc(letter || '?')}</span>`;
+  }
+
+  function userWalletMarkup(user) {
+    return `<div class="user-wallet">
+      <span class="user-wallet__label">کیف پول تبلیغات</span>
+      <b class="user-wallet__balance" data-wallet-balance="${esc(user.id)}">${faNum(user.walletBalance)}</b>
+      <span class="muted">${esc(user.walletCurrency || 'IRR')}</span>
+    </div>`;
+  }
+
+  function userActions(user) {
+    return `<div class="user-actions">
+      <button class="button button--ghost button--xs" type="button" data-topup="${esc(user.id)}">افزایش موجودی</button>
+      <button class="button button--ghost button--xs" type="button" data-reveal-phone="${esc(user.id)}">نمایش شماره</button>
+      <button class="button button--danger button--xs" type="button" data-delete-user="${esc(user.id)}" data-user-name="${esc(user.accountName)}">حذف کاربر</button>
+    </div>`;
+  }
+
+  function userMetaMarkup(user) {
+    const handle = user.telegramUsername
+      ? `@${esc(user.telegramUsername)}`
+      : `شناسه تلگرام ${esc(user.telegramUserId || user.id)}`;
+    const phone = user.phoneMasked || 'ثبت نشده';
+    return `<div class="user-meta">
+      <span class="user-meta__row"><i>تلگرام</i>${user.telegramProfileUrl
+        ? `<a href="${esc(user.telegramProfileUrl)}" target="_blank" rel="noopener noreferrer">${handle}</a>`
+        : `<span>${handle}</span>`}</span>
+      <span class="user-meta__row"><i>موبایل</i><span data-phone="${esc(user.id)}" dir="ltr">${esc(phone)}</span></span>
+      <span class="user-meta__row"><i>عضویت</i><span>${faDate(user.createdAt)}</span></span>
+    </div>`;
+  }
+
+  function userRoleSelect(user) {
+    return `<select class="select" style="height:32px;min-width:112px" data-user-role="${esc(user.id)}">
+      <option value="user" ${user.role === 'user' ? 'selected' : ''}>کاربر</option>
+      <option value="advertiser" ${user.role === 'advertiser' ? 'selected' : ''}>تبلیغ‌دهنده</option>
+    </select>`;
+  }
+
+  function userCards(items) {
+    return `<div class="user-grid">${items.map((user) => `<article class="user-card" data-user-card="${esc(user.id)}">
+      <header class="user-card__head">
+        ${userAvatar(user)}
+        <div class="user-card__id"><strong>${esc(user.accountName)}</strong>
+          <span class="user-card__tags"><span class="tag">${user.role === 'advertiser' ? 'تبلیغ‌دهنده' : 'کاربر'}</span>
+          ${user.status === 'suspended' ? '<span class="tag tag--warn">مسدود</span>' : ''}</span>
+        </div>
+      </header>
+      ${userMetaMarkup(user)}
+      ${userWalletMarkup(user)}
+      ${userActions(user)}
+      <div class="user-card__role">${userRoleSelect(user)}</div>
+    </article>`).join('')}</div>`;
+  }
+
+  function userRows(items) {
+    return `<div class="table-wrap"><table class="data">
+      <thead><tr><th>کاربر</th><th>تلگرام</th><th>موبایل</th><th>نقش</th><th>موجودی</th><th>عضویت</th><th>اقدام</th></tr></thead>
+      <tbody>${items.map((user) => `<tr data-user-row="${esc(user.id)}">
+        <td><div class="user-cell">${userAvatar(user)}<strong>${esc(user.accountName)}</strong></div></td>
+        <td>${user.telegramProfileUrl ? `<a href="${esc(user.telegramProfileUrl)}" target="_blank" rel="noopener noreferrer">@${esc(user.telegramUsername)}</a>` : '<span class="muted">بدون نام کاربری</span>'}</td>
+        <td><span data-phone="${esc(user.id)}" dir="ltr">${esc(user.phoneMasked || 'ثبت نشده')}</span></td>
+        <td>${userRoleSelect(user)}</td>
+        <td><b data-wallet-balance="${esc(user.id)}">${faNum(user.walletBalance)}</b> <span class="muted">${esc(user.walletCurrency || 'IRR')}</span></td>
+        <td class="muted">${faDate(user.createdAt)}</td>
+        <td>${userActions(user)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+  }
+
   async function renderUsers() {
     const root = $('#view-root');
-    root.innerHTML = `<section class="view"><div class="page-head"><div><h1>کاربران</h1><p>نقش‌ها و کیف پول تبلیغاتی</p></div></div>
+    root.innerHTML = `<section class="view"><div class="page-head"><div><h1>کاربران</h1><p>شناسه تلگرام، شماره، کیف پول و حذف کاربر</p></div></div>
       <div class="skeleton" style="height:280px"></div></section>`;
-    const data = await api('/api/admin/users');
-    const rows = data.items.length ? data.items.map((user) => `<tr>
-      <td><strong>${esc(user.accountName)}</strong><div class="muted">${esc(user.telegramUsername ? `@${user.telegramUsername}` : `شناسه ${user.id}`)}</div></td>
-      <td><span class="tag">${user.role === 'advertiser' ? 'تبلیغ‌دهنده' : 'کاربر'}</span></td>
-      <td>${faNum(user.walletBalance)} <span class="muted">${esc(user.walletCurrency)}</span></td>
-      <td class="muted">${faDate(user.createdAt)}</td>
-      <td><select class="select" style="height:34px;min-width:120px" data-user-role="${esc(user.id)}">
-        <option value="user" ${user.role === 'user' ? 'selected' : ''}>کاربر</option>
-        <option value="advertiser" ${user.role === 'advertiser' ? 'selected' : ''}>تبلیغ‌دهنده</option>
-      </select></td>
-    </tr>`).join('') : '<tr><td colspan="5" class="muted">کاربری وجود ندارد.</td></tr>';
+    const params = new URLSearchParams();
+    if (userFilters.q) params.set('q', userFilters.q);
+    if (userFilters.role) params.set('role', userFilters.role);
+    const data = await api(`/api/admin/users${params.toString() ? `?${params}` : ''}`);
+    const items = data.items || [];
+    const advertisers = items.filter((user) => user.role === 'advertiser').length;
+    const wallets = items.reduce((sum, user) => sum + Number(user.walletBalance || 0), 0);
 
     root.innerHTML = `<section class="view">
-      <div class="page-head"><div><h1>کاربران</h1><p>${faNum(data.items.length)} کاربر · نقش را تغییر دهید و کیف پول تبلیغات را شارژ کنید</p></div></div>
-      <div class="panel"><div class="panel__body" style="padding-top:16px">
-        <div class="table-wrap"><table class="data">
-          <thead><tr><th>کاربر</th><th>نقش</th><th>موجودی</th><th>عضویت</th><th>تغییر نقش</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table></div>
-      </div></div>
-      <div class="callout">${ICONS.info}<span>برای شارژ کیف پول، پس از انتخاب نقش تبلیغ‌دهنده از اسکریپت ربات مالک یا مسیر <code>/api/admin/users/:id/wallet-credit</code> استفاده کنید.</span></div>
+      <div class="page-head"><div><h1>کاربران</h1><p>${faNum(items.length)} کاربر · ${faNum(advertisers)} تبلیغ‌دهنده · مجموع کیف پول ${faNum(wallets)} IRR</p></div></div>
+      <div class="user-toolbar">
+        <label class="user-search">${ICONS.search}<input type="search" data-user-search value="${esc(userFilters.q)}" placeholder="نام، نام کاربری، شناسه یا ۴ رقم آخر شماره…"></label>
+        <div class="segmented" role="group" aria-label="نقش">
+          <button type="button" class="${userFilters.role === '' ? 'is-active' : ''}" data-user-role-filter="">همه</button>
+          <button type="button" class="${userFilters.role === 'user' ? 'is-active' : ''}" data-user-role-filter="user">کاربر</button>
+          <button type="button" class="${userFilters.role === 'advertiser' ? 'is-active' : ''}" data-user-role-filter="advertiser">تبلیغ‌دهنده</button>
+        </div>
+        <div class="segmented" role="group" aria-label="نمایش">
+          <button type="button" class="${userFilters.layout === 'cards' ? 'is-active' : ''}" data-user-layout="cards">کارتی</button>
+          <button type="button" class="${userFilters.layout === 'rows' ? 'is-active' : ''}" data-user-layout="rows">ردیفی</button>
+        </div>
+      </div>
+      ${items.length
+        ? (userFilters.layout === 'rows' ? userRows(items) : userCards(items))
+        : `<div class="empty-state"><strong>کاربری پیدا نشد</strong><p>عبارت جستجو یا فیلتر نقش را تغییر دهید.</p></div>`}
+      <div class="callout">${ICONS.info}<span>شماره موبایل رمزگذاری‌شده ذخیره می‌شود و اینجا فقط چهار رقم اول و دو رقم آخر آن دیده می‌شود؛ با «نمایش شماره» کل شماره باز می‌شود و در گزارش رویدادهای پنل ثبت می‌گردد.</span></div>
     </section>`;
+
+    $('[data-user-search]', root)?.addEventListener('change', (event) => {
+      userFilters.q = event.target.value.trim();
+      render();
+    });
+    $$('[data-user-layout]', root).forEach((button) => button.addEventListener('click', () => {
+      userFilters.layout = button.dataset.userLayout;
+      renderUsers();
+    }));
+    $$('[data-user-role-filter]', root).forEach((button) => button.addEventListener('click', () => {
+      userFilters.role = button.dataset.userRoleFilter;
+      renderUsers();
+    }));
+    $$('[data-reveal-phone]', root).forEach((button) => button.addEventListener('click', async () => {
+      try {
+        const result = await api(`/api/admin/users/${encodeURIComponent(button.dataset.revealPhone)}/phone`);
+        $$(`[data-phone="${button.dataset.revealPhone}"]`).forEach((element) => {
+          element.textContent = result.phone;
+          element.classList.add('is-revealed');
+        });
+        button.disabled = true;
+        button.textContent = 'نمایش داده شد';
+        toast('شماره نمایش داده شد.', 'success');
+      } catch (error) {
+        toast(error.message, 'error');
+      }
+    }));
+    $$('[data-topup]', root).forEach((button) => button.addEventListener('click', () => openTopup(button.dataset.topup)));
+    $$('[data-delete-user]', root).forEach((button) => button.addEventListener('click', () => confirmDeleteUser(button.dataset.deleteUser, button.dataset.userName)));
+  }
+
+  function openTopup(userId) {
+    const { root, close } = openOverlay(`
+      <div class="modal modal--sm" role="dialog" aria-modal="true" aria-label="افزایش موجودی کیف پول">
+        <div class="modal__head">
+          <div><h2>افزایش موجودی کیف پول</h2><p>مبلغ به کیف پول تبلیغاتی این کاربر اضافه و در تراکنش‌ها ثبت می‌شود.</p></div>
+          <button class="icon-button" type="button" data-close aria-label="بستن">${ICONS.close}</button>
+        </div>
+        <form id="topup-form">
+          <div class="modal__body">
+            <label class="field"><span>مبلغ (ریال)</span>
+              <input class="input" name="amount" inputmode="numeric" type="number" min="1" step="1000" required placeholder="مثلاً 5000000"></label>
+            <label class="field"><span>یادداشت (اختیاری)</span>
+              <input class="input" name="note" maxlength="180" placeholder="مثلاً شارژ دستی"></label>
+          </div>
+          <div class="modal__foot">
+            <button class="button button--ghost button--sm" type="button" data-close>انصراف</button>
+            <button class="button button--primary button--sm" type="submit">افزودن موجودی</button>
+          </div>
+        </form>
+      </div>`);
+    $('input', root)?.focus();
+    $('#topup-form', root).addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const submit = $('button[type="submit"]', event.target);
+      submit.disabled = true;
+      try {
+        const result = await api(`/api/admin/users/${encodeURIComponent(userId)}/wallet`, {
+          method: 'POST',
+          body: {
+            amount: Number($('[name="amount"]', event.target)?.value),
+            note: $('[name="note"]', event.target)?.value || '',
+          },
+        });
+        $$(`[data-wallet-balance="${userId}"]`).forEach((element) => { element.textContent = faNum(result.wallet.balance); });
+        close();
+        toast('موجودی افزایش یافت.', 'success');
+      } catch (error) {
+        toast(error.message, 'error');
+        submit.disabled = false;
+      }
+    });
+  }
+
+  function confirmDeleteUser(userId, accountName) {
+    const { root, close } = openOverlay(`
+      <div class="modal modal--sm" role="dialog" aria-modal="true" aria-label="حذف کامل کاربر">
+        <div class="modal__head">
+          <div><h2>حذف کامل کاربر</h2><p>این کار برگشت‌پذیر نیست.</p></div>
+          <button class="icon-button" type="button" data-close aria-label="بستن">${ICONS.close}</button>
+        </div>
+        <form id="delete-user-form">
+          <div class="modal__body">
+            <p style="margin:0;line-height:1.95;color:var(--subdued);font-size:12.5px">«${esc(accountName)}» با همه داده‌هایش پاک می‌شود: کیف پول، تراکنش‌ها، علاقه‌مندی‌ها، پیشرفت تماشا، تاریخچه دانلود، کدهای ورود و کمپین‌های تبلیغاتی.</p>
+            <label class="field"><span>برای تأیید، نام کاربر را دقیقاً بنویسید</span>
+              <input class="input" name="confirm" autocomplete="off" placeholder="${esc(accountName)}"></label>
+          </div>
+          <div class="modal__foot">
+            <button class="button button--ghost button--sm" type="button" data-close>انصراف</button>
+            <button class="button button--danger button--sm" type="submit">حذف قطعی</button>
+          </div>
+        </form>
+      </div>`);
+    $('#delete-user-form', root).addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (String($('[name="confirm"]', event.target)?.value || '').trim() !== String(accountName).trim()) {
+        toast('نام کاربر را دقیقاً وارد کنید.', 'error');
+        return;
+      }
+      const submit = $('button[type="submit"]', event.target);
+      submit.disabled = true;
+      try {
+        await api(`/api/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE' });
+        close();
+        toast('کاربر حذف شد.', 'success');
+        renderUsers();
+      } catch (error) {
+        toast(error.message, 'error');
+        submit.disabled = false;
+      }
+    });
   }
 
   /* ------------------------------------------------------------------ ads */
@@ -1328,12 +1578,93 @@
     </section>`;
   }
 
+  /* --------------------------------------------------------------- deploy */
+  const DEPLOY_SNIPPETS = {
+    'deploy-manual': 'cd ~/filmwork && git fetch origin && git reset --hard origin/main',
+    'deploy-css': 'cd ~/filmwork/backend && npm run build:css',
+    'deploy-restart': 'mkdir -p ~/filmwork/backend/tmp && touch ~/filmwork/backend/tmp/restart.txt',
+  };
+
+  async function renderDeploy() {
+    window.__guideCodes = { ...(window.__guideCodes || {}), ...DEPLOY_SNIPPETS };
+    const root = $('#view-root');
+    root.innerHTML = '<section class="view"><div class="skeleton" style="height:260px"></div></section>';
+    const status = await api('/api/admin/deploy/status');
+    const upstream = status.upstream;
+    const lastRun = status.lastResult;
+    const changedFiles = (lastRun?.files || []);
+    root.innerHTML = `<section class="view">
+      <div class="page-head"><div><h1>به‌روزرسانی از گیت‌هاب</h1><p>هر تغییری که در گیت‌هاب می‌دهید، از همین صفحه روی هاست اعمال می‌شود؛ لازم نیست فایل‌ها را با File Manager عوض کنید</p></div></div>
+      ${status.configured ? '' : `<div class="callout callout--warn">${ICONS.warn}<span>برای فعال شدن این صفحه، در <code>.env</code> مقدار <code>GITHUB_REPO=Atliner/filmwork</code> را بگذارید (برای ریپوی خصوصی <code>GITHUB_TOKEN</code> هم لازم است) و سرویس Node را یک‌بار ری‌استارت کنید.</span></div>`}
+      <div class="deploy-grid">
+        <article class="panel"><div class="panel__head"><div><h2>وضعیت</h2><p>مخزن و شاخه‌ای که روی هاست اعمال می‌شود</p></div></div>
+          <div class="panel__body deploy-meta">
+            <div><span>ریپازیتوری</span><b dir="ltr">${esc(status.repo || '—')}</b></div>
+            <div><span>شاخه</span><b dir="ltr">${esc(status.branch || '—')}</b></div>
+            <div><span>آخرین دریافت</span><b>${status.lastRunAt ? faDate(status.lastRunAt) : 'هنوز اجرا نشده'}</b></div>
+            ${upstream ? `<div><span>آخرین کامیت گیت‌هاب</span><b dir="ltr" style="font-size:11px">${esc(upstream.sha.slice(0, 7))}</b></div>
+              <div style="grid-column:1/-1"><span>پیام کامیت</span><p style="margin:2px 0 0;font-size:12px;line-height:1.9">${esc(upstream.message.split('\n')[0])}</p></div>` : ''}
+          </div>
+        </article>
+        <article class="panel"><div class="panel__head"><div><h2>دریافت و اعمال</h2><p>فقط <code>backend/</code>، <code>frontend/</code> و <code>database/</code> به‌روز می‌شوند</p></div></div>
+          <div class="panel__body">
+            <p class="muted" style="font-size:12px;line-height:1.95;margin:0 0 12px">فایل‌های <code>.env</code>، <code>node_modules</code> و <code>uploads</code> دست‌نخورده می‌مانند. اول یک «پیش‌نمایش» بگیرید تا ببینید چه چیزی تغییر می‌کند، بعد اعمال کنید. اگر <code>frontend/tailwind.css</code> تغییر کرده باشد، بعد از اعمال باید یک‌بار <code>npm run build:css</code> را روی هاست اجرا کنید.</p>
+            <label class="field"><span>شاخه</span><input class="input" dir="ltr" data-deploy-branch value="${esc(status.branch || 'main')}"></label>
+            <div class="form-actions" style="justify-content:flex-start">
+              <button class="button button--ghost" type="button" data-deploy-preview ${status.configured ? '' : 'disabled'}>پیش‌نمایش تغییرات</button>
+              <button class="button button--primary" type="button" data-deploy-run ${status.configured ? '' : 'disabled'}>اعمال روی هاست</button>
+            </div>
+            <div id="deploy-result" aria-live="polite"></div>
+          </div>
+        </article>
+      </div>
+      ${changedFiles.length ? `<article class="panel" style="margin-top:14px"><div class="panel__head"><div><h2>آخرین تغییرات اعمال‌شده</h2><p>${faNum(changedFiles.length)} فایل</p></div></div>
+        <div class="panel__body"><div class="deploy-files">${changedFiles.slice(0, 60).map((file) => `<span class="deploy-file deploy-file--${file.status}"><i dir="ltr">${esc(file.path)}</i><b>${file.status === 'added' ? 'جدید' : 'به‌روز'}</b></span>`).join('')}</div></div></article>` : ''}
+      <details class="callout callout--fold">
+        <summary>${ICONS.warn} به‌روزرسانی دستی (وقتی سرور به گیت‌هاب دسترسی ندارد)</summary>
+        <div style="padding:10px 0 2px">
+          <p style="margin:0 0 8px;font-size:12px;line-height:1.95">اگر دکمه بالا خطای دسترسی داد، در cPanel → <b>Terminal</b> (یا SSH) این سه خط را بزنید؛ فقط کد برنامه را به‌روز می‌کند و به <code>.env</code>، <code>node_modules</code> یا <code>uploads</code> دست نمی‌زند:</p>
+          ${CODE('cd ~/filmwork && git fetch origin && git reset --hard origin/main', 'deploy-manual')}
+          <p style="margin:8px 0;font-size:12px;line-height:1.95">اگر فقط استایل‌ها (CSS) تغییر کرده‌اند:</p>
+          ${CODE('cd ~/filmwork/backend && npm run build:css', 'deploy-css')}
+          <p style="margin:8px 0 0;font-size:12px;line-height:1.95">برای فعال شدن کد جدید، سرویس Node را از «Setup Node.js App» ری‌استارت کنید، یا در SSH:</p>
+          ${CODE('mkdir -p ~/filmwork/backend/tmp && touch ~/filmwork/backend/tmp/restart.txt', 'deploy-restart')}
+        </div>
+      </details>
+      <div class="callout">${ICONS.info}<span>بعد از اعمال تغییرات، سرویس Node را از cPanel («Setup Node.js App» → Restart) ری‌استارت کنید تا نسخه جدید فعال شود.</span></div>
+    </section>`;
+
+    const run = async (dryRun) => {
+      const box = $('#deploy-result');
+      box.innerHTML = '<p class="muted" style="font-size:12px;margin-top:12px">در حال دریافت از گیت‌هاب…</p>';
+      try {
+        const result = await api('/api/admin/deploy/github', {
+          method: 'POST',
+          body: { branch: $('[data-deploy-branch]')?.value?.trim() || undefined, dryRun },
+        });
+        const files = result.files || [];
+        box.innerHTML = `<div class="deploy-outcome">
+          <strong>${dryRun ? 'پیش‌نمایش' : 'اعمال شد'} · ${faNum(files.length)} فایل ${dryRun ? 'تغییر می‌کند' : 'به‌روزرسانی شد'}</strong>
+          <span class="muted" dir="ltr">${esc(result.sha.slice(0, 7))}</span>
+          ${files.length ? `<div class="deploy-files">${files.slice(0, 80).map((file) => `<span class="deploy-file deploy-file--${file.status}"><i dir="ltr">${esc(file.path)}</i><b>${file.status === 'added' ? 'جدید' : 'به‌روز'}</b></span>`).join('')}</div>` : '<p class="muted" style="font-size:12px">همه فایل‌ها از قبل به‌روز بودند.</p>'}
+          ${result.cssNeedsBuild ? '<p class="muted" style="font-size:12px">استایل‌ها تغییر کرده‌اند: روی هاست <code>cd backend &amp;&amp; npm run build:css</code> را اجرا کنید (یا <code>frontend/styles.css</code> را هم از گیت‌هاب بگیرید).</p>' : ''}
+          ${result.restartRequired && !dryRun ? '<p class="muted" style="font-size:12px">برای فعال شدن کد جدید، سرویس Node را ری‌استارت کنید.</p>' : ''}
+        </div>`;
+      } catch (error) {
+        box.innerHTML = `<p style="color:#fca5a5;font-size:12px;margin-top:12px">${esc(error.message)}</p>`;
+      }
+    };
+    $('[data-deploy-preview]', root)?.addEventListener('click', () => run(true));
+    $('[data-deploy-run]', root)?.addEventListener('click', () => run(false));
+  }
+
   /* ---------------------------------------------------------------- guide */
   const CODE = (text, id) => `<div class="code-block">${esc(text)}<button class="copy" type="button" data-copy="${id}">کپی</button></div>`;
 
   function renderGuide() {
     const root = $('#view-root');
     const addCopyTargets = {
+      'guide-github': 'GITHUB_REPO=Atliner/filmwork\nGITHUB_BRANCH=main',
       'post-sample': `🎬 #سریال | امتیاز: 8.9
 
 ▪️ نام فارسی: پیت
@@ -1483,7 +1814,36 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
         </details>
 
         <details>
-          <summary>۸. عیب‌یابی سریع</summary>
+          <summary>۸. کاربرها، کیف پول و حذف کامل حساب</summary>
+          <div class="guide__body">
+            <ul>
+              <li><b>نمای کارتی و ردیفی</b>: از دکمه‌های بالای صفحه کاربران بین کارت و جدول جابه‌جا شوید و با فیلتر نقش یا کادر جستجو (نام، نام کاربری، شناسه تلگرام یا ۴ رقم آخر موبایل) کاربر را پیدا کنید.</li>
+              <li><b>شماره موبایل</b>: همان شماره‌ای که کاربر در ربات ورود به اشتراک گذاشته است. به‌صورت رمزگذاری‌شده ذخیره می‌شود و در فهرست فقط ماسک‌شده دیده می‌شود؛ با «نمایش شماره» کل شماره باز و در رویدادهای پنل ثبت می‌شود.</li>
+              <li><b>پروفایل تلگرام</b>: نام کاربری (یا شناسه عددی) با پیوند <code>t.me/username</code> برای باز کردن مستقیم گفتگو.</li>
+              <li><b>افزایش موجودی</b>: دکمه «افزایش موجودی» مبلغ را به کیف پول تبلیغاتی اضافه می‌کند و در تراکنش‌ها با مرجع یکتا ثبت می‌شود؛ حتی اگر کاربر هنوز کیف پول نداشته باشد ساخته می‌شود.</li>
+              <li><b>حذف کاربر</b>: با تأیید نام کاربر، حساب و همه داده‌های وابسته (کیف پول، تراکنش‌ها، علاقه‌مندی، پیشرفت تماشا، تاریخچه دانلود، کدهای ورود و کمپین‌های تبلیغاتی) پاک می‌شود. حذف قطعی است.</li>
+            </ul>
+            <div class="callout callout--warn">${ICONS.warn}<span>حذف کاربر برگشت‌پذیر نیست. اگر فقط می‌خواهید دسترسی را ببندید و سابقه مالی بماند، به‌جای حذف، نقش/وضعیت را تغییر دهید.</span></div>
+          </div>
+        </details>
+
+        <details>
+          <summary>۹. به‌روزرسانی هاست از گیت‌هاب</summary>
+          <div class="guide__body">
+            <p style="margin:0 0 8px">برای اعمال تغییرات گیت‌هاب روی هاست لازم نیست فایل‌ها را دستی در File Manager عوض کنید. در <code>.env</code> مقدار <code>GITHUB_REPO</code> را بگذارید و از منوی «به‌روزرسانی از گیت‌هاب» استفاده کنید:</p>
+            ${CODE('GITHUB_REPO=Atliner/filmwork\nGITHUB_BRANCH=main', 'guide-github')}
+            <ul>
+              <li>«پیش‌نمایش تغییرات» فقط نشان می‌دهد چه فایل‌هایی فرق دارند.</li>
+              <li>«اعمال روی هاست» همان فایل‌ها را از آخرین کامیت جایگزین می‌کند.</li>
+              <li><code>.env</code>، <code>node_modules</code> و <code>uploads</code> دست‌نخورده می‌مانند.</li>
+              <li>بعد از اعمال، سرویس Node را ری‌استارت کنید؛ اگر CSS تغییر کرده، <code>npm run build:css</code> را هم اجرا کنید.</li>
+            </ul>
+            <div class="callout">${ICONS.info}<span>اگر سرور به گیت‌هاب دسترسی نداشت، همان صفحه سه دستور آماده برای Terminal دارد.</span></div>
+          </div>
+        </details>
+
+        <details>
+          <summary>۱۰. عیب‌یابی سریع</summary>
           <div class="guide__body">
             <ul>
               <li><b>۴۰۴ روی کنسول:</b> جلسه منقضی شده یا شناسه شما در <code>ADMIN_OWNER_IDS</code> نیست؛ دوباره <code>/panel</code> بزنید.</li>
