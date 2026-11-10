@@ -20,6 +20,8 @@ process.env.ADMIN_OWNER_IDS ||= '123456789';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { app } = require('../server');
 
 let server;
@@ -198,7 +200,19 @@ test('deleting a user removes the account and every dependent row', async () => 
   assert.equal((await call(`/api/admin/users/${victim.id}/phone`)).status, 404);
 });
 
-test('ad settings expose the seven placements in three groups with a working policy', async () => {
+test('every sidebar menu item is wired to the router and to an existing view', async () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'private', 'admin.html'), 'utf8');
+  const script = fs.readFileSync(path.join(__dirname, '..', 'private', 'admin.js'), 'utf8');
+  const menuViews = [...html.matchAll(/class="nav-item"\s+data-view="([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(menuViews.length >= 7, 'the sidebar still lists every section');
+  const registered = [...script.matchAll(/^\s{4}(\w+): (?:render|\()/gm)].map((m) => m[1]);
+  for (const view of menuViews) {
+    assert.ok(registered.includes(view), `menu item ${view} has no render function`);
+  }
+  assert.match(script, /button\.matches\('\[data-view\]'\)/, 'clicks on .nav-item must navigate');
+});
+
+test('ad settings expose the eight placements in three groups with a working policy', async () => {
   const config = await call('/api/admin/ads/settings');
   assert.equal(config.status, 200);
   assert.equal(config.data.placements.length, 8);

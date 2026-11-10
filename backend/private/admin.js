@@ -2309,6 +2309,13 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
       if (!button) return;
 
       if (button.matches('[data-new-content]')) { state.editor = null; navigate('new'); return; }
+      // Sidebar menu items carry `data-view`; without this branch the open menu
+      // looked clickable but never navigated.
+      if (button.matches('[data-view]')) {
+        state.editor = null;
+        navigate(button.dataset.view);
+        return;
+      }
       if (button.matches('[data-view-nav]')) { navigate(button.dataset.viewNav); return; }
       if (button.matches('[data-open-content]')) { navigate('edit', button.dataset.openContent); return; }
       if (button.matches('[data-edit-content]')) { state.editor = null; navigate('edit', button.dataset.editContent); return; }
