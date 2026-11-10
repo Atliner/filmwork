@@ -262,7 +262,24 @@ a { color: inherit; }
 .stat-card--rose { border-color: rgba(248, 113, 113, .24); }
 .stat-card--rose .stat-card__icon { background: rgba(248, 113, 113, .14); color: #fda4af; }
 
-.chart-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 12px; }
+.chart-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 12px; min-width: 0; }
+.chart-grid > *, .stack-grid > *, .view > * { min-width: 0; }
+.dashboard-migration-hint { display: block; margin-top: 6px; color: #fcd34d; }
+
+/* Dashboard charts must stay inside the viewport on narrow phones. */
+@media (max-width: 620px) {
+  .chart-card { min-width: 0; padding: 14px 12px 12px; }
+  .chart-card__head { align-items: flex-start; }
+  .legend { flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+  .bars { width: 100%; min-width: 0; gap: 2px; overflow: hidden; }
+  .bars__col { min-width: 0; }
+  .bars__stack { min-width: 0; gap: 1px; }
+  .bars__label { max-width: 100%; overflow: hidden; font-size: 8px; }
+  .split-row__top { min-width: 0; }
+  .split-row__top span { min-width: 0; overflow-wrap: anywhere; }
+  .main, #view-root, .view { max-width: 100%; }
+  body { overflow-x: clip; }
+}
 .chart-card { padding: 18px 18px 14px; }
 .chart-card__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
 .chart-card__head h3 { margin: 0; font-size: 13.5px; font-weight: 700; }

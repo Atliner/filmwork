@@ -325,6 +325,7 @@
     const warningPanel = warnings.length ? `
       <div class="callout callout--warn" style="margin-bottom:16px">${ICONS.warn}<span>
         ${esc('این بخش از داشبورد روی سرور شما کامل خوانده نشد')}: ${esc(warnings.map((item) => item.block).join('، '))}.
+        ${warnings.some((item) => /ER_BAD_FIELD_ERROR|ER_NO_SUCH_TABLE|unknown column|doesn't exist/i.test(item.message || '')) ? '<small class="dashboard-migration-hint">احتمالاً مهاجرت پایگاه داده اجرا نشده است؛ از بخش «به‌روزرسانی از گیت‌هاب» پیش‌نمایش بگیرید و مهاجرت‌های داخل پوشه database/migrations را روی هاست اجرا کنید.</small>' : ''}
         <button class="button button--ghost button--xs" type="button" data-diagnostics>بررسی سرور</button>
       </span></div>` : '';
 
