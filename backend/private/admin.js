@@ -203,6 +203,7 @@
     edit: (assetId) => renderEditor(assetId),
     users: renderUsers,
     ads: renderAds,
+    adsettings: renderAdSettings,
     deploy: renderDeploy,
     guide: renderGuide,
   };
@@ -1578,6 +1579,331 @@
     </section>`;
   }
 
+  /* ---------------------------------------------------- ad settings page */
+  const adState = { group: 'video', tab: 'overview', settings: null, placements: [], dashboard: null, campaigns: [], policy: null, groups: [] };
+
+  function adNumberField(key, label, hint, value, { step = 1, min = 0, max = 1000000, suffix = '' } = {}) {
+    return `<label class="ad-field">
+      <span>${esc(label)}</span>
+      <div class="ad-input">
+        <input class="input" type="number" step="${step}" min="${min}" max="${max}" data-ad-setting="${esc(key)}" value="${esc(value)}">
+        ${suffix ? `<i>${esc(suffix)}</i>` : ''}
+      </div>
+      ${hint ? `<small>${esc(hint)}</small>` : ''}
+    </label>`;
+  }
+
+  function adToggleField(key, label, hint, on) {
+    return `<label class="ad-field ad-field--toggle">
+      <div><span>${esc(label)}</span>${hint ? `<small>${esc(hint)}</small>` : ''}</div>
+      <input type="checkbox" class="switch" data-ad-setting="${esc(key)}" ${on ? 'checked' : ''}>
+    </label>`;
+  }
+
+  function placementCard(slot) {
+    const live = slot.enabled && slot.active !== false;
+    return `<article class="slot-card ${live ? 'is-on' : 'is-off'}" data-slot="${esc(slot.placement)}">
+      <header class="slot-card__head">
+        <div><strong>${esc(slot.label)}</strong><span class="slot-tag slot-tag--${esc(slot.group)}">${slot.group === 'video' ? 'ویدیویی' : slot.group === 'banner' ? 'بنری' : 'لینکی'}</span></div>
+        <button type="button" class="switch switch--button ${live ? 'is-on' : ''}" role="switch" aria-checked="${live ? 'true' : 'false'}"
+          data-slot-toggle="${esc(slot.placement)}" aria-label="روشن یا خاموش کردن ${esc(slot.label)}"><i></i></button>
+      </header>
+      <div class="slot-card__body">
+        <label class="ad-field ad-field--compact"><span>CPM (تومان هر ۱۰۰۰ نمایش)</span>
+          <input class="input" type="number" min="0" step="1000" data-slot-price="${esc(slot.placement)}" value="${esc(Math.round(slot.cpm / 10))}"></label>
+        <label class="ad-field ad-field--compact"><span>حداقل بودجه (تومان)</span>
+          <input class="input" type="number" min="0" step="1000" data-slot-min="${esc(slot.placement)}" value="${esc(Math.round(slot.minBudget / 10))}"></label>
+        ${slot.group === 'link' ? '' : `<label class="ad-field ad-field--compact"><span>مدت نمایش (ثانیه)</span>
+          <input class="input" type="number" min="0" max="120" step="1" data-slot-duration="${esc(slot.placement)}" value="${esc(slot.durationSeconds)}">
+          <small>${slot.group === 'banner' ? 'چند ثانیه بنر روی پلیر بماند' : 'چند ثانیه تبلیغ پخش شود؛ کاربر از ثانیه مشخص‌شده می‌تواند رد کند'}</small></label>`}
+      </div>
+      <footer class="slot-card__foot">
+        <button class="button button--ghost button--xs" type="button" data-slot-save="${esc(slot.placement)}">ذخیره</button>
+        <span class="slot-status">${live ? 'روشن — تبلیغ سرو می‌شود' : 'خاموش — هیچ تبلیغی سرو نمی‌شود'}</span>
+      </footer>
+    </article>`;
+  }
+
+  function campaignRow(campaign) {
+    const statusLabels = { pending: 'در انتظار بررسی', active: 'فعال', paused: 'متوقف', rejected: 'ردشده', completed: 'پایان‌یافته' };
+    const thumb = campaign.assetType === 'video'
+      ? `<video src="${esc(safeUrl(campaign.creativeUrl))}" muted preload="metadata"></video>`
+      : `<img src="${esc(safeUrl(campaign.creativeUrl))}" alt="" loading="lazy">`;
+    return `<article class="ad-row" data-campaign="${esc(campaign.id)}">
+      <div class="ad-row__thumb">${thumb}${campaign.ownerCampaign ? '<span class="ad-row__owner">مالک</span>' : ''}</div>
+      <div class="ad-row__main">
+        <div class="ad-row__title"><strong>${esc(campaign.headline || campaign.campaignName)}</strong>
+          <span class="status-badge status-badge--${campaign.status === 'active' ? 'published' : campaign.status === 'pending' ? 'draft' : campaign.status === 'rejected' ? 'archived' : 'draft'}">${statusLabels[campaign.status] || campaign.status}</span></div>
+        <div class="ad-row__meta">
+          <span>${esc(campaign.group === 'video' ? 'ویدیویی' : campaign.group === 'banner' ? 'بنری' : 'لینکی')} · ${esc(campaign.placement)}</span>
+          <span>${esc(campaign.advertiser || '')}</span>
+          <span>${faNum(campaign.impressions || 0)} نمایش · ${faNum(campaign.clicks || 0)} کلیک</span>
+          ${campaign.ownerCampaign ? '<span>بدون کسر کیف پول</span>' : `<span>${faNum(Math.round(Number(campaign.budget || 0) / 10))} تومان بودجه</span>`}
+        </div>
+        ${campaign.reviewNote ? `<p class="ad-row__note">${esc(campaign.reviewNote)}</p>` : ''}
+      </div>
+      <div class="ad-row__actions">
+        ${campaign.status === 'pending' ? `<button class="button button--primary button--xs" type="button" data-ad-review="active" data-ad-id="${esc(campaign.id)}">تأیید</button>
+          <button class="button button--danger button--xs" type="button" data-ad-review="rejected" data-ad-id="${esc(campaign.id)}">رد</button>` : ''}
+        ${campaign.status === 'active' ? `<button class="button button--ghost button--xs" type="button" data-ad-review="paused" data-ad-id="${esc(campaign.id)}">توقف</button>` : ''}
+        ${campaign.status === 'paused' ? `<button class="button button--ghost button--xs" type="button" data-ad-review="active" data-ad-id="${esc(campaign.id)}">فعال‌سازی</button>` : ''}
+      </div>
+    </article>`;
+  }
+
+  function adTabMarkup() {
+    const data = adState;
+    if (data.tab === 'overview') {
+      const totals = data.dashboard?.totals || {};
+      const cards = [
+        ['کمپین فعال', totals.active], ['در انتظار بررسی', totals.pending],
+        ['کمپین‌های مالک', totals.ownerCampaigns], ['بودجه مصرف‌شده', faNum(Math.round(Number(totals.spent || 0) / 10)) + ' تومان'],
+        ['نمایش ۳۰ روز', totals.impressions], ['کلیک ۳۰ روز', totals.clicks],
+        ['موجودی کیف پول‌ها', faNum(Math.round(Number(totals.walletBalance || 0) / 10)) + ' تومان'],
+      ];
+      return `<div class="ad-kpis">${cards.map(([label, value]) => `<div class="ad-kpi"><span>${esc(label)}</span><b>${typeof value === 'number' ? faNum(value) : esc(value)}</b></div>`).join('')}</div>
+        <div class="ad-groups">${(data.dashboard?.byGroup || []).map((group) => `
+          <div class="ad-group-row">
+            <div><strong>${esc(group.label)}</strong><span>${faNum(group.active)} فعال از ${faNum(group.campaigns)} کمپین</span></div>
+            <div class="meter meter--amber"><i style="width:${Math.min(100, group.campaigns ? Math.round((group.active / group.campaigns) * 100) : 0)}%"></i></div>
+            <b>${faNum(Math.round(Number(group.spent || 0) / 10))} تومان</b>
+          </div>`).join('')}</div>`;
+    }
+    if (data.tab === 'review') {
+      const pending = data.campaigns.filter((ad) => ad.status === 'pending');
+      return `<div class="ad-list">${pending.length ? pending.map(campaignRow).join('') : '<div class="empty-state"><strong>صف بررسی خالی است</strong><p>همه کمپین‌ها بررسی شده‌اند.</p></div>'}</div>`;
+    }
+    if (data.tab === 'campaigns') {
+      return `<div class="ad-toolbar">
+          <div class="segmented" role="group"><button class="is-active" data-ad-owner="">همه</button><button data-ad-owner="owner">مالک</button><button data-ad-owner="users">کاربران</button></div>
+        </div>
+        <div class="ad-list">${data.campaigns.length ? data.campaigns.map(campaignRow).join('') : '<div class="empty-state"><strong>کمپینی وجود ندارد</strong></div>'}</div>`;
+    }
+    if (data.tab === 'owner') {
+      return `<div class="ad-owner">
+        <div class="panel"><div class="panel__head"><div><h2>کمپین مالک</h2><p>بدون کسر از کیف پول، فوراً فعال؛ فقط جایگاه باید روشن باشد</p></div></div>
+          <div class="panel__body">
+            <form id="owner-ad-form">
+              <div class="grid-2">
+                <label class="field"><span>نام کمپین</span><input class="input" name="campaignName" required minlength="3" maxlength="180" placeholder="مثلاً معرفی فیلم‌ورک پلاس"></label>
+                <label class="field"><span>عنوان نمایشی</span><input class="input" name="headline" required minlength="3" maxlength="180" placeholder="مثلاً فیلم‌ورک پلاس را امتحان کنید"></label>
+              </div>
+              <label class="field"><span>جایگاه</span><select class="select" name="placement">
+                ${data.placements.filter((slot) => slot.group === adState.group && slot.enabled).map((slot) => `<option value="${esc(slot.placement)}">${esc(slot.label)}</option>`).join('') || '<option value="">جایگاه روشنی نیست</option>'}
+              </select></label>
+              <div class="grid-2">
+                <label class="field"><span>فایل تبلیغ (آپلود)</span><input class="input" type="file" name="creative" accept="video/mp4,video/webm,image/jpeg,image/png,image/webp"></label>
+                <label class="field"><span>یا لینک فایل</span><input class="input" dir="ltr" name="creativeUrl" placeholder="https://cdn.example.com/ad.mp4"></label>
+              </div>
+              <div class="grid-2">
+                <label class="field"><span>لینک مقصد</span><input class="input" dir="ltr" name="targetUrl" placeholder="https://example.com"></label>
+                <label class="field"><span>مدت نمایش (ثانیه)</span><input class="input" type="number" name="durationSeconds" min="0" max="120" value="${esc(data.policy?.defaultVideoDuration || 15)}"></label>
+              </div>
+              <div class="grid-2">
+                <label class="field"><span>شروع</span><input class="input" type="datetime-local" name="startsAt"></label>
+                <label class="field"><span>پایان</span><input class="input" type="datetime-local" name="endsAt"></label>
+              </div>
+              <div class="form-actions"><button class="button button--primary" type="submit">ساخت و فعال‌سازی</button></div>
+            </form>
+          </div></div>
+        <div class="ad-list">${data.campaigns.filter((ad) => ad.ownerCampaign).map(campaignRow).join('') || '<p class="muted" style="font-size:12px">هنوز کمپین مالک ساخته نشده است.</p>'}</div>
+      </div>`;
+    }
+    // settings tab
+    const settings = data.settings || {};
+    return `<div class="ad-settings">
+      <article class="panel"><div class="panel__head"><div><h2>جایگاه‌ها</h2><p>هر جایگاه با یک دکمه روشن یا خاموش می‌شود؛ خاموش یعنی هیچ تبلیغی در آن سرو نمی‌شود</p></div></div>
+        <div class="panel__body">
+          <div class="segmented ad-group-tabs">${data.groups.map((group) => `<button class="${adState.group === group.group ? 'is-active' : ''}" data-ad-group="${group.group}">${group.label}</button>`).join('')}</div>
+          <p class="muted ad-group-hint">${esc((data.groups.find((group) => group.group === adState.group) || {}).hint || '')}</p>
+          <div class="slot-grid">${data.placements.filter((slot) => slot.group === adState.group).map(placementCard).join('')}</div>
+        </div></article>
+
+      <article class="panel"><div class="panel__head"><div><h2>قواعد عمومی</h2><p>این مقادیر روی فرم تبلیغ‌دهنده و سرو شدن تبلیغ اثر می‌گذارند</p></div>
+        <button class="button button--primary button--sm" type="button" data-ad-save>ذخیره تنظیمات</button></div>
+        <div class="panel__body">
+          ${adToggleField('ads.auto_approve', 'تأیید خودکار کمپین‌ها', 'اگر روشن باشد، کمپین کاربران بدون بررسی فعال می‌شود', settings['ads.auto_approve'] === '1')}
+          <div class="ad-fields">
+            ${adNumberField('ads.default_video_duration', 'مدت نمایش ویدیو', 'مدت پیش‌فرض ویدیو در پلیر', settings['ads.default_video_duration'], { suffix: 'ثانیه' })}
+            ${adNumberField('ads.default_banner_duration', 'مدت نمایش بنر', 'چند ثانیه بنر روی پلیر بماند', settings['ads.default_banner_duration'], { suffix: 'ثانیه' })}
+            ${adNumberField('ads.skip_after_seconds', 'دکمه رد کردن پس از', 'کاربر بعد از این مدت می‌تواند تبلیغ را رد کند', settings['ads.skip_after_seconds'], { suffix: 'ثانیه' })}
+            ${adNumberField('ads.min_video_seconds', 'حداقل مدت ویدیو', '', settings['ads.min_video_seconds'], { suffix: 'ثانیه' })}
+            ${adNumberField('ads.max_video_seconds', 'حداکثر مدت ویدیو', '', settings['ads.max_video_seconds'], { suffix: 'ثانیه' })}
+            ${adNumberField('ads.max_video_mb', 'حداکثر حجم ویدیو', '', settings['ads.max_video_mb'], { suffix: 'MB' })}
+            ${adNumberField('ads.max_image_kb', 'حداکثر حجم تصویر', '', settings['ads.max_image_kb'], { suffix: 'KB' })}
+            ${adNumberField('ads.reject_purge_minutes', 'پاک‌سازی فایل ردشده پس از', 'فایل آپلودی کمپین ردشده حداکثر بعد از این مدت از هاست حذف می‌شود', settings['ads.reject_purge_minutes'], { suffix: 'دقیقه' })}
+          </div>
+          <h3 class="ad-sub">تعرفه‌ها (تومان)</h3>
+          <div class="ad-fields">
+            ${adNumberField('ads.cpm_video', 'CPM ویدیویی', 'هزینه هر ۱۰۰۰ نمایش', settings['ads.cpm_video'])}
+            ${adNumberField('ads.cpm_banner', 'CPM بنری', '', settings['ads.cpm_banner'])}
+            ${adNumberField('ads.cpm_link', 'CPM لینکی', '', settings['ads.cpm_link'])}
+            ${adNumberField('ads.cpc_link', 'CPC لینکی', 'هزینه هر کلیک', settings['ads.cpc_link'])}
+            ${adNumberField('ads.min_budget', 'حداقل بودجه کمپین', '', settings['ads.min_budget'])}
+            ${adNumberField('ads.daily_budget_cap', 'سقف هزینه روزانه', '۰ = بدون سقف', settings['ads.daily_budget_cap'])}
+            ${adNumberField('ads.max_priority_multiplier', 'حداکثر ضریب پیشنهاد', 'سقف ضریب اولویت روی تعرفه پایه', settings['ads.max_priority_multiplier'], { step: 0.5 })}
+          </div>
+          <label class="field"><span>فهرست دامنه‌های مجاز لینک</span>
+            <textarea class="textarea" rows="3" data-ad-setting="ads.link_allowlist" placeholder="مثلاً t.me، instagram.com — خالی یعنی همه دامنه‌ها مجازند">${esc(settings['ads.link_allowlist'] || '')}</textarea></label>
+          <label class="field"><span>قوانین تبلیغات (متن نمایش‌داده‌شده به تبلیغ‌دهنده)</span>
+            <textarea class="textarea" rows="6" data-ad-setting="ads.rules" placeholder="قوانین محتوا، ممنوعیت‌ها و شرایط بازگشت بودجه">${esc(settings['ads.rules'] || '')}</textarea></label>
+          <div class="form-actions"><button class="button button--primary" type="button" data-ad-save>ذخیره تنظیمات</button></div>
+        </div></article>
+    </div>`;
+  }
+
+  async function renderAdSettings() {
+    const root = $('#view-root');
+    root.innerHTML = '<section class="view"><div class="skeleton" style="height:300px"></div></section>';
+    const [config, dashboard, campaigns] = await Promise.all([
+      api('/api/admin/ads/settings'),
+      api('/api/admin/ads/dashboard'),
+      api('/api/admin/ads/campaigns'),
+    ]);
+    adState.settings = config.settings;
+    adState.placements = config.placements || [];
+    adState.groups = config.groups || [];
+    adState.policy = config.policy;
+    adState.dashboard = dashboard;
+    adState.campaigns = campaigns.items || [];
+    paintAdSettings();
+  }
+
+  function paintAdSettings() {
+    const root = $('#view-root');
+    const tabs = [
+      ['overview', 'نمای کلی'], ['settings', 'جایگاه‌ها و قواعد'], ['review', `صف بررسی${adState.campaigns.filter((ad) => ad.status === 'pending').length ? ` (${faNum(adState.campaigns.filter((ad) => ad.status === 'pending').length)})` : ''}`],
+      ['campaigns', 'همه کمپین‌ها'], ['owner', 'کمپین مالک'],
+    ];
+    root.innerHTML = `<section class="view">
+      <div class="page-head"><div><h1>تنظیمات تبلیغات</h1><p>جایگاه‌ها، تعرفه‌ها، تأیید کمپین کاربران و کمپین‌های خودتان</p></div></div>
+      <div class="ad-tabs">${tabs.map(([key, label]) => `<button class="${adState.tab === key ? 'is-active' : ''}" data-ad-tab="${key}">${label}</button>`).join('')}</div>
+      <div id="ad-body">${adTabMarkup()}</div>
+    </section>`;
+  }
+
+  document.addEventListener('click', async (event) => {
+    const tab = event.target.closest('[data-ad-tab]');
+    if (tab) {
+      adState.tab = tab.dataset.adTab;
+      paintAdSettings();
+      return;
+    }
+    const group = event.target.closest('[data-ad-group]');
+    if (group) {
+      adState.group = group.dataset.adGroup;
+      paintAdSettings();
+      return;
+    }
+    const toggle = event.target.closest('[data-slot-toggle]');
+    if (toggle) {
+      const placement = toggle.dataset.slotToggle;
+      const next = !toggle.classList.contains('is-on');
+      toggle.disabled = true;
+      try {
+        const result = await api(`/api/admin/ads/placements/${encodeURIComponent(placement)}`, { method: 'PATCH', body: { enabled: next } });
+        adState.placements = result.placements;
+        toast(next ? 'جایگاه روشن شد.' : 'جایگاه خاموش شد.', 'success');
+        paintAdSettings();
+      } catch (error) {
+        toggle.disabled = false;
+        toast(error.message, 'error');
+      }
+      return;
+    }
+    const saveSlot = event.target.closest('[data-slot-save]');
+    if (saveSlot) {
+      const placement = saveSlot.dataset.slotSave;
+      const body = {
+        pricePerThousand: Number($(`[data-slot-price="${placement}"]`)?.value || 0) * 10,
+        minimumBudget: Number($(`[data-slot-min="${placement}"]`)?.value || 0) * 10,
+      };
+      const duration = $(`[data-slot-duration="${placement}"]`);
+      if (duration) body.durationSeconds = Number(duration.value || 0);
+      saveSlot.disabled = true;
+      try {
+        const result = await api(`/api/admin/ads/placements/${encodeURIComponent(placement)}`, { method: 'PATCH', body });
+        adState.placements = result.placements;
+        toast('جایگاه ذخیره شد.', 'success');
+        paintAdSettings();
+      } catch (error) {
+        saveSlot.disabled = false;
+        toast(error.message, 'error');
+      }
+      return;
+    }
+    if (event.target.closest('[data-ad-save]')) {
+      const settings = {};
+      $$('[data-ad-setting]').forEach((input) => {
+        settings[input.dataset.adSetting] = input.type === 'checkbox' ? (input.checked ? '1' : '0') : input.value;
+      });
+      try {
+        const result = await api('/api/admin/ads/settings', { method: 'PATCH', body: { settings } });
+        adState.settings = result.settings;
+        adState.policy = result.policy;
+        toast('تنظیمات ذخیره شد.', 'success');
+      } catch (error) {
+        toast(error.message, 'error');
+      }
+      return;
+    }
+    const review = event.target.closest('[data-ad-review]');
+    if (review) {
+      const status = review.dataset.adReview;
+      if (status === 'rejected' && !(await confirmDialog({
+        title: 'رد کمپین',
+        message: 'با رد کمپین، بودجه مصرف‌نشده به کیف پول برمی‌گردد و فایل آپلودی از هاست پاک می‌شود.',
+        confirmLabel: 'رد کن',
+      }))) return;
+      review.disabled = true;
+      try {
+        const result = await api(`/api/admin/ads/campaigns/${encodeURIComponent(review.dataset.adId)}/review`, { method: 'POST', body: { status } });
+        toast(status === 'active' ? 'کمپین تأیید شد.' : status === 'rejected' ? 'کمپین رد شد و فایل پاک شد.' : 'وضعیت تغییر کرد.', 'success');
+        if (result.creativePurged) toast('فایل آپلودی از هاست حذف شد.', 'success');
+        await renderAdSettings();
+        adState.tab = 'review';
+        paintAdSettings();
+      } catch (error) {
+        review.disabled = false;
+        toast(error.message, 'error');
+      }
+      return;
+    }
+    const ownerFilter = event.target.closest('[data-ad-owner]');
+    if (ownerFilter) {
+      $$('[data-ad-owner]').forEach((button) => button.classList.toggle('is-active', button === ownerFilter));
+      const data = await api(`/api/admin/ads/campaigns${ownerFilter.dataset.adOwner ? `?owner=${ownerFilter.dataset.adOwner}` : ''}`);
+      adState.campaigns = data.items || [];
+      $('#ad-body').innerHTML = adTabMarkup();
+    }
+  });
+
+  document.addEventListener('submit', async (event) => {
+    if (event.target.id !== 'owner-ad-form') return;
+    event.preventDefault();
+    const form = event.target;
+    const submit = $('button[type="submit"]', form);
+    submit.disabled = true;
+    try {
+      const body = new FormData(form);
+      const response = await fetch('/api/admin/ads/campaigns', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'X-CSRF-Token': state.csrf },
+        body,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error?.message || 'ثبت کمپین ناموفق بود.');
+      toast('کمپین مالک فعال شد.', 'success');
+      await renderAdSettings();
+      adState.tab = 'owner';
+      paintAdSettings();
+    } catch (error) {
+      toast(error.message, 'error');
+      submit.disabled = false;
+    }
+  });
+
   /* --------------------------------------------------------------- deploy */
   const DEPLOY_SNIPPETS = {
     'deploy-manual': 'cd ~/filmwork && git fetch origin && git reset --hard origin/main',
@@ -1843,7 +2169,25 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
         </details>
 
         <details>
-          <summary>۱۰. عیب‌یابی سریع</summary>
+          <summary>۱۰. تنظیمات تبلیغات (جایگاه‌ها، تعرفه، بررسی و کمپین مالک)</summary>
+          <div class="guide__body">
+            <p style="margin:0 0 8px"><b>سه نوع تبلیغ، هشت جایگاه:</b> ویدیویی ۴ جایگاه (پیش از پخش، میان‌پخش، پس از پخش، لایه توقف) · بنری ۳ جایگاه (روی پلیر ۷۲۸×۹۰، بنر توقف ۳۰۰×۲۵۰، بنر قبل از دانلود ۱۰۸۰×۱۹۲۰) · لینکی ۱ جایگاه (دکمه لینک زیر فایل در ربات).</p>
+            <ul>
+              <li><b>روشن/خاموش:</b> هر جایگاه یک کلید دارد. خاموش یعنی حتی اگر کمپین فعال باشد، هیچ تبلیغی در آن جایگاه سرو نمی‌شود و آن جایگاه از فرم تبلیغ‌دهنده هم حذف می‌شود.</li>
+              <li><b>مدت نمایش:</b> برای هر جایگاه ویدیویی/بنری مدت پیش‌فرض را تعیین کنید؛ برای کمپین‌ها هم مقدار جدا ذخیره می‌شود. «دکمه رد کردن پس از» مشخص می‌کند کاربر چند ثانیه بعد بتواند تبلیغ را رد کند.</li>
+              <li><b>تعرفه:</b> CPM، CPC لینکی، حداقل بودجه و سقف روزانه؛ حدود مجاز در سرور اعمال می‌شود.</li>
+              <li><b>حجم فایل:</b> حداکثر مگابایت ویدیو و کیلوبایت تصویر؛ آپلود بزرگ‌تر رد می‌شود.</li>
+              <li><b>تأیید خودکار:</b> خاموش = هر کمپین کاربر در «صف بررسی» می‌ماند تا تأیید کنید. روشن = مستقیم فعال می‌شود.</li>
+              <li><b>رد کمپین:</b> بودجه مصرف‌نشده به کیف پول برمی‌گردد و فایل آپلودی از هاست حذف می‌شود (اگر فایل آپلودی باشد). زمان پاک‌سازی پشتیبان هم قابل تنظیم است.</li>
+              <li><b>کمپین مالک:</b> بدون کسر از کیف پول و با ساخت فوری؛ فایل را آپلود کنید یا لینک بدهید.</li>
+              <li><b>قوانین:</b> متن «قوانین تبلیغات» در فرم تبلیغ‌دهنده نمایش داده می‌شود.</li>
+            </ul>
+            <div class="callout">${ICONS.info}<span>دسترسی‌ها: تبلیغ‌دهنده فقط کمپین خودش را می‌بیند؛ اعداد این صفحه فقط برای مالک است و هر تغییر در رویدادهای پنل ثبت می‌شود.</span></div>
+          </div>
+        </details>
+
+        <details>
+          <summary>۱۱. عیب‌یابی سریع</summary>
           <div class="guide__body">
             <ul>
               <li><b>۴۰۴ روی کنسول:</b> جلسه منقضی شده یا شناسه شما در <code>ADMIN_OWNER_IDS</code> نیست؛ دوباره <code>/panel</code> بزنید.</li>

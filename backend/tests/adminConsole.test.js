@@ -198,6 +198,88 @@ test('deleting a user removes the account and every dependent row', async () => 
   assert.equal((await call(`/api/admin/users/${victim.id}/phone`)).status, 404);
 });
 
+test('ad settings expose the seven placements in three groups with a working policy', async () => {
+  const config = await call('/api/admin/ads/settings');
+  assert.equal(config.status, 200);
+  assert.equal(config.data.placements.length, 8);
+  const groups = config.data.placements.reduce((acc, slot) => {
+    acc[slot.group] = (acc[slot.group] || 0) + 1;
+    return acc;
+  }, {});
+  assert.deepEqual(groups, { video: 4, banner: 3, link: 1 });
+  assert.equal(config.data.policy.maxVideoMb, 8);
+  assert.equal(config.data.policy.defaultVideoDuration, 15);
+  assert.equal(config.data.policy.autoApprove, false);
+});
+
+test('the owner switches a placement off and on, and saves its duration', async () => {
+  const off = await call('/api/admin/ads/placements/banner_player', { method: 'PATCH', body: { enabled: false } });
+  assert.equal(off.status, 200);
+  assert.equal(off.data.placements.find((slot) => slot.placement === 'banner_player').enabled, false);
+  const on = await call('/api/admin/ads/placements/banner_player', { method: 'PATCH', body: { enabled: true } });
+  assert.equal(on.data.placements.find((slot) => slot.placement === 'banner_player').enabled, true);
+  const timed = await call('/api/admin/ads/placements/pre_roll', { method: 'PATCH', body: { durationSeconds: 20, pricePerThousand: 60000 } });
+  const slot = timed.data.placements.find((entry) => entry.placement === 'pre_roll');
+  assert.equal(slot.durationSeconds, 20);
+  assert.equal(slot.cpm, 60000);
+  assert.equal((await call('/api/admin/ads/placements/nope', { method: 'PATCH', body: { enabled: true } })).status, 422);
+});
+
+test('ad settings are validated, clamped and persisted', async () => {
+  const saved = await call('/api/admin/ads/settings', {
+    method: 'PATCH',
+    body: { settings: { 'ads.max_video_mb': '9999', 'ads.auto_approve': '1', 'ads.cpm_video': '75000', 'ads.rules': 'قوانین تازه' } },
+  });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.data.settings['ads.max_video_mb'], '100', 'clamped to the upper bound');
+  assert.equal(saved.data.settings['ads.auto_approve'], '1');
+  assert.equal(saved.data.policy.cpm.video, 75000);
+  assert.equal(saved.data.policy.autoApprove, true);
+  assert.equal(saved.data.settings['ads.rules'], 'قوانین تازه');
+  await call('/api/admin/ads/settings', { method: 'PATCH', body: { settings: { 'ads.auto_approve': '0' } } });
+});
+
+test('the review queue approves and rejects; rejection purges the creative', async () => {
+  const created = await call('/api/admin/ads/campaigns', {
+    method: 'POST',
+    body: { campaignName: 'کمپین مالک تست', headline: 'تبلیغ آزمایشی مالک', placement: 'pre_roll', creativeUrl: 'https://example.com/ad.mp4' },
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.data.campaign.status, 'active');
+  assert.equal(created.data.campaign.ownerCampaign, true);
+  const list = await call('/api/admin/ads/campaigns?owner=owner');
+  assert.ok(list.data.items.some((ad) => ad.id === created.data.campaign.id));
+  const rejected = await call(`/api/admin/ads/campaigns/${created.data.campaign.id}/review`, {
+    method: 'POST',
+    body: { status: 'rejected', note: 'کیفیت پایین' },
+  });
+  assert.equal(rejected.status, 200);
+  assert.equal(rejected.data.status, 'rejected');
+  const after = await call('/api/admin/ads/campaigns');
+  const row = after.data.items.find((ad) => ad.id === created.data.campaign.id);
+  assert.equal(row.status, 'rejected');
+  assert.equal(row.reviewNote, 'کیفیت پایین');
+});
+
+test('owner campaigns need no wallet balance and no budget', async () => {
+  const created = await call('/api/admin/ads/campaigns', {
+    method: 'POST',
+    body: { campaignName: 'کمپین بدون بودجه', headline: 'رایگان برای مالک', placement: 'banner_player', creativeUrl: 'https://example.com/banner.png' },
+  });
+  assert.equal(created.status, 201);
+  const dashboard = await call('/api/admin/ads/dashboard');
+  assert.ok(dashboard.data.totals.ownerCampaigns >= 1);
+  assert.ok(Array.isArray(dashboard.data.byGroup));
+});
+
+test('the ads dashboard and config only offer enabled placements', async () => {
+  await call('/api/admin/ads/placements/banner_download', { method: 'PATCH', body: { enabled: false } });
+  const config = await call('/api/config');
+  assert.equal(config.status, 200);
+  assert.ok(!config.data.placementPrices.some((price) => price.placement === 'banner_download'));
+  await call('/api/admin/ads/placements/banner_download', { method: 'PATCH', body: { enabled: true } });
+});
+
 test('the host self-check reports the runtime, not a crash', async () => {
   const report = await call('/api/admin/diagnostics');
   assert.equal(report.status, 200);

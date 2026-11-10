@@ -394,19 +394,25 @@ app.get('/api/health', asyncRoute(async (_req, res) => {
 }));
 
 app.get('/api/config', asyncRoute(async (_req, res) => {
+  // Only placements the owner has switched on are offered to advertisers.
   const prices = await query(
-    `SELECT placement, display_name_fa, price_per_thousand, minimum_budget, currency
-     FROM ad_placement_prices WHERE is_active = TRUE ORDER BY FIELD(placement, 'pre_roll', 'timed_banner', 'pause_overlay')`,
-  );
+    `SELECT placement, slot_group, display_name_fa, price_per_thousand, minimum_budget,
+            default_duration_seconds, currency
+     FROM ad_placement_prices
+     WHERE is_active = TRUE AND is_enabled = TRUE
+     ORDER BY display_order, placement`,
+  ).catch(() => []);
   const username = String(process.env.AUTH_BOT_USERNAME || '').replace(/^@/, '');
   res.setHeader('Cache-Control', 'public, max-age=300');
   res.json({
     authBotUrl: username ? `https://t.me/${encodeURIComponent(username)}` : null,
     placementPrices: prices.map((price) => ({
       placement: price.placement,
+      group: price.slot_group || 'video',
       label: price.display_name_fa,
       cpm: Number(price.price_per_thousand),
       minimumBudget: Number(price.minimum_budget),
+      durationSeconds: Number(price.default_duration_seconds || 0),
       currency: price.currency,
     })),
   });
@@ -880,14 +886,22 @@ app.post('/api/download', requireUser, asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/ads/serve', optionalUser, asyncRoute(async (req, res) => {
-  const placement = asEnum(req.query.placement, 'جایگاه', ['pre_roll', 'timed_banner', 'pause_overlay']);
+  const placement = asEnum(req.query.placement, 'جایگاه', adSettingsLib.PLACEMENT_KEYS);
+  const settings = await adPlatform.readSettings().catch(() => ({ ...adSettingsLib.DEFAULTS }));
+  const policy = adSettingsLib.adPolicy(settings);
+  const slot = await query(
+    'SELECT is_enabled, is_active FROM ad_placement_prices WHERE placement = :placement LIMIT 1',
+    { placement },
+  ).catch(() => []);
+  if (slot[0] && (!slot[0].is_enabled || !slot[0].is_active)) return res.json({ ad: null });
   const rows = await query(
     `SELECT public_id, headline, body, placement, asset_type, creative_url,
-            skip_after_seconds, budget, spent
+            target_url, skip_after_seconds, duration_seconds, skip_after_seconds, budget, spent,
+            owner_campaign
      FROM ads
      WHERE placement = :placement AND status = 'active'
        AND starts_at <= UTC_TIMESTAMP(3) AND ends_at > UTC_TIMESTAMP(3)
-       AND spent < budget
+       AND (owner_campaign = TRUE OR spent < budget)
      ORDER BY id DESC LIMIT 100`,
     { placement },
   );
@@ -904,7 +918,9 @@ app.get('/api/ads/serve', optionalUser, asyncRoute(async (req, res) => {
       assetType: row.asset_type,
       creativeUrl: row.creative_url,
       tunnelUrl: `/api/ad-tunnel/${encodeURIComponent(row.public_id)}`,
-      skipAfterSeconds: row.skip_after_seconds,
+      skipAfterSeconds: Number(row.skip_after_seconds ?? policy.skipAfterSeconds),
+      durationSeconds: Number(row.duration_seconds || policy.defaultVideoDuration),
+      targetUrl: row.target_url || null,
       session: adSession,
     },
   });
@@ -1113,7 +1129,8 @@ app.post(
   asyncRoute(async (req, res) => {
     let uploadedPath = req.file?.path || null;
     try {
-      const placement = asEnum(req.body?.placement, 'جایگاه', ['pre_roll', 'timed_banner', 'pause_overlay']);
+      const placement = asEnum(req.body?.placement, 'جایگاه', adSettingsLib.PLACEMENT_KEYS);
+      const adPolicy = adSettingsLib.adPolicy(await adPlatform.readSettings().catch(() => ({ ...adSettingsLib.DEFAULTS })));
       const campaignName = asString(req.body?.campaignName, 'نام کمپین', { min: 3, max: 180 });
       const headline = asString(req.body?.headline, 'عنوان تبلیغ', { min: 3, max: 180 });
       const body = asString(req.body?.body, 'متن تبلیغ', { max: 1000, optional: true });
@@ -1130,16 +1147,34 @@ app.post(
 
       let creativeUrl;
       let assetType;
+      let creativeLocalPath = null;
       if (req.file) {
         const appUrl = String(process.env.APP_URL || '').replace(/\/$/, '');
         creativeUrl = `${appUrl}/uploads/${encodeURIComponent(req.file.filename)}`;
+        creativeLocalPath = req.file.filename;
         assetType = req.file.mimetype.startsWith('video/') ? 'video' : 'image';
       } else {
         creativeUrl = asHttpUrl(req.body?.creativeUrl, 'فایل تبلیغ', { httpsOnly: isProduction });
         assetType = asEnum(req.body?.assetType, 'نوع فایل', ['video', 'image']);
       }
-      if (placement === 'pre_roll') {
-        assert(assetType === 'video', 422, 'VIDEO_REQUIRED', 'جایگاه پیش‌نمایش به فایل ویدیویی نیاز دارد.');
+      const slotMeta = adSettingsLib.placementMeta(placement);
+      if (slotMeta.asset === 'video') {
+        assert(assetType === 'video', 422, 'VIDEO_REQUIRED', 'این جایگاه به فایل ویدیویی نیاز دارد.');
+      }
+      // Owner rules: upload caps and local files are stored with the campaign so a
+      // rejection can delete them from the host.
+      if (req.file) {
+        const limitMb = assetType === 'video' ? adPolicy.maxVideoMb : adPolicy.maxImageKb / 1024;
+        assert(req.file.size / (1024 * 1024) <= limitMb, 422, 'CREATIVE_TOO_LARGE',
+          assetType === 'video'
+            ? `حجم ویدیو حداکثر ${adPolicy.maxVideoMb} مگابایت است.`
+            : `حجم تصویر حداکثر ${adPolicy.maxImageKb} کیلوبایت است.`);
+        if (assetType === 'image') assert(req.file.size / 1024 <= adPolicy.maxImageKb, 422, 'IMAGE_TOO_LARGE', `حجم تصویر حداکثر ${adPolicy.maxImageKb} کیلوبایت است.`);
+      }
+      if (adPolicy.linkAllowlist.length && targetUrl) {
+        const host = (() => { try { return new URL(targetUrl).hostname.toLowerCase(); } catch { return ''; } })();
+        const allowed = adPolicy.linkAllowlist.some((entry) => host === entry || host.endsWith(`.${entry.replace(/^\*\./, '')}`));
+        assert(allowed, 422, 'LINK_NOT_ALLOWED', 'دامنه مقصد در فهرست مجاز تنظیمات تبلیغات نیست.');
       }
 
       const publicId = crypto.randomUUID();
@@ -1165,12 +1200,12 @@ app.post(
         const [adResult] = await connection.execute(
           `INSERT INTO ads
             (public_id, advertiser_id, campaign_name, headline, body, placement, asset_type,
-             creative_url, target_url, telegram_post_text, telegram_buttons, unit_price,
-             budget, skip_after_seconds, starts_at, ends_at)
+             creative_url, creative_local_path, target_url, telegram_post_text, telegram_buttons,
+             unit_price, budget, skip_after_seconds, duration_seconds, starts_at, ends_at, status)
            VALUES
             (:publicId, :userId, :campaignName, :headline, :body, :placement, :assetType,
-             :creativeUrl, :targetUrl, :postText, :buttons, :unitPrice,
-             :budget, :skipAfter, :startsAt, :endsAt)`,
+             :creativeUrl, :localPath, :targetUrl, :postText, :buttons,
+             :unitPrice, :budget, :skipAfter, :duration, :startsAt, :endsAt, :status)`,
           {
             publicId,
             userId: req.user.id,
@@ -1180,7 +1215,10 @@ app.post(
             placement,
             assetType,
             creativeUrl,
+            localPath: creativeLocalPath,
             targetUrl,
+            duration: slotMeta.group === 'banner' ? adPolicy.defaultBannerDuration : adPolicy.defaultVideoDuration,
+            status: adPolicy.autoApprove ? 'active' : 'pending',
             postText: telegramPostText,
             buttons: JSON.stringify(buttons),
             unitPrice: prices[0].price_per_thousand,
@@ -1789,6 +1827,100 @@ app.post('/api/admin/users/:userId/wallet-credit', requireAdmin, requireAdminCsr
   res.status(201).json({ wallet: result });
 }));
 
+/* -------------------------------------------------------- ad platform (owner) */
+const adPlatform = require('./services/adPlatform');
+const adSettingsLib = require('./services/adSettings');
+
+const adStoreKind = () => contentStore().kind;
+
+app.get('/api/admin/ads/settings', requireAdmin, asyncRoute(async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const payload = adStoreKind() === 'demo'
+    ? await contentStore().readAdSettings()
+    : { settings: await adPlatform.readSettings(), placements: await adPlatform.readPlacements() };
+  res.json({
+    ...payload,
+    groups: adSettingsLib.GROUPS,
+    policy: adSettingsLib.adPolicy(payload.settings),
+  });
+}));
+
+app.patch('/api/admin/ads/settings', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  const payload = adStoreKind() === 'demo'
+    ? await contentStore().writeAdSettings(req.body?.settings || {})
+    : { settings: await adPlatform.writeSettings(req.body?.settings || {}), placements: await adPlatform.readPlacements() };
+  await query(
+    "INSERT INTO admin_events (kind, title, detail) VALUES ('ad', 'تنظیمات تبلیغات ذخیره شد', :detail)",
+    { detail: Object.keys(req.body?.settings || {}).length + ' مورد' },
+  ).catch(() => {});
+  res.json({ ...payload, policy: adSettingsLib.adPolicy(payload.settings) });
+}));
+
+app.patch('/api/admin/ads/placements/:placement', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  const placements = adStoreKind() === 'demo'
+    ? await contentStore().updateAdPlacement(req.params.placement, req.body || {})
+    : await adPlatform.updatePlacement(req.params.placement, req.body || {});
+  res.json({ placements });
+}));
+
+app.get('/api/admin/ads/dashboard', requireAdmin, asyncRoute(async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(adStoreKind() === 'demo' ? await contentStore().adDashboard() : await adPlatform.adDashboard());
+}));
+
+app.get('/api/admin/ads/campaigns', requireAdmin, asyncRoute(async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const items = adStoreKind() === 'demo'
+    ? await contentStore().listAdCampaigns({ status: req.query.status, owner: req.query.owner })
+    : await adPlatform.listCampaigns({ status: req.query.status, owner: req.query.owner });
+  res.json({ items });
+}));
+
+/** Approve/reject/pause a campaign. Rejection refunds unspent budget and purges uploads. */
+app.post('/api/admin/ads/campaigns/:adId/review', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  const status = asEnum(req.body?.status, 'وضعیت', ['active', 'rejected', 'paused', 'completed']);
+  const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 255) : '';
+  const result = adStoreKind() === 'demo'
+    ? await contentStore().reviewAdCampaign(req.params.adId, { status, note })
+    : await adPlatform.reviewCampaign(req.params.adId, { status, note });
+  await query(
+    "INSERT INTO admin_events (kind, title, detail) VALUES ('ad', :title, :detail)",
+    { title: `کمپین ${status === 'active' ? 'تأیید' : status === 'rejected' ? 'رد' : status} شد`, detail: note || req.params.adId },
+  ).catch(() => {});
+  res.json(result);
+}));
+
+/**
+ * Owner campaigns bypass the wallet entirely: the owner is the platform, so no
+ * balance is reserved and the campaign is created active (still subject to the
+ * per-placement on/off switch and the dates).
+ */
+app.post('/api/admin/ads/campaigns', requireAdmin, requireAdminCsrf, upload.single('creative'), asyncRoute(async (req, res) => {
+  const appUrl = String(process.env.APP_URL || '').replace(/\/$/, '');
+  const payload = {
+    campaignName: req.body?.campaignName,
+    headline: req.body?.headline,
+    body: req.body?.body,
+    placement: req.body?.placement,
+    targetUrl: req.body?.targetUrl,
+    durationSeconds: req.body?.durationSeconds,
+    budget: req.body?.budget,
+    startsAt: req.body?.startsAt,
+    endsAt: req.body?.endsAt,
+    creativeUrl: req.body?.creativeUrl,
+    creativeLocalPath: req.file ? req.file.filename : null,
+  };
+  if (req.file) payload.creativeUrl = `${appUrl}/uploads/${encodeURIComponent(req.file.filename)}`;
+  const created = adStoreKind() === 'demo'
+    ? await contentStore().createOwnerAdCampaign(payload)
+    : await adPlatform.createOwnerCampaign(payload);
+  await query(
+    "INSERT INTO admin_events (kind, title, detail) VALUES ('ad', 'کمپین مالک ساخته شد', :detail)",
+    { detail: String(payload.campaignName || '') },
+  ).catch(() => {});
+  res.status(201).json({ campaign: created });
+}));
+
 app.get('/api/admin/ads', requireAdmin, asyncRoute(async (_req, res) => {
   if (contentStore().kind === 'demo') {
     res.json({ items: await contentStore().listAds() });
@@ -1995,6 +2127,9 @@ async function start({ listen = true } = {}) {
   if (!campaignSettlementTimer) {
     campaignSettlementTimer = setInterval(() => {
       settleExpiredCampaigns().catch((error) => console.error('Expired campaign settlement failed', error));
+      if (contentStore().kind !== 'demo') {
+        adPlatform.purgeRejectedCreatives().catch((error) => console.error('Rejected creative purge failed', error));
+      }
     }, 5 * 60_000);
     campaignSettlementTimer.unref?.();
   }

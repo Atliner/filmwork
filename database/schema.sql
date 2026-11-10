@@ -217,27 +217,39 @@ CREATE TABLE IF NOT EXISTS advertiser_wallets (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS ad_placement_prices (
-  placement ENUM('pre_roll', 'timed_banner', 'pause_overlay') NOT NULL,
+  placement ENUM('pre_roll', 'mid_roll', 'post_play', 'pause_overlay',
+                 'banner_player', 'banner_pause', 'banner_download', 'link_file_button') NOT NULL,
+  slot_group ENUM('video', 'banner', 'link') NOT NULL DEFAULT 'video',
   display_name_fa VARCHAR(80) NOT NULL,
   price_per_thousand DECIMAL(15,2) NOT NULL,
+  default_duration_seconds SMALLINT UNSIGNED NOT NULL DEFAULT 15,
   minimum_budget DECIMAL(15,2) NOT NULL,
   currency CHAR(3) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'IRR',
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  display_order TINYINT UNSIGNED NOT NULL DEFAULT 0,
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (placement),
   CONSTRAINT chk_ad_price CHECK (price_per_thousand > 0 AND minimum_budget > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-INSERT INTO ad_placement_prices (placement, display_name_fa, price_per_thousand, minimum_budget, currency)
+INSERT INTO ad_placement_prices
+  (placement, slot_group, display_name_fa, price_per_thousand, default_duration_seconds,
+   minimum_budget, currency, is_enabled, display_order)
 VALUES
-  ('pre_roll', 'پیش‌نمایش ویدیویی', 4500000.00, 9000000.00, 'IRR'),
-  ('timed_banner', 'بنر زمان‌بندی‌شده زیر پلیر', 2800000.00, 5600000.00, 'IRR'),
-  ('pause_overlay', 'لایه هنگام توقف', 3200000.00, 6400000.00, 'IRR')
+  ('pre_roll', 'video', 'پیش از پخش (Pre-roll)', 50000.00, 15, 50000.00, 'IRR', TRUE, 1),
+  ('mid_roll', 'video', 'میان‌پخش (Mid-roll)', 45000.00, 15, 50000.00, 'IRR', TRUE, 2),
+  ('timed_banner', 'video', 'پس از پخش (Post-roll)', 45000.00, 10, 50000.00, 'IRR', TRUE, 3),
+  ('pause_overlay', 'video', 'لایه هنگام توقف (Pause)', 32000.00, 15, 50000.00, 'IRR', TRUE, 4),
+  ('banner_player', 'banner', 'بنر روی پلیر (۷۲۸×۹۰)', 50000.00, 8, 50000.00, 'IRR', TRUE, 5),
+  ('banner_pause', 'banner', 'بنر توقف (۳۰۰×۲۵۰)', 40000.00, 8, 50000.00, 'IRR', TRUE, 6),
+  ('banner_download', 'banner', 'بنر قبل از دانلود (۱۰۸۰×۱۹۲۰)', 60000.00, 8, 50000.00, 'IRR', TRUE, 7),
+  ('link_file_button', 'link', 'دکمه لینک زیر فایل (ربات)', 50000.00, 0, 50000.00, 'IRR', TRUE, 8)
 ON DUPLICATE KEY UPDATE
+  slot_group = VALUES(slot_group),
   display_name_fa = VALUES(display_name_fa),
-  price_per_thousand = VALUES(price_per_thousand),
-  minimum_budget = VALUES(minimum_budget),
-  currency = VALUES(currency);
+  default_duration_seconds = VALUES(default_duration_seconds),
+  display_order = VALUES(display_order);
 
 CREATE TABLE IF NOT EXISTS ads (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -259,6 +271,11 @@ CREATE TABLE IF NOT EXISTS ads (
   spent DECIMAL(15,2) NOT NULL DEFAULT 0.00,
   status ENUM('pending', 'active', 'paused', 'completed', 'rejected') NOT NULL DEFAULT 'pending',
   skip_after_seconds TINYINT UNSIGNED NOT NULL DEFAULT 5,
+  duration_seconds SMALLINT UNSIGNED NULL,
+  owner_campaign BOOLEAN NOT NULL DEFAULT FALSE,
+  creative_local_path VARCHAR(255) NULL,
+  review_note VARCHAR(255) NULL,
+  reviewed_at TIMESTAMP(3) NULL,
   starts_at TIMESTAMP(3) NOT NULL,
   ends_at TIMESTAMP(3) NOT NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -289,6 +306,13 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
   CONSTRAINT fk_wallet_tx_ad FOREIGN KEY (ad_id) REFERENCES ads(id) ON DELETE SET NULL,
   CONSTRAINT chk_wallet_tx_amount CHECK (amount > 0),
   CONSTRAINT chk_wallet_tx_balance CHECK (balance_after >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  setting_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  setting_value TEXT NULL,
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (setting_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS ad_events (

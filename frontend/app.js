@@ -544,6 +544,7 @@
         </div>
       </details>
       <div id="timed-banner-slot"></div>
+      <div id="pause-banner-slot" class="banner-slot"></div>
       <section class="player-info">
         <div class="player-info-main"><div class="player-title-row"><div><h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="original-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}</div><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="نشان کردن">${icons.heart}</button></div>
           <div class="hero-meta">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}</span>` : ''}<span class="meta-dot">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</span>${content.genres?.length ? `<span class="meta-dot">${content.genres.slice(0, 3).map(escapeHtml).join('، ')}</span>` : ''}</div>
@@ -588,6 +589,7 @@
   function destroyPlayer() {
     if (!state.player) return;
     clearTimeout(state.player.bannerTimer);
+    clearTimeout(state.player.pauseBannerTimer);
     state.player.saveProgress?.(true);
     state.player.externalAudio?.pause();
     state.player.cleanup.forEach((cleanup) => cleanup());
@@ -742,7 +744,15 @@
     on(video, 'durationchange', updateProgress);
     on(video, 'seeking', () => syncExternalAudio(true));
     on(video, 'ratechange', () => { if (player.externalAudio) player.externalAudio.playbackRate = video.playbackRate; refreshSettings(); });
-    on(video, 'ended', () => { player.externalAudio?.pause(); saveProgress(true); });
+    on(video, 'ended', () => {
+      player.externalAudio?.pause();
+      saveProgress(true);
+      // Post-roll: the owner's "پس از پخش" slot, if it is switched on.
+      if (video.currentTime > 0 && !player.postRollShown) {
+        player.postRollShown = true;
+        loadPlayerAd('timed_banner', '#timed-banner-slot', player);
+      }
+    });
     on(seek, 'input', () => { if (video.duration) video.currentTime = (Number(seek.value) / 1000) * video.duration; });
     on(volume, 'input', () => {
       const value = Number(volume.value);
@@ -775,7 +785,12 @@
     });
     shell.tabIndex = 0;
     syncPlayIcon(); refreshSettings();
-    player.bannerTimer = setTimeout(() => loadPlayerAd('timed_banner', '#timed-banner-slot', player), 8000);
+    // The owner controls both which slots exist and how long they show, so the
+    // banner slots are scheduled from config instead of a hardcoded placement.
+    // "پس از پخش" follows the player's own clip; the banner strip under the player
+    // is the owner's banner_player slot.
+    player.bannerTimer = setTimeout(() => loadPlayerAd('banner_player', '#timed-banner-slot', player), 8000);
+    player.pauseBannerTimer = setTimeout(() => loadPlayerAd('banner_pause', '#pause-banner-slot', player), 12_000);
   }
 
   async function bindPlayerSource(type) {
@@ -836,6 +851,13 @@
       if (!ad || state.player !== player) return;
       const host = $(selector);
       if (!host) return;
+      // The owner sets how many seconds a creative stays on screen.
+      document.documentElement.style.setProperty(`--ad-duration-${placement}`, `${Number(ad.durationSeconds || 8)}s`);
+      if (ad.durationSeconds) {
+        setTimeout(() => {
+          if (state.player === player) host.replaceChildren();
+        }, Number(ad.durationSeconds) * 1000);
+      }
       const media = ad.assetType === 'video'
         ? `<video src="${safeUrl(ad.creativeUrl)}" muted autoplay playsinline loop></video>`
         : `<img src="${safeUrl(ad.creativeUrl)}" alt="${escapeHtml(ad.headline)}">`;

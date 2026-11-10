@@ -340,6 +340,9 @@
   .timed-banner strong { display:block;font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
   .timed-banner p { color:#71717a;font-size:9px;margin:3px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
   .timed-banner>b { border:1px solid var(--hairline);border-radius:99px;padding:7px 10px;font-size:9px; }
+  /* Extra banner slots the owner can switch on (banner_pause), matching .timed-banner. */
+  .banner-slot:empty { display:none; }
+  .banner-slot .timed-banner { animation:fade-in .3s ease; }
 
   .form-field { display:block;margin-bottom:12px; }
   .form-field>span { display:block;color:#d4d4d8;font-size:11px;font-weight:700;margin:0 4px 7px; }
