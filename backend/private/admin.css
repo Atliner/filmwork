@@ -731,3 +731,8 @@ table.data .muted { color: var(--muted); font-size: 10.5px; }
   .ad-row__actions .button { flex: 1; }
   .ad-group-row { grid-template-columns: 1fr; }
 }
+
+.coupon-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: end; }
+.coupon-form > button { justify-self: start; }
+.coupon-limit-field[hidden] { display: none; }
+@media (max-width: 620px) { .coupon-form { grid-template-columns: 1fr; } }

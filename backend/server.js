@@ -55,6 +55,7 @@ const { deliverMedia } = require('./services/mediaDelivery');
 const { changeCampaignStatus, settleExpiredCampaigns } = require('./services/adAccounting');
 const { buildParseDraft, normalizeContentPayload, updateContentPayload } = require('./lib/contentParams');
 const { contentStore } = require('./services/contentStoreIndex');
+const couponService = require('./services/coupons');
 const { authBotService } = require('./bots/authBot');
 const { adminBotService } = require('./bots/adminBot');
 
@@ -1832,6 +1833,19 @@ const adPlatform = require('./services/adPlatform');
 const adSettingsLib = require('./services/adSettings');
 
 const adStoreKind = () => contentStore().kind;
+
+app.get('/api/admin/coupons', requireAdmin, asyncRoute(async (_req, res) => {
+  res.json({ items: await couponService.listCoupons() });
+}));
+app.post('/api/admin/coupons', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  res.status(201).json({ coupon: await couponService.createCoupon(req.body || {}) });
+}));
+app.delete('/api/admin/coupons/:couponId', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  res.json(await couponService.deleteCoupon(req.params.couponId));
+}));
+app.post('/api/advertiser/coupons/redeem', requireUser, requireRole('advertiser'), asyncRoute(async (req, res) => {
+  res.json({ wallet: await couponService.redeemCoupon(req.user.id, req.body?.code) });
+}));
 
 app.get('/api/admin/ads/settings', requireAdmin, asyncRoute(async (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');

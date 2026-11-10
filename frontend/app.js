@@ -955,7 +955,9 @@
         <div><span>هزینه کل</span><strong>${formatMoney(data.analytics?.spent)}</strong><small>کسرشده از کیف پول</small></div>
       </section>
       <div class="advertiser-top">
-        <section class="surface-panel wallet-card"><span class="wallet-label">موجودی قابل استفاده</span><strong class="wallet-balance">${formatMoney(data.wallet.balance, data.wallet.currency)}</strong><span class="wallet-currency">کیف پول امن کمپین‌ها</span></section>
+        <section class="surface-panel wallet-card"><span class="wallet-label">موجودی قابل استفاده</span><strong class="wallet-balance">${formatMoney(data.wallet.balance, data.wallet.currency)}</strong><span class="wallet-currency">کیف پول امن کمپین‌ها</span>
+          <form id="coupon-redemption-form" class="coupon-redemption"><label class="form-field"><span>کد افزایش موجودی</span><input class="form-input" name="code" maxlength="32" dir="ltr" autocomplete="off" required placeholder="کد تخفیف"></label><button class="primary-button" type="submit">اعمال کد</button></form>
+        </section>
         <section class="surface-panel"><h2>نقشه تعاملی جایگاه‌ها</h2><div class="placement-map"><div class="mock-player">نمای پلیر<button type="button" class="zone zone-pre ${state.selectedPlacement === 'pre_roll' ? 'selected' : ''}" data-placement="pre_roll">Pre-roll</button><button type="button" class="zone zone-pause ${state.selectedPlacement === 'pause_overlay' ? 'selected' : ''}" data-placement="pause_overlay">Pause overlay</button></div><button type="button" class="zone zone-banner ${state.selectedPlacement === 'timed_banner' ? 'selected' : ''}" data-placement="timed_banner">Timed banner below player</button></div><div class="price-cards">${priceCards}</div></section>
       </div>
       <div class="hub-layout">
@@ -1208,6 +1210,21 @@
     } catch (error) { toast(apiErrorMessage(error), 'error'); }
   }
 
+  async function redeemAdvertiserCoupon(form) {
+    const button = $('button[type="submit"]', form);
+    button.disabled = true;
+    try {
+      const result = await api('/advertiser/coupons/redeem', {
+        method: 'POST', body: JSON.stringify({ code: new FormData(form).get('code') }),
+      });
+      toast(`کد پذیرفته شد؛ ${formatMoney(result.wallet.added, result.wallet.currency)} به کیف پول اضافه شد.`);
+      await route();
+    } catch (error) {
+      toast(error.message || 'اعمال کد ناموفق بود.');
+      button.disabled = false;
+    }
+  }
+
   async function submitCampaign(form) {
     const button = $('button[type="submit"]', form);
     const values = Object.fromEntries(new FormData(form));
@@ -1393,6 +1410,7 @@
     if (event.target.id === 'auth-form') { event.preventDefault(); verifyLogin(event.target); }
     if (event.target.id === 'comment-form') { event.preventDefault(); submitComment(event.target); }
     if (event.target.id === 'campaign-form') { event.preventDefault(); submitCampaign(event.target); }
+    if (event.target.id === 'coupon-redemption-form') { event.preventDefault(); redeemAdvertiserCoupon(event.target); }
     if (event.target.id === 'home-search') {
       event.preventDefault();
       const term = String(new FormData(event.target).get('q') || '').trim();

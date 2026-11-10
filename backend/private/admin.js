@@ -204,6 +204,7 @@
     users: renderUsers,
     ads: renderAds,
     adsettings: renderAdSettings,
+    coupons: renderCoupons,
     deploy: renderDeploy,
     guide: renderGuide,
   };
@@ -1902,6 +1903,70 @@
     } catch (error) {
       toast(error.message, 'error');
       submit.disabled = false;
+    }
+  });
+
+  async function renderCoupons() {
+    const root = $('#view-root');
+    const data = await api('/api/admin/coupons');
+    const rows = (data.items || []).map((coupon) => `
+      <tr><td><code dir="ltr">${esc(coupon.code)}</code></td><td>${faNum(coupon.creditAmount)} ریال</td>
+      <td>${coupon.usageLimit === null ? 'همه کاربران، هر نفر یک‌بار' : `${faNum(coupon.usageLimit)} کاربر`}</td>
+      <td>${faNum(coupon.usedCount)}${coupon.usageLimit === null ? '' : ` از ${faNum(coupon.usageLimit)}`}</td>
+      <td><button class="button button--danger button--xs" type="button" data-coupon-delete="${esc(coupon.id)}" data-coupon-code="${esc(coupon.code)}">حذف</button></td></tr>`).join('');
+    root.innerHTML = `<section class="view">
+      <div class="page-head"><div><h1>کدهای تخفیف تبلیغ‌دهندگان</h1><p>اعتبار کد مستقیماً به کیف پول تبلیغ‌دهنده اضافه می‌شود؛ هر کاربر از هر کد فقط یک‌بار استفاده می‌کند.</p></div></div>
+      <article class="panel"><div class="panel__head"><div><h2>ساخت کد جدید</h2><p>نوع مصرف را با سقف تعداد استفاده تعیین کنید.</p></div></div>
+        <div class="panel__body"><form id="coupon-create-form" class="coupon-form">
+          <label class="field"><span>کد دلخواه (خالی = ساخت خودکار)</span><input class="input" name="code" maxlength="32" dir="ltr" placeholder="WELCOME2026"></label>
+          <label class="field"><span>اعتبار کیف پول (ریال)</span><input class="input" name="creditAmount" type="number" min="1" step="1" required></label>
+          <label class="field"><span>تعداد کاربران</span><select class="input" name="usageLimit"><option value="1">یک‌بار مصرف — فقط یک کاربر</option><option value="">همه کاربران — هر نفر یک‌بار</option><option value="custom">تعداد مشخص</option></select></label>
+          <label class="field coupon-limit-field" hidden><span>حداکثر تعداد کاربر</span><input class="input" name="customLimit" type="number" min="1" step="1" value="10"></label>
+          <button class="button button--primary" type="submit">ساخت کد</button>
+        </form></div>
+      </article>
+      <article class="panel"><div class="panel__head"><div><h2>کدهای ساخته‌شده</h2><p>${faNum((data.items || []).length)} کد</p></div></div>
+        <div class="panel__body"><div class="table-wrap"><table class="table"><thead><tr><th>کد</th><th>اعتبار</th><th>محدودیت</th><th>استفاده‌شده</th><th>عملیات</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="muted">هنوز کدی ساخته نشده است.</td></tr>'}</tbody></table></div></div>
+      </article>
+    </section>`;
+    const select = $('[name="usageLimit"]', root);
+    const limitField = $('.coupon-limit-field', root);
+    select.addEventListener('change', () => { limitField.hidden = select.value !== 'custom'; });
+  }
+
+  document.addEventListener('submit', async (event) => {
+    if (event.target.id !== 'coupon-create-form') return;
+    event.preventDefault();
+    const form = event.target;
+    const select = $('[name="usageLimit"]', form);
+    const usageLimit = select.value === '' ? null : select.value === 'custom' ? Number($('[name="customLimit"]', form).value) : Number(select.value);
+    const button = $('button[type="submit"]', form);
+    button.disabled = true;
+    try {
+      const result = await api('/api/admin/coupons', { method: 'POST', body: {
+        code: $('[name="code"]', form).value.trim(),
+        creditAmount: Number($('[name="creditAmount"]', form).value),
+        usageLimit,
+      } });
+      toast(`کد ${result.coupon.code} ساخته شد.`, 'success');
+      await renderCoupons();
+    } catch (error) {
+      toast(error.message, 'error');
+      button.disabled = false;
+    }
+  });
+  document.addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-coupon-delete]');
+    if (!button) return;
+    if (!(await confirmDialog({ title: 'حذف کد تخفیف', message: `کد «${esc(button.dataset.couponCode)}» حذف شود؟ کاربران دیگر نمی‌توانند از آن استفاده کنند.`, confirmLabel: 'حذف کد' }))) return;
+    button.disabled = true;
+    try {
+      await api(`/api/admin/coupons/${encodeURIComponent(button.dataset.couponDelete)}`, { method: 'DELETE' });
+      toast('کد تخفیف حذف شد.', 'success');
+      await renderCoupons();
+    } catch (error) {
+      toast(error.message, 'error');
+      button.disabled = false;
     }
   });
 

@@ -294,7 +294,7 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id BIGINT UNSIGNED NOT NULL,
   ad_id BIGINT UNSIGNED NULL,
-  transaction_type ENUM('credit', 'campaign_reserve', 'refund', 'adjustment') NOT NULL,
+  transaction_type ENUM('credit', 'campaign_reserve', 'refund', 'adjustment', 'coupon_credit') NOT NULL,
   amount DECIMAL(15,2) NOT NULL,
   balance_after DECIMAL(15,2) NOT NULL,
   reference VARCHAR(190) NULL,
@@ -306,6 +306,32 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
   CONSTRAINT fk_wallet_tx_ad FOREIGN KEY (ad_id) REFERENCES ads(id) ON DELETE SET NULL,
   CONSTRAINT chk_wallet_tx_amount CHECK (amount > 0),
   CONSTRAINT chk_wallet_tx_balance CHECK (balance_after >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS advertiser_coupons (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  code VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  credit_amount DECIMAL(15,2) NOT NULL,
+  usage_limit INT UNSIGNED NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_advertiser_coupon_code (code),
+  CONSTRAINT chk_coupon_credit CHECK (credit_amount > 0),
+  CONSTRAINT chk_coupon_usage_limit CHECK (usage_limit IS NULL OR usage_limit > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS advertiser_coupon_redemptions (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  coupon_id BIGINT UNSIGNED NOT NULL,
+  user_id BIGINT UNSIGNED NOT NULL,
+  credit_amount DECIMAL(15,2) NOT NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_coupon_redemption_user (coupon_id, user_id),
+  KEY idx_coupon_redemptions_user (user_id, created_at),
+  CONSTRAINT fk_coupon_redemption_coupon FOREIGN KEY (coupon_id) REFERENCES advertiser_coupons(id) ON DELETE CASCADE,
+  CONSTRAINT fk_coupon_redemption_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT chk_coupon_redemption_credit CHECK (credit_amount > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS app_settings (
