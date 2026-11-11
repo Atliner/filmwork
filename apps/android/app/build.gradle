@@ -1,0 +1,29 @@
+plugins { id 'com.android.application' }
+
+String appUrl = providers.environmentVariable('FILMWORK_APP_URL').orElse('').get().trim()
+if (!appUrl.matches('^https://[^/]+(/.*)?$')) {
+    throw new GradleException('Set FILMWORK_APP_URL to the HTTPS public website URL before building (never use the origin IP).')
+}
+
+android {
+    namespace 'com.filmwork.app'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'com.filmwork.app'
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName '1.0.0'
+        buildConfigField 'String', 'APP_URL', '"' + appUrl.replace('\\', '\\\\').replace('"', '\\"') + '"'
+    }
+    buildFeatures { buildConfig true }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    buildTypes {
+        release {
+            // Installed wrapper stays stable while the live website updates independently.
+            // Supply a private release key before distributing upgrades of the native shell.
+            signingConfig signingConfigs.debug
+            minifyEnabled false
+        }
+    }
+}
