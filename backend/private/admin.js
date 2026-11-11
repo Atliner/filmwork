@@ -202,6 +202,7 @@
     new: () => renderEditor(null),
     edit: (assetId) => renderEditor(assetId),
     users: renderUsers,
+    settings: renderGlobalSettings,
     ads: renderAds,
     adsettings: renderAdSettings,
     coupons: renderCoupons,
@@ -1906,6 +1907,31 @@
     }
   });
 
+  async function renderGlobalSettings() {
+    const root = $('#view-root');
+    const data = await api('/api/admin/site-settings');
+    const s = data.settings || {};
+    const text = (key, label, help, attrs = '') => `<label class="field"><span>${label}</span><input class="input" data-site-setting="${key}" value="${esc(s[key] || '')}" ${attrs}>${help ? `<small class="muted">${help}</small>` : ''}</label>`;
+    const check = (key, label, help) => `<label class="setting-check"><input type="checkbox" data-site-setting="${key}" ${s[key] === '1' ? 'checked' : ''}><span><b>${label}</b><small>${help}</small></span></label>`;
+    root.innerHTML = `<section class="view"><div class="page-head"><div><h1>تنظیمات کلی سایت</h1><p>ظاهر سایت، محدودیت تحویل فایل، کپشن ربات و پخش آنلاین</p></div></div>
+      <form id="global-settings-form">
+        <article class="panel"><div class="panel__head"><div><h2>ظاهر سایت</h2><p>نام و شعار نمایشی در صفحهٔ عمومی</p></div></div><div class="panel__body setting-grid">
+          ${text('site.name', 'نام سایت', '', 'maxlength="80" required')}${text('site.tagline', 'شعار سایت', '', 'maxlength="180"')}
+        </div></article>
+        <article class="panel"><div class="panel__head"><div><h2>محدودیت دانلود از ربات</h2><p>برای دریافت‌های پی‌درپی؛ صفر در سقف روزانه یعنی نامحدود</p></div></div><div class="panel__body setting-grid">
+          ${text('download.burst_limit', 'دانلود پشت‌سرهم پیش از مکث', '', 'type="number" min="1" max="100"')}
+          ${text('download.delay_minutes', 'زمان انتظار هر مرحله (دقیقه، جداشده با کاما)', 'مثال: 1,2,10,30')}
+          ${text('download.reset_minutes', 'بازنشانی شمارش پس از چند دقیقه بی‌دانلود', '', 'type="number" min="1" max="1440"')}
+          ${text('download.daily_cap', 'سقف دانلود روزانه (۰ = نامحدود)', '', 'type="number" min="0" max="10000"')}
+        </div></article>
+        <article class="panel"><div class="panel__head"><div><h2>کپشن زیر فایل ارسالی</h2><p>متغیرهای قابل استفاده: {title} و {version}</p></div></div><div class="panel__body"><label class="field"><span>قالب کپشن</span><textarea class="input" data-site-setting="download.caption" maxlength="900" rows="5">${esc(s['download.caption'] || '')}</textarea><small class="muted">متغیرهای قابل استفاده: {title} و {version}</small></label></div></article>
+        <article class="panel"><div class="panel__head"><div><h2>پخش آنلاین</h2><p>گزینه‌های کنترل پلیر و محدودیت نشست</p></div></div><div class="panel__body setting-grid">
+          ${check('player.enabled', 'فعال‌بودن پخش آنلاین', 'خاموش‌کردن کامل پخش آنلاین')}
+          ${check('player.button_visible', 'نمایش دکمه پخش آنلاین', 'نمایش دکمه برای کاربران')}
+        </div></article><button class="button button--primary" type="submit">ذخیره تنظیمات</button>
+      </form></section>`;
+  }
+
   async function renderCoupons() {
     const root = $('#view-root');
     const data = await api('/api/admin/coupons');
@@ -1934,6 +1960,18 @@
     select.addEventListener('change', () => { limitField.hidden = select.value !== 'custom'; });
   }
 
+  document.addEventListener('submit', async (event) => {
+    if (event.target.id !== 'global-settings-form') return;
+    event.preventDefault();
+    const settings = {};
+    $$('[data-site-setting]', event.target).forEach((input) => {
+      settings[input.dataset.siteSetting] = input.type === 'checkbox' ? (input.checked ? '1' : '0') : input.value;
+    });
+    try {
+      await api('/api/admin/site-settings', { method: 'PATCH', body: { settings } });
+      toast('تنظیمات کلی ذخیره شد.', 'success');
+    } catch (error) { toast(error.message, 'error'); }
+  });
   document.addEventListener('submit', async (event) => {
     if (event.target.id !== 'coupon-create-form') return;
     event.preventDefault();

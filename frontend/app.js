@@ -18,6 +18,10 @@
     routeVisits: 0,
   };
 
+  function onlinePlaybackVisible() {
+    return state.config?.player?.enabled !== false && state.config?.player?.buttonVisible !== false;
+  }
+
   const app = document.getElementById('app');
   const loader = document.getElementById('initial-loader');
   const modalRoot = document.getElementById('modal-root');
@@ -297,7 +301,7 @@
         </div>
         ${content.description ? `<p class="hero-description">${escapeHtml(content.description)}</p>` : ''}
         <div class="action-row">
-          <button type="button" class="primary-button" data-route="/player/${encodeURIComponent(content.id)}">${icons.play} پخش آنلاین</button>
+          ${onlinePlaybackVisible() ? `<button type="button" class="primary-button" data-route="/player/${encodeURIComponent(content.id)}">${icons.play} پخش آنلاین</button>` : ''}
           <button type="button" class="secondary-button" data-open-download="${escapeHtml(content.id)}">${icons.download} دریافت فایل</button>
           <button type="button" class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="افزودن به علاقه‌مندی‌ها">${icons.heart}</button>
         </div>
@@ -340,7 +344,7 @@
       </div>
       ${heroMarkup(hero)}
       <div class="page-shell">
-        ${continueItems.length ? `<section class="content-section resume-section"><div class="section-head"><div><h2>ادامه تماشا</h2><p>از همان‌جایی که رها کردید</p></div></div><div class="resume-scroller">${continueItems.map(continueCard).join('')}</div></section>` : ''}
+        ${continueItems.length && onlinePlaybackVisible() ? `<section class="content-section resume-section"><div class="section-head"><div><h2>ادامه تماشا</h2><p>از همان‌جایی که رها کردید</p></div></div><div class="resume-scroller">${continueItems.map(continueCard).join('')}</div></section>` : ''}
         <section class="content-section">
           <div class="section-head"><div><h2>تازه‌های فیلم‌ورک</h2><p>جدیدترین فیلم‌ها و سریال‌های اضافه‌شده</p></div><button class="text-button" data-route="/search">مشاهده همه</button></div>
           <div class="media-scroller">${latest.length ? latest.map(mediaCard).join('') : mediaCard(hero)}</div>
@@ -482,7 +486,7 @@
           ${(content.directors?.length || content.cast?.length) ? `<div class="credit-line"><span>کارگردان</span> ${namesMarkup(content.directors, { limit: 3 })}</div>` : ''}
           ${content.cast?.length ? `<div class="credit-line"><span>بازیگران</span> ${namesMarkup(content.cast, { limit: 5 })}</div>` : ''}
           ${content.description ? `<p class="description">${escapeHtml(content.description)}</p>` : ''}
-          <div class="action-row"><button class="primary-button" data-route="/player/${encodeURIComponent(content.id)}">${icons.play} پخش آنلاین</button><button class="secondary-button" data-open-download="${escapeHtml(content.id)}">${icons.download} انتخاب نسخه</button><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="علاقه‌مندی">${icons.heart}</button></div>
+          <div class="action-row">${onlinePlaybackVisible() ? `<button class="primary-button" data-route="/player/${encodeURIComponent(content.id)}">${icons.play} پخش آنلاین</button>` : ''}<button class="secondary-button" data-open-download="${escapeHtml(content.id)}">${icons.download} انتخاب نسخه</button><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="علاقه‌مندی">${icons.heart}</button></div>
         </div>
       </div>
     </section>
@@ -513,6 +517,10 @@
 
   async function renderPlayer(assetId, version) {
     setActiveNav('');
+    if (state.config?.player?.enabled === false) {
+      app.innerHTML = `<div class="page-shell page-top">${emptyState('پخش آنلاین غیرفعال است', 'برای دریافت نسخه‌ها از دکمه دریافت فایل استفاده کنید.')}</div>`;
+      return;
+    }
     setHeaderLabel('پخش و دانلود', true);
     const [contentData, mediaData, progressData] = await Promise.all([
       api(`/contents/${encodeURIComponent(assetId)}`),
@@ -902,7 +910,7 @@
         <div><strong>${formatNumber(stats.completed)}</strong><span>اثر کامل‌شده</span></div>
         <div><strong>${formatNumber(stats.favorites)}</strong><span>نشان‌شده</span></div>
       </section>
-      ${progress.length ? `<section class="content-section account-progress"><div class="section-head"><div><h2>ادامه تماشا</h2><p>آخرین فعالیت پخش شما</p></div><button class="text-button" data-route="/home">مشاهده همه</button></div><div class="resume-scroller">${progress.map(continueCard).join('')}</div></section>` : ''}
+      ${progress.length && onlinePlaybackVisible() ? `<section class="content-section account-progress"><div class="section-head"><div><h2>ادامه تماشا</h2><p>آخرین فعالیت پخش شما</p></div><button class="text-button" data-route="/home">مشاهده همه</button></div><div class="resume-scroller">${progress.map(continueCard).join('')}</div></section>` : ''}
       <div class="account-groups">
         <section><h2>کتابخانه من</h2><div class="menu-list surface-panel">
           <button class="menu-row" data-route="/favorites"><div><span class="menu-icon">♡</span><span>نشان‌شده‌ها</span></div><small>${formatNumber(stats.favorites)} ←</small></button>
@@ -1427,6 +1435,13 @@
       if (state.token) tasks.push(api('/me').catch(() => null));
       const [config, me] = await Promise.all(tasks);
       state.config = config;
+      const siteName = config.site?.name || 'Filmwork';
+      document.title = `${siteName} | سینمای شخصی شما`;
+      const brand = $('.header-brand-center strong');
+      if (brand) brand.textContent = siteName;
+      const brandButton = $('.header-brand-center');
+      if (brandButton) brandButton.setAttribute('aria-label', `${siteName}، صفحه نخست`);
+      if (config.site?.tagline) $('meta[name="description"]')?.setAttribute('content', config.site.tagline);
       if (me?.user) state.user = me.user;
     } catch (error) {
       console.warn('Initial configuration could not be loaded:', error);

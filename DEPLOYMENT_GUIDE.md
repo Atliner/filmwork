@@ -69,7 +69,9 @@ openssl rand -hex 32   # PHONE_ENCRYPTION_KEY
 | `AUTH_CODE_PEPPER` | HMAC کدهای ورود و داده‌های ضدتقلب |
 | `PHONE_ENCRYPTION_KEY` | AES-256-GCM شماره تلفن‌ها؛ تغییر آن اطلاعات قبلی را غیرقابل رمزگشایی می‌کند |
 | `AUTH_BOT_TOKEN` | token ربات عمومی |
-| `AUTH_BOT_USERNAME` | username ربات عمومی، بدون `@` |
+| `AUTH_BOT_USERNAME` | username ربات ورود، بدون `@` |
+| `DOWNLOAD_BOT_TOKEN` | توکن ربات سوم، مخصوص تحویل فایل |
+| `DOWNLOAD_BOT_USERNAME` | username ربات دریافت فایل، بدون `@` |
 | `ADMIN_BOT_TOKEN` | token کاملاً مجزای ربات خصوصی |
 | `ADMIN_OWNER_IDS` | Telegram numeric user ID مالک‌ها، با کاما |
 | `*_CHAT_ID` | شناسه عددی سه کانال، معمولاً با `-100` |
@@ -84,9 +86,10 @@ openssl rand -hex 32   # PHONE_ENCRYPTION_KEY
 
 ### 5.1 ربات عمومی
 
-1. در BotFather ربات بسازید و token را در `AUTH_BOT_TOKEN` بگذارید.
-2. ربات را در هر سه کانال storage به‌عنوان administrator اضافه کنید. دسترسی مشاهده و ارسال پیام لازم است تا `copyMessage` بتواند فایل را برای کاربر کپی کند.
-3. کاربر باید یک‌بار `/start` را در این ربات بزند. دکمه contact فقط شماره متعلق به همان Telegram user را قبول می‌کند.
+1. در BotFather ربات ورود بسازید و token/username را در `AUTH_BOT_TOKEN` و `AUTH_BOT_USERNAME` بگذارید. این ربات فقط ورود و صدور کد را انجام می‌دهد.
+2. یک ربات سوم بسازید و token/username را در `DOWNLOAD_BOT_TOKEN` و `DOWNLOAD_BOT_USERNAME` بگذارید. کاربران باید پیش از دریافت فایل یک‌بار `/start` را در آن بزنند.
+3. ربات دانلود را در هر سه کانال storage administrator کنید. دسترسی لازم است تا `copyMessage` فایل را برای کاربر کپی کند.
+4. ربات خصوصی مدیریت همچنان از `ADMIN_BOT_TOKEN` استفاده می‌کند و مستقل می‌ماند.
 
 ### 5.2 ربات خصوصی مدیریت
 

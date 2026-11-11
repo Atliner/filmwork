@@ -208,6 +208,7 @@ class AdminBotService {
     this.started = false;
     this.sweeper = null;
     this.finalizeTimers = new Map();
+    this.updateQueues = new Map();
   }
 
   async start() {
@@ -250,12 +251,20 @@ class AdminBotService {
   }
 
   registerHandlers() {
-    this.bot.command('start', async (ctx) => {
+    const detach = (handler, label) => (ctx) => setImmediate(async () => {
+      const startedAt = Date.now();
+      try { await handler(ctx); } catch (error) { await this.reportError(ctx, error); }
+      finally {
+        const durationMs = Date.now() - startedAt;
+        if (durationMs > 5000) console.warn(`Admin bot ${label} handler took ${durationMs}ms (chat ${ctx.chat?.id || 'unknown'}).`);
+      }
+    });
+    this.bot.command('start', detach(async (ctx) => {
       if (!authorized(ctx) || !ctx.from || !ownerIds().has(String(ctx.from.id))) return;
       await safeReply(ctx, 'ربات خصوصی مدیریت Filmwork فعال است. برای ورود امن /panel را ارسال کنید.');
-    });
+    }, 'start'));
 
-    this.bot.command('panel', async (ctx) => {
+    this.bot.command('panel', detach(async (ctx) => {
       if (!ctx.from || !ownerIds().has(String(ctx.from.id))) return;
       const appUrl = String(process.env.APP_URL || '').replace(/\/$/, '');
       if (!/^https:\/\//i.test(appUrl) && process.env.NODE_ENV === 'production') {
@@ -274,7 +283,7 @@ class AdminBotService {
         reply_markup: { inline_keyboard: [[{ text: 'ورود به پنل مالک', url: link }]] },
         link_preview_options: { is_disabled: true },
       });
-    });
+    }, 'panel'));
 
     const updateHandler = async (ctx) => {
       if (!authorized(ctx)) return;
@@ -303,8 +312,25 @@ class AdminBotService {
       if (parsed) await this.insertParsedContent(ctx, parsed, message);
     };
 
-    this.bot.on('message', (ctx) => updateHandler(ctx).catch((error) => this.reportError(ctx, error)));
-    this.bot.on('channel_post', (ctx) => updateHandler(ctx).catch((error) => this.reportError(ctx, error)));
+    // Telegraf's polling loop awaits each handler before dispatching the next update.
+    // Media replication/DB work can take a long time, so detach this work from the
+    // polling queue while still reporting failures; /start and later updates stay responsive.
+    const dispatch = (ctx) => {
+      const chatKey = String(ctx.chat?.id ?? 'unknown');
+      const previous = this.updateQueues.get(chatKey) || Promise.resolve();
+      const task = previous.then(async () => {
+        const startedAt = Date.now();
+        try { await updateHandler(ctx); } catch (error) { await this.reportError(ctx, error); }
+        finally {
+          const durationMs = Date.now() - startedAt;
+          if (durationMs > 5000) console.warn(`Admin bot message handler took ${durationMs}ms (chat ${chatKey}).`);
+        }
+      });
+      this.updateQueues.set(chatKey, task);
+      task.finally(() => { if (this.updateQueues.get(chatKey) === task) this.updateQueues.delete(chatKey); });
+    };
+    this.bot.on('message', dispatch);
+    this.bot.on('channel_post', dispatch);
     this.bot.catch((error, ctx) => this.reportError(ctx, error));
   }
 

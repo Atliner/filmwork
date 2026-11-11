@@ -736,3 +736,10 @@ table.data .muted { color: var(--muted); font-size: 10.5px; }
 .coupon-form > button { justify-self: start; }
 .coupon-limit-field[hidden] { display: none; }
 @media (max-width: 620px) { .coupon-form { grid-template-columns: 1fr; } }
+.setting-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.setting-grid .field { min-width: 0; }
+.setting-check { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.025); }
+.setting-check input { margin-top: 5px; accent-color: var(--violet); }
+.setting-check span, .setting-check small { display: block; }
+.setting-check small { color: var(--muted); margin-top: 3px; }
+@media (max-width: 620px) { .setting-grid { grid-template-columns: 1fr; } }

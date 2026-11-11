@@ -52,12 +52,15 @@ const {
   ownerIds,
 } = require('./middleware/auth');
 const { deliverMedia } = require('./services/mediaDelivery');
+const { checkDownloadAllowance } = require('./services/downloadPolicy');
 const { changeCampaignStatus, settleExpiredCampaigns } = require('./services/adAccounting');
 const { buildParseDraft, normalizeContentPayload, updateContentPayload } = require('./lib/contentParams');
 const { contentStore } = require('./services/contentStoreIndex');
+const siteSettings = require('./services/siteSettings');
 const couponService = require('./services/coupons');
 const { authBotService } = require('./bots/authBot');
 const { adminBotService } = require('./bots/adminBot');
+const { downloadBotService } = require('./bots/downloadBot');
 
 const app = express();
 const isProduction = process.env.NODE_ENV === 'production';
@@ -381,6 +384,7 @@ app.get('/api/health', asyncRoute(async (_req, res) => {
   const bots = {
     authentication: authBotService.started,
     administration: adminBotService.started,
+    download: downloadBotService.started,
     status: { ...botStatus },
   };
   const healthy = database.ok === true;
@@ -404,9 +408,14 @@ app.get('/api/config', asyncRoute(async (_req, res) => {
      ORDER BY display_order, placement`,
   ).catch(() => []);
   const username = String(process.env.AUTH_BOT_USERNAME || '').replace(/^@/, '');
-  res.setHeader('Cache-Control', 'public, max-age=300');
+  const downloadUsername = String(process.env.DOWNLOAD_BOT_USERNAME || '').replace(/^@/, '');
+  const publicSettings = await siteSettings.read().catch(() => siteSettings.DEFAULTS);
+  res.setHeader('Cache-Control', 'public, max-age=60');
   res.json({
+    site: { name: publicSettings['site.name'], tagline: publicSettings['site.tagline'] },
+    player: { enabled: publicSettings['player.enabled'] === '1', buttonVisible: publicSettings['player.button_visible'] === '1' },
     authBotUrl: username ? `https://t.me/${encodeURIComponent(username)}` : null,
+    downloadBotUrl: downloadUsername ? `https://t.me/${encodeURIComponent(downloadUsername)}` : null,
     placementPrices: prices.map((price) => ({
       placement: price.placement,
       group: price.slot_group || 'video',
@@ -869,7 +878,9 @@ app.post('/api/download', requireUser, asyncRoute(async (req, res) => {
     { mediaId },
   );
   assert(mediaRows[0], 404, 'MEDIA_NOT_FOUND', 'فایل پیدا نشد.');
-  const result = await deliverMedia(mediaId, req.user);
+  const isOwner = new Set(String(process.env.ADMIN_OWNER_IDS || '').split(',').map((id) => id.trim()).filter(Boolean)).has(String(req.user.tg_user_id));
+  const settings = isOwner ? await siteSettings.read() : (await checkDownloadAllowance(req.user.id)).settings;
+  const result = await deliverMedia(mediaId, req.user, settings);
   await query(
     `INSERT INTO download_history (user_id, media_link_id, delivery_method)
      VALUES (:userId, :mediaLinkId, :deliveryMethod)`,
@@ -1834,6 +1845,13 @@ const adSettingsLib = require('./services/adSettings');
 
 const adStoreKind = () => contentStore().kind;
 
+app.get('/api/admin/site-settings', requireAdmin, asyncRoute(async (_req, res) => {
+  res.json({ settings: await siteSettings.read() });
+}));
+app.patch('/api/admin/site-settings', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  res.json({ settings: await siteSettings.write(req.body?.settings || {}) });
+}));
+
 app.get('/api/admin/coupons', requireAdmin, asyncRoute(async (_req, res) => {
   res.json({ items: await couponService.listCoupons() });
 }));
@@ -2060,7 +2078,7 @@ let botRetryTimer;
 let processGuardsInstalled = false;
 let shuttingDown = false;
 let botsStarting = false;
-const botStatus = { authentication: 'pending', administration: 'pending', lastError: null };
+const botStatus = { authentication: 'pending', administration: 'pending', download: 'pending', lastError: null };
 
 /**
  * Bots are started *after* HTTP is already serving, and their failure never takes the
@@ -2074,7 +2092,7 @@ async function startBots() {
   botsStarting = true;
   // Telegram can take several seconds (or hang behind a blocked network); never let
   // that delay the first HTTP response.
-  for (const key of ['authentication', 'administration']) {
+  for (const key of ['authentication', 'administration', 'download']) {
     if (botStatus[key] === 'pending') botStatus[key] = 'starting';
   }
   try {
@@ -2083,9 +2101,11 @@ async function startBots() {
     const pending = [];
     if (!authBotService.started && authBotService.bot === null) pending.push(['authentication', authBotService]);
     if (!adminBotService.started && adminBotService.bot === null) pending.push(['administration', adminBotService]);
+    if (!downloadBotService.started && downloadBotService.bot === null) pending.push(['download', downloadBotService]);
     if (!pending.length) {
       botStatus.authentication = authBotService.started ? 'started' : botStatus.authentication;
       botStatus.administration = adminBotService.started ? 'started' : botStatus.administration;
+      botStatus.download = downloadBotService.started ? 'started' : botStatus.download;
       return;
     }
     const results = await Promise.allSettled(pending.map(([, service]) => service.start()));
@@ -2189,6 +2209,7 @@ async function shutdown(signal) {
   await Promise.allSettled([
     authBotService.stop(signal),
     adminBotService.stop(signal),
+    downloadBotService.stop(signal),
   ]);
   if (httpServer) {
     await new Promise((resolve) => httpServer.close(resolve));

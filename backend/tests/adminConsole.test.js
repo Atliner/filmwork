@@ -78,6 +78,21 @@ test('writes without the CSRF header are rejected', async () => {
   assert.equal(response.status, 403);
 });
 
+test('owner can read and save global site, download and player settings', async () => {
+  const current = await call('/api/admin/site-settings');
+  assert.equal(current.status, 200);
+  assert.equal(current.data.settings['download.burst_limit'], '10');
+  const saved = await call('/api/admin/site-settings', { method: 'PATCH', body: { settings: {
+    'site.name': 'سینماگرام', 'download.burst_limit': '12', 'download.daily_cap': '0', 'player.enabled': '0',
+  } } });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.data.settings['site.name'], 'سینماگرام');
+  assert.equal(saved.data.settings['download.burst_limit'], '12');
+  assert.equal(saved.data.settings['player.enabled'], '0');
+  const invalid = await call('/api/admin/site-settings', { method: 'PATCH', body: { settings: { 'download.delay_minutes': '1,wait,3' } } });
+  assert.equal(invalid.status, 422);
+});
+
 test('overview reports counts for both types', async () => {
   const { status, data } = await call('/api/admin/stats');
   assert.equal(status, 200);
