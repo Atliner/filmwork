@@ -471,26 +471,27 @@ app.post('/api/auth/verify', asyncRoute(async (req, res) => {
       id: String(user.id),
       accountName: user.account_name,
       role: user.role,
+      isAdvertiser: true,
+      roles: ['user', 'advertiser'],
       createdAt: user.created_at,
     },
   });
 }));
 
 app.get('/api/me', requireUser, asyncRoute(async (req, res) => {
-  let wallet = null;
-  if (req.user.role === 'advertiser') {
-    const rows = await query(
-      'SELECT balance, currency FROM advertiser_wallets WHERE user_id = :id LIMIT 1',
-      { id: req.user.id },
-    );
-    wallet = rows[0] ? { balance: Number(rows[0].balance), currency: rows[0].currency } : { balance: 0, currency: 'IRR' };
-  }
+  const rows = await query(
+    'SELECT balance, currency FROM advertiser_wallets WHERE user_id = :id LIMIT 1',
+    { id: req.user.id },
+  );
+  const wallet = rows[0] ? { balance: Number(rows[0].balance), currency: rows[0].currency } : { balance: 0, currency: 'IRR' };
   res.setHeader('Cache-Control', 'no-store');
   res.json({
     user: {
       id: String(req.user.id),
       accountName: req.user.account_name,
       role: req.user.role,
+      isAdvertiser: true,
+      roles: ['user', 'advertiser'],
       createdAt: req.user.created_at,
       wallet,
     },
@@ -1654,6 +1655,8 @@ function ownerUserDto(row) {
     phoneMasked: maskPhone(phone),
     phoneLast4: row.phone_last4 || null,
     role: row.role,
+    isAdvertiser: true,
+    roles: ['user', 'advertiser'],
     status: row.status,
     walletBalance: Number(row.wallet_balance || 0),
     walletCurrency: row.wallet_currency || 'IRR',
@@ -1672,13 +1675,14 @@ app.get('/api/admin/users', requireAdmin, asyncRoute(async (req, res) => {
     return;
   }
   const search = typeof req.query.q === 'string' ? req.query.q.slice(0, 80) : '';
-  const role = ['user', 'advertiser'].includes(req.query.role) ? req.query.role : '';
+  const role = req.query.role === 'user' ? 'user' : '';
   const where = ["u.status <> 'deleted'"];
   const params = {};
   if (role) {
     where.push('u.role = :role');
     params.role = role;
   }
+  // Advertiser access is shared by every account; users.role is legacy metadata.
   if (search) {
     where.push("(u.account_name LIKE :search ESCAPE '!' OR u.tg_username LIKE :search ESCAPE '!' OR u.phone_last4 LIKE :search ESCAPE '!' OR CAST(u.tg_user_id AS CHAR) LIKE :search ESCAPE '!')");
     params.search = `%${String(search).replace(/[!%_]/g, (match) => `!${match}`)}%`;
@@ -1809,7 +1813,6 @@ app.post('/api/admin/users/:userId/wallet-credit', requireAdmin, requireAdminCsr
       { userId: req.params.userId },
     );
     assert(users[0], 404, 'USER_NOT_FOUND', 'کاربر پیدا نشد.');
-    assert(users[0].role === 'advertiser', 409, 'ADVERTISER_REQUIRED', 'ابتدا نقش کاربر را به تبلیغ‌دهنده تغییر دهید.');
     await connection.execute(
       'INSERT INTO advertiser_wallets (user_id, balance) VALUES (:userId, 0) ON DUPLICATE KEY UPDATE user_id = VALUES(user_id)',
       { userId: req.params.userId },

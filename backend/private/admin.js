@@ -1385,7 +1385,7 @@
       <header class="user-card__head">
         ${userAvatar(user)}
         <div class="user-card__id"><strong>${esc(user.accountName)}</strong>
-          <span class="user-card__tags"><span class="tag">${user.role === 'advertiser' ? 'تبلیغ‌دهنده' : 'کاربر'}</span>
+          <span class="user-card__tags"><span class="tag">کاربر</span><span class="tag">تبلیغ‌دهنده</span>
           ${user.status === 'suspended' ? '<span class="tag tag--warn">مسدود</span>' : ''}</span>
         </div>
       </header>
@@ -1420,7 +1420,7 @@
     if (userFilters.role) params.set('role', userFilters.role);
     const data = await api(`/api/admin/users${params.toString() ? `?${params}` : ''}`);
     const items = data.items || [];
-    const advertisers = items.filter((user) => user.role === 'advertiser').length;
+    const advertisers = items.length;
     const wallets = items.reduce((sum, user) => sum + Number(user.walletBalance || 0), 0);
 
     root.innerHTML = `<section class="view">

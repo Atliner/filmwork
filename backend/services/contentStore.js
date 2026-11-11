@@ -166,7 +166,7 @@ const store = {
       safe('resolutions', () => query(`SELECT resolution, COUNT(*) AS count FROM media_links WHERE is_active = TRUE
              GROUP BY resolution ORDER BY count DESC LIMIT 6`), []),
       safe('users', () => count(`SELECT COUNT(*) AS total,
-                    SUM(role = 'advertiser') AS advertisers,
+                    COUNT(*) AS advertisers,
                     SUM(created_at >= DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 30 DAY)) AS newThisMonth
              FROM users WHERE status = 'active'`), {}),
       safe('ads', () => count(`SELECT COUNT(*) AS total, SUM(status = 'pending') AS pending,

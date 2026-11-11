@@ -547,7 +547,7 @@ function maskDemoPhone(phone) {
 }
 
 store.listUsers = async (filters = {}) => ensureState().users
-  .filter((user) => (filters.role ? user.role === filters.role : true))
+  .filter((user) => (filters.role === 'user' ? user.role === 'user' : true))
   .filter((user) => {
     const term = String(filters.q || '').trim().toLowerCase();
     if (!term) return true;
@@ -564,6 +564,8 @@ store.listUsers = async (filters = {}) => ensureState().users
   phoneMasked: maskDemoPhone(user.phone),
   phoneLast4: user.phone ? user.phone.slice(-4) : null,
   role: user.role,
+  isAdvertiser: true,
+  roles: ['user', 'advertiser'],
   status: user.status,
   createdAt: user.createdAt,
   lastLoginAt: user.lastLoginAt,

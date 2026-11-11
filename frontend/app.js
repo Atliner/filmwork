@@ -881,7 +881,7 @@
   function roleSwitcher(active = 'user') {
     return `<nav class="role-switcher" aria-label="انتخاب محیط">
       <button class="${active === 'user' ? 'active' : ''}" data-route="/profile">کاربر</button>
-      ${state.user?.role === 'advertiser' ? `<button class="${active === 'advertiser' ? 'active' : ''}" data-route="/advertiser">تبلیغ‌دهنده</button>` : ''}
+      ${state.user ? `<button class="${active === 'advertiser' ? 'active' : ''}" data-route="/advertiser">تبلیغ‌دهنده</button>` : ''}
     </nav>`;
   }
 
@@ -903,7 +903,7 @@
       ${roleSwitcher('user')}
       <section class="account-hero">
         <div class="large-avatar">${escapeHtml(firstLetter(state.user.accountName))}</div>
-        <div><h1>${escapeHtml(state.user.accountName)}</h1><p>${state.user.role === 'advertiser' ? 'عضو و تبلیغ‌دهنده فیلم‌ورک' : 'عضو فیلم‌ورک'} · از ${formatDate(state.user.createdAt)}</p></div>
+        <div><h1>${escapeHtml(state.user.accountName)}</h1><p>عضو و تبلیغ‌دهنده فیلم‌ورک · از ${formatDate(state.user.createdAt)}</p></div>
       </section>
       <section class="account-stats" aria-label="آمار حساب">
         <div><strong>${formatNumber(watchedHours)}</strong><span>ساعت تماشا</span></div>
@@ -918,7 +918,7 @@
           <button class="menu-row" data-route="/search"><div>${icons.search}<span>کشف آثار تازه</span></div><small>جستجو ←</small></button>
         </div></section>
         <section><h2>حساب و دسترسی</h2><div class="menu-list surface-panel">
-          ${state.user.role === 'advertiser' ? `<button class="menu-row" data-route="/advertiser"><div>${icons.megaphone}<span>مرکز تبلیغ‌دهندگان</span></div><small>ورود ←</small></button>` : ''}
+          <button class="menu-row" data-route="/advertiser"><div>${icons.megaphone}<span>مرکز تبلیغ‌دهندگان</span></div><small>ورود ←</small></button>
           <button class="menu-row" type="button"><div><span class="menu-icon">✓</span><span>ورود امن تلگرام</span></div><small>فعال</small></button>
           <button class="menu-row danger-row" id="logout-user"><div><span class="menu-icon">↪</span><span>خروج از این دستگاه</span></div><small>←</small></button>
         </div></section>
@@ -931,10 +931,6 @@
     setHeaderLabel('تبلیغات');
     if (!state.user) {
       app.innerHTML = `<div class="page-shell page-top">${emptyState('مرکز تبلیغ‌دهندگان', 'برای مشاهده کیف پول و ساخت کمپین ابتدا وارد شوید.', '<button class="primary-button" style="margin-top:18px" data-login>ورود با تلگرام</button>')}</div>`;
-      return;
-    }
-    if (state.user.role !== 'advertiser') {
-      app.innerHTML = `<div class="page-shell page-top">${emptyState('حساب تبلیغ‌دهنده فعال نیست', 'فعال‌سازی نقش تبلیغ‌دهنده و شارژ اولیه کیف پول توسط مالک سامانه انجام می‌شود.')}</div>`;
       return;
     }
     const data = await api('/advertiser/profile');

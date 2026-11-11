@@ -174,7 +174,8 @@ test('the owner sees Telegram identity, masked phone and wallet per user', async
 
 test('users can be filtered by role and searched, and their phone revealed on demand', async () => {
   const advertisers = await call('/api/admin/users?role=advertiser');
-  assert.ok(advertisers.data.items.every((user) => user.role === 'advertiser'));
+  assert.ok(advertisers.data.items.length > 0);
+  assert.ok(advertisers.data.items.every((user) => user.isAdvertiser && user.roles.includes('user') && user.roles.includes('advertiser')));
   const target = advertisers.data.items[0];
   const revealed = await call(`/api/admin/users/${target.id}/phone`);
   assert.equal(revealed.status, 200);

@@ -50,7 +50,9 @@ async function optionalUser(req, _res, next) {
 function requireRole(role) {
   return function roleMiddleware(req, _res, next) {
     if (!req.user) return next(new AppError(401, 'AUTH_REQUIRED', 'برای ادامه وارد حساب شوید.'));
-    if (req.user.role !== role) {
+    // Every signed-in Filmwork account has both the regular-user and advertiser
+    // capabilities. `role` is retained for legacy display/filtering only.
+    if (role !== 'advertiser' && req.user.role !== role) {
       return next(new AppError(403, 'ROLE_REQUIRED', 'دسترسی لازم برای این بخش را ندارید.'));
     }
     next();
