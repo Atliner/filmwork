@@ -1373,11 +1373,8 @@
     </div>`;
   }
 
-  function userRoleSelect(user) {
-    return `<select class="select" style="height:32px;min-width:112px" data-user-role="${esc(user.id)}">
-      <option value="user" ${user.role === 'user' ? 'selected' : ''}>کاربر</option>
-      <option value="advertiser" ${user.role === 'advertiser' ? 'selected' : ''}>تبلیغ‌دهنده</option>
-    </select>`;
+  function userRoleSelect(_user) {
+    return '<span class="tag">کاربر · دسترسی هر دو پنل</span>';
   }
 
   function userCards(items) {

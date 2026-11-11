@@ -470,9 +470,8 @@ app.post('/api/auth/verify', asyncRoute(async (req, res) => {
     user: {
       id: String(user.id),
       accountName: user.account_name,
-      role: user.role,
+      role: 'user',
       isAdvertiser: true,
-      roles: ['user', 'advertiser'],
       createdAt: user.created_at,
     },
   });
@@ -489,9 +488,8 @@ app.get('/api/me', requireUser, asyncRoute(async (req, res) => {
     user: {
       id: String(req.user.id),
       accountName: req.user.account_name,
-      role: req.user.role,
+      role: 'user',
       isAdvertiser: true,
-      roles: ['user', 'advertiser'],
       createdAt: req.user.created_at,
       wallet,
     },
@@ -1654,9 +1652,8 @@ function ownerUserDto(row) {
     telegramChatUrl: row.tg_username ? `https://t.me/${row.tg_username}` : `tg://user?id=${row.tg_user_id}`,
     phoneMasked: maskPhone(phone),
     phoneLast4: row.phone_last4 || null,
-    role: row.role,
+    role: 'user',
     isAdvertiser: true,
-    roles: ['user', 'advertiser'],
     status: row.status,
     walletBalance: Number(row.wallet_balance || 0),
     walletCurrency: row.wallet_currency || 'IRR',
