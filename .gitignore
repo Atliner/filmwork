@@ -3,6 +3,13 @@ backend/.env
 *.pem
 *.key
 
+# Mobile and desktop build products
+apps/android/.gradle/
+apps/android/local.properties
+apps/android/app/build/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+
 # Dependencies and generated caches
 backend/node_modules/
 node_modules/
