@@ -70,25 +70,39 @@ class AuthBotService {
   }
 
   registerHandlers() {
-    this.bot.start(async (ctx) => {
+    const dispatch = (handler, label) => (ctx) => {
+      setImmediate(async () => {
+        const startedAt = Date.now();
+        try { await handler(ctx); } catch (error) { console.error('Auth bot handler failed:', telegramErrorDescription(error)); }
+        finally {
+          const durationMs = Date.now() - startedAt;
+          if (durationMs > 5000) console.warn(`Auth bot ${label} handler took ${durationMs}ms (chat ${ctx.chat?.id || 'unknown'}).`);
+        }
+      });
+    };
+    this.bot.start(dispatch(async (ctx) => {
       await ctx.reply(
         'برای ورود امن به Filmwork، شماره تلگرام خودتان را با دکمه زیر به اشتراک بگذارید. کد ورود فقط پنج دقیقه معتبر است.',
         Markup.keyboard([
           Markup.button.contactRequest('اشتراک شماره و دریافت کد'),
         ]).resize().oneTime(),
       );
-    });
+    }, 'start'));
 
-    this.bot.command('login', async (ctx) => {
+    this.bot.command('login', dispatch(async (ctx) => {
       await ctx.reply(
         'برای ساخت کد شش‌رقمی، شماره متعلق به همین حساب را ارسال کنید.',
         Markup.keyboard([
           Markup.button.contactRequest('دریافت کد ورود'),
         ]).resize().oneTime(),
       );
-    });
+    }, 'login'));
 
-    this.bot.on('contact', async (ctx) => {
+    this.bot.on('contact', (ctx) => {
+      // Do not let database work for a contact update block the long-poll queue.
+      setImmediate(() => {
+      const contactStartedAt = Date.now();
+      (async () => {
       const contact = ctx.message.contact;
       if (ctx.chat?.type !== 'private') {
         await ctx.reply('ورود فقط در گفت‌وگوی خصوصی با ربات انجام می‌شود.');
@@ -181,57 +195,24 @@ class AuthBotService {
         console.error('Auth bot contact handling failed:', error);
         await ctx.reply(`صدور کد ممکن نشد: ${String(error.message || error).slice(0, 250)}`, Markup.removeKeyboard());
       }
+      })().catch((error) => console.error('Auth bot contact task failed:', error)).finally(() => {
+        const durationMs = Date.now() - contactStartedAt;
+        if (durationMs > 5000) console.warn(`Auth bot contact handler took ${durationMs}ms (chat ${ctx.chat?.id || 'unknown'}).`);
+      });
+      });
     });
 
-    this.bot.on('message', async (ctx) => {
+    this.bot.on('message', dispatch(async (ctx) => {
       if (!ctx.message.contact && !ctx.message.text?.startsWith('/')) {
         await ctx.reply('برای دریافت کد، /login را بزنید و دکمه اشتراک شماره را انتخاب کنید.');
       }
-    });
+    }, 'message'));
 
     this.bot.catch((error) => {
       console.error('Auth bot update failed:', telegramErrorDescription(error));
     });
   }
 
-  ensureReady() {
-    if (!this.bot || !this.started) {
-      const error = new Error('Authentication bot is not running');
-      error.code = 'BOT_UNAVAILABLE';
-      throw error;
-    }
-  }
-
-  async sendDownloadNotice(chatId) {
-    this.ensureReady();
-    await this.bot.telegram.sendMessage(
-      chatId,
-      'کاربر گرامی، برای دریافت فایل حتما فیلترشکن یا پروکسی تلگرام خود را روشن کنید.',
-    );
-  }
-
-  async copyMedia(chatId, sourceChatId, messageId) {
-    this.ensureReady();
-    return this.bot.telegram.copyMessage(chatId, sourceChatId, messageId, {
-      protect_content: false,
-    });
-  }
-
-  async sendSubtitle(chatId, sourceChatId, messageId) {
-    this.ensureReady();
-    return this.bot.telegram.copyMessage(chatId, sourceChatId, messageId, {
-      caption: 'زیرنویس مجزای فایل بالا',
-      protect_content: false,
-    });
-  }
-
-  async sendFallbackLink(chatId, link) {
-    this.ensureReady();
-    return this.bot.telegram.sendMessage(chatId, 'اگر دریافت خودکار انجام نشد، پیام ذخیره‌شده را از این پیوند باز کنید:', {
-      reply_markup: { inline_keyboard: [[{ text: 'باز کردن فایل در تلگرام', url: link }]] },
-      link_preview_options: { is_disabled: true },
-    });
-  }
 
   async stop(reason = 'shutdown') {
     if (this.bot && this.started) {

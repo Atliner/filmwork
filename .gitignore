@@ -1,7 +1,17 @@
 # Secrets
 backend/.env
+backend/.env.*
+!backend/.env.example
 *.pem
 *.key
+
+# Packaged app build outputs and generated public URL config
+apps/android/.gradle/
+apps/android/local.properties
+apps/android/app/build/
+apps/desktop/node_modules/
+apps/desktop/dist/
+apps/desktop/app-config.json
 
 # Dependencies and generated caches
 backend/node_modules/
