@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta name="color-scheme" content="dark">
+  <title>پنل مدیریت | Filmwork</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/owner-console/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#console-main">رفتن به محتوای اصلی</a>
+  <div id="ambient" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <button class="topbar__menu" type="button" id="menu-toggle" aria-label="منوی مدیریت" aria-expanded="false" aria-controls="sidebar">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
+    <div class="topbar__brand">
+      <span class="brand-mark">F</span>
+      <span class="topbar__title">کنسول مدیریت</span>
+    </div>
+    <div class="topbar__actions">
+      <span class="pill pill--live" id="mode-pill"><i></i> جلسه امن</span>
+      <button class="ghost-button" type="button" id="logout">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 17l5-5-5-5M20 12H9M12 19H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/></svg>
+        خروج
+      </button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar" aria-label="بخش‌های مدیریت">
+      <nav class="sidebar__nav">
+        <p class="sidebar__caption">نمای کلی</p>
+        <button type="button" class="nav-item" data-view="overview">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-4H4zM14 8h6V4h-6z"/></svg>
+          <span>داشبورد</span>
+        </button>
+        <p class="sidebar__caption">محتوا</p>
+        <button type="button" class="nav-item" data-view="content">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5h16v13H4zM8 3.5v6m8-6v6M4 10h16"/></svg>
+          <span>همه محتوا</span>
+          <b data-count="contents">۰</b>
+        </button>
+        <button type="button" class="nav-item" data-view="new">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          <span>افزودن محتوا</span>
+        </button>
+        <p class="sidebar__caption">مدیریت</p>
+        <button type="button" class="nav-item" data-view="users">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.4"/><path d="M3.5 20c0-3.2 2.5-5.2 5.5-5.2s5.5 2 5.5 5.2M16.5 5.2A3.4 3.4 0 0 1 17 12M18 14.8c2 .7 3 2.4 3 5.2"/></svg>
+          <span>کاربران</span>
+        </button>
+        <button type="button" class="nav-item" data-view="ads">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h3l5 4V6L7 10zM17 9a4 4 0 0 1 0 6"/></svg>
+          <span>تبلیغات</span>
+          <b data-count="ads">۰</b>
+        </button>
+        <button type="button" class="nav-item" data-view="coupons">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v4a2 2 0 0 0 0 4v3H4v-3a2 2 0 0 0 0-4zM9 7v2m0 3v2m0 3v2"/></svg>
+          <span>کدهای تخفیف</span>
+        </button>
+        <button type="button" class="nav-item" data-view="settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 9 19.37a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.63 15 1.7 1.7 0 0 0 3.08 14H3v-4h.08A1.7 1.7 0 0 0 4.63 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.63h.01A1.7 1.7 0 0 0 10 3.08V3h4v.08A1.7 1.7 0 0 0 15 4.63a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9v.01A1.7 1.7 0 0 0 20.92 10H21v4h-.08A1.7 1.7 0 0 0 19.4 15Z"/></svg>
+          <span>تنظیمات کلی</span>
+        </button>
+        <button type="button" class="nav-item" data-view="adsettings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 9 19.37a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.63 15 1.7 1.7 0 0 0 3.08 14H3v-4h.08A1.7 1.7 0 0 0 4.63 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.63h.01A1.7 1.7 0 0 0 10 3.08V3h4v.08A1.7 1.7 0 0 0 15 4.63a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9v.01A1.7 1.7 0 0 0 20.92 10H21v4h-.08A1.7 1.7 0 0 0 19.4 15Z"/></svg>
+          <span>تنظیمات تبلیغات</span>
+        </button>
+        <button type="button" class="nav-item" data-view="deploy">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10m0-10 3.5 3.5M12 4 8.5 7.5M5 15v3.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V15"/></svg>
+          <span>به‌روزرسانی از گیت‌هاب</span>
+        </button>
+        <button type="button" class="nav-item" data-view="guide">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15H6.5A2.5 2.5 0 0 0 4 20.5zM4 20.5V5.5M8 7.5h7M8 11h7"/></svg>
+          <span>راهنمای ربات</span>
+        </button>
+      </nav>
+      <div class="sidebar__footer">
+        <p>Filmwork</p>
+        <span>کنسول خصوصی مالک — دسترسی فقط با پیوند یک‌بارمصرف ربات</span>
+      </div>
+    </aside>
+    <div class="sidebar-scrim" id="sidebar-scrim" hidden></div>
+
+    <main class="main" id="console-main" tabindex="-1">
+      <div id="view-root" aria-live="polite">
+        <div class="skeleton-grid-loading">
+          <div class="skeleton skeleton--hero"></div>
+          <div class="skeleton-cards">
+            <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div id="overlay-root"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <noscript><p class="noscript">برای استفاده از کنسول مدیریت، جاوااسکریپت را فعال کنید.</p></noscript>
+  <script src="/owner-console/app.js" defer></script>
+</body>
+</html>

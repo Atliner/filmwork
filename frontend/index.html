@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=5">
+  <meta name="theme-color" content="#08080d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Filmwork">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/icon-180.png">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Filmwork؛ تماشای آنلاین و دریافت امن فیلم و سریال از تلگرام">
+  <title>Filmwork | سینمای شخصی شما</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="bg-black text-white antialiased selection:bg-purple-600 selection:text-white">
+  <a class="skip-link" href="#main-content">رفتن به محتوای اصلی</a>
+  <div id="ambient" aria-hidden="true"></div>
+  <header id="site-header" class="site-header">
+    <div class="page-shell header-inner">
+      <div class="header-start">
+        <button class="brand" type="button" data-route="/home" aria-label="فیلم‌ورک، صفحه نخست">
+          <span class="brand-mark" aria-hidden="true"><span>F</span></span>
+          <span class="brand-word">FILMWORK</span>
+        </button>
+        <nav class="header-nav" aria-label="ناوبری اصلی دسکتاپ">
+          <button type="button" class="header-nav-item" data-nav="home" data-route="/home">خانه</button>
+          <button type="button" class="header-nav-item" data-nav="search" data-route="/search">جستجو</button>
+          <button type="button" class="header-nav-item" data-nav="favorites" data-route="/favorites">نشان‌شده‌ها</button>
+          <button type="button" class="header-nav-item" data-nav="downloads" data-route="/downloads">دانلودها</button>
+        </nav>
+      </div>
+      <button type="button" class="header-tool" data-route="/search" aria-label="جستجو و فیلترها">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h3m4 0h9M4 18h7m4 0h5"/><circle cx="16" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="13" cy="18" r="2"/></svg>
+      </button>
+      <button class="header-brand-center" type="button" data-route="/home" aria-label="Filmwork، صفحه نخست">
+        <strong>فیلم‌ورک</strong>
+        <small id="header-page-label">خانه</small>
+      </button>
+      <button type="button" class="profile-trigger" data-route="/profile" aria-label="حساب کاربری">
+        <span id="header-avatar">م</span>
+      </button>
+    </div>
+  </header>
+
+  <main id="main-content" tabindex="-1">
+    <div class="page-shell loading-page" id="initial-loader" aria-live="polite">
+      <div class="skeleton hero-skeleton"></div>
+      <div class="skeleton-line wide"></div><div class="skeleton-line"></div>
+      <div class="skeleton-grid"><div class="skeleton poster"></div><div class="skeleton poster"></div><div class="skeleton poster"></div><div class="skeleton poster"></div></div>
+      <span class="sr-only">در حال بارگذاری</span>
+    </div>
+    <div id="app" aria-live="polite"></div>
+  </main>
+
+  <nav class="floating-dock" aria-label="ناوبری اصلی">
+    <button type="button" class="dock-item" data-nav="home" data-route="/home" aria-label="خانه">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5h16v13H4zM8 3.5v6m8-6v6M4 10h16"/></svg><span>خانه</span><i></i>
+    </button>
+    <button type="button" class="dock-item" data-nav="search" data-route="/search" aria-label="جستجو">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7.5"/><path d="m20 20-3.6-3.6"/></svg><span>جستجو</span><i></i>
+    </button>
+    <button type="button" class="dock-item" data-nav="favorites" data-route="/favorites" aria-label="نشان‌شده‌ها">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v17l-6-4-6 4V4Z"/></svg><span>نشان‌شده‌ها</span><i></i>
+    </button>
+    <button type="button" class="dock-item" data-nav="downloads" data-route="/downloads" aria-label="دانلودها">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 6v9m0 0 4-4m-4 4-4-4M8 19h8"/></svg><span>دانلودها</span><i></i>
+    </button>
+  </nav>
+
+  <div id="modal-root"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <noscript><div class="noscript">برای اجرای Filmwork، جاوااسکریپت مرورگر را فعال کنید.</div></noscript>
+  <script>if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));</script>
+  <script src="/app.js" defer></script>
+</body>
+</html>

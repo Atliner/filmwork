@@ -1,0 +1,29 @@
+# Secrets
+backend/.env
+backend/.env.*
+!backend/.env.example
+*.pem
+*.key
+
+# Packaged app build outputs and generated public URL config
+apps/android/.gradle/
+apps/android/local.properties
+apps/android/app/build/
+apps/desktop/node_modules/
+apps/desktop/dist/
+apps/desktop/app-config.json
+
+# Dependencies and generated caches
+backend/node_modules/
+node_modules/
+.npm/
+*.log
+.DS_Store
+
+# Runtime creative uploads (persist outside Git)
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Test/coverage output
+coverage/
+.nyc_output/

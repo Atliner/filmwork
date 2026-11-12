@@ -1,0 +1,33 @@
+{
+  "name": "filmwork-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Production REST API and Telegram automation for Filmwork",
+  "main": "app.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18.18.0"
+  },
+  "scripts": {
+    "start": "node app.js",
+    "dev": "NODE_ENV=development node --watch app.js",
+    "test": "node --test tests/*.test.js",
+    "build:css": "tailwindcss -c tailwind.config.js -i ../frontend/tailwind.css -o ../frontend/styles.css --minify"
+  },
+  "dependencies": {
+    "body-parser": "^1.20.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.5.0",
+    "mysql2": "^3.12.0",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.17"
+  }
+}
