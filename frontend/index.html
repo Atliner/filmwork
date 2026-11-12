@@ -3,7 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=5">
-  <meta name="theme-color" content="#000000">
+  <meta name="theme-color" content="#08080d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Filmwork">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/icon-180.png">
   <meta name="color-scheme" content="dark">
   <meta name="description" content="Filmwork؛ تماشای آنلاین و دریافت امن فیلم و سریال از تلگرام">
   <title>Filmwork | سینمای شخصی شما</title>
@@ -58,6 +63,7 @@
   <div id="modal-root"></div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <noscript><div class="noscript">برای اجرای Filmwork، جاوااسکریپت مرورگر را فعال کنید.</div></noscript>
+  <script>if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));</script>
   <script src="/app.js" defer></script>
 </body>
 </html>

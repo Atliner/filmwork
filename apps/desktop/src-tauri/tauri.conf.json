@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Filmwork",
+  "version": "1.0.0",
+  "identifier": "ir.namdarcompost.filmwork",
+  "build": {
+    "frontendDist": "../web"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Filmwork",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 360,
+        "minHeight": 600,
+        "resizable": true,
+        "url": "https://namdarcompost.ir/#/home"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "shortDescription": "Filmwork movie and series platform",
+    "category": "Video",
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      }
+    }
+  }
+}
