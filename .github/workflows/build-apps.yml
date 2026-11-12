@@ -51,7 +51,7 @@ jobs:
           FILMWORK_APP_URL: ${{ inputs.public_app_url }}
         run: |
           $u = [Uri]$env:FILMWORK_APP_URL
-          if ($u.Scheme -ne "https:") { throw "HTTPS URL required" }
+          if ($u.Scheme -ne "https") { throw "HTTPS URL required" }
           @{ url = $u.AbsoluteUri } | ConvertTo-Json | Set-Content apps/desktop/app-config.json
       - name: Install dependencies
         working-directory: apps/desktop
