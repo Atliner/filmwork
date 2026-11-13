@@ -1,5 +1,7 @@
 # Secrets
 backend/.env
+backend/.env.*
+!backend/.env.example
 *.pem
 *.key
 
@@ -9,6 +11,9 @@ apps/android/local.properties
 apps/android/app/build/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
+apps/desktop/node_modules/
+apps/desktop/dist/
+apps/desktop/app-config.json
 
 # Dependencies and generated caches
 backend/node_modules/

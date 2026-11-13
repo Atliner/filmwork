@@ -76,6 +76,8 @@ test('chat ids must be numeric so storage replication cannot fail later', () => 
     APP_URL: 'https://stream.example.com',
     AUTH_BOT_TOKEN: '123456789:' + 'A'.repeat(35),
     AUTH_BOT_USERNAME: 'filmwork_login_bot',
+    DOWNLOAD_BOT_TOKEN: '123456780:' + 'C'.repeat(35),
+    DOWNLOAD_BOT_USERNAME: 'filmwork_files_bot',
     ADMIN_BOT_TOKEN: '987654321:' + 'B'.repeat(35),
     ADMIN_OWNER_IDS: '123456789',
     TELEGRAM_PRIMARY_CHAT_ID: 'https://t.me/mychannel',
