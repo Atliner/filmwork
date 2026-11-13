@@ -74,7 +74,12 @@ public final class MainActivity extends Activity {
         }
       }
       content.setPadding(left, top, right, bottom);
-      return insets;
+      // The WebView is already inset above. Do not send the same system bars and
+      // cutout to it again: CSS safe-area-inset-bottom would otherwise add a
+      // second navigation-bar gap to fixed elements such as the dock.
+      if (Build.VERSION.SDK_INT >= 30) return WindowInsets.CONSUMED;
+      WindowInsets consumed = insets.consumeSystemWindowInsets();
+      return Build.VERSION.SDK_INT >= 28 ? consumed.consumeDisplayCutout() : consumed;
     });
 
     appHost = Uri.parse(BuildConfig.APP_URL).getHost();

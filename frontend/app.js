@@ -1431,8 +1431,8 @@
       if (state.token) tasks.push(api('/me').catch(() => null));
       const [config, me] = await Promise.all(tasks);
       state.config = config;
-      const siteName = !config.site?.name || config.site.name === 'Filmwork' ? 'Vizosten' : config.site.name;
-      document.title = `${siteName} | سینمای شخصی شما`;
+      const siteName = 'Vizosten';
+      document.title = 'Vizosten | ویزوستن';
       const brand = $('.header-brand-center strong');
       if (brand) brand.textContent = siteName;
       const brandButton = $('.header-brand-center');
