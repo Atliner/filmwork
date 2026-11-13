@@ -1,0 +1,30 @@
+plugins { id 'com.android.application' }
+
+String appUrl = providers.environmentVariable('FILMWORK_APP_URL')
+    .orElse('https://namdarcompost.ir/#/home').get().trim()
+if (!appUrl.matches('^https://[^/]+(/.*)?$')) {
+    throw new GradleException('FILMWORK_APP_URL must be the public HTTPS site URL, not the origin IP.')
+}
+
+android {
+    namespace 'com.filmwork.app'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'com.filmwork.app'
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName '1.0.0'
+        buildConfigField 'String', 'APP_URL', '"' + appUrl.replace('\\', '\\\\').replace('"', '\\"') + '"'
+    }
+    buildFeatures { buildConfig true }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    buildTypes {
+        release {
+            signingConfig signingConfigs.debug
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+}

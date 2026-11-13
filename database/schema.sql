@@ -13,16 +13,32 @@ CREATE TABLE IF NOT EXISTS contents (
   description TEXT NULL,
   imdb_score DECIMAL(3,1) NULL,
   release_year SMALLINT UNSIGNED NULL,
+  last_air_year SMALLINT UNSIGNED NULL,
+  series_running BOOLEAN NOT NULL DEFAULT FALSE,
+  current_season SMALLINT UNSIGNED NULL,
+  broadcast_note VARCHAR(120) NULL,
+  episode_count SMALLINT UNSIGNED NULL,
+  season_count SMALLINT UNSIGNED NULL,
   genres JSON NULL,
+  directors JSON NULL,
+  cast_members JSON NULL,
   language VARCHAR(80) NULL,
   country VARCHAR(100) NULL,
+  network VARCHAR(120) NULL,
   age_rating VARCHAR(20) NULL,
   runtime_minutes SMALLINT UNSIGNED NULL,
+  has_dub BOOLEAN NOT NULL DEFAULT FALSE,
+  has_sub BOOLEAN NOT NULL DEFAULT FALSE,
   poster_url VARCHAR(2048) NULL,
+  poster_gallery JSON NULL,
   backdrop_url VARCHAR(2048) NULL,
   trailer_url VARCHAR(2048) NULL,
   stream_url VARCHAR(2048) NULL,
   status ENUM('draft', 'published', 'archived') NOT NULL DEFAULT 'published',
+  featured_hero BOOLEAN NOT NULL DEFAULT FALSE,
+  hero_slot TINYINT GENERATED ALWAYS AS (IF(featured_hero AND status = 'published', 1, NULL)) STORED,
+  view_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  last_viewed_at TIMESTAMP(3) NULL,
   source_chat_id BIGINT NULL,
   source_message_id BIGINT NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -32,6 +48,8 @@ CREATE TABLE IF NOT EXISTS contents (
   UNIQUE KEY uq_contents_slug (slug),
   KEY idx_contents_listing (status, created_at),
   KEY idx_contents_year (release_year),
+  KEY idx_contents_hero (featured_hero, status, created_at),
+  UNIQUE KEY uq_contents_hero_slot (hero_slot),
   CONSTRAINT chk_contents_imdb CHECK (imdb_score IS NULL OR (imdb_score >= 0 AND imdb_score <= 10)),
   CONSTRAINT chk_contents_year CHECK (release_year IS NULL OR (release_year BETWEEN 1888 AND 2200))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -199,27 +217,39 @@ CREATE TABLE IF NOT EXISTS advertiser_wallets (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS ad_placement_prices (
-  placement ENUM('pre_roll', 'timed_banner', 'pause_overlay') NOT NULL,
+  placement ENUM('pre_roll', 'mid_roll', 'post_play', 'pause_overlay',
+                 'banner_player', 'banner_pause', 'banner_download', 'link_file_button') NOT NULL,
+  slot_group ENUM('video', 'banner', 'link') NOT NULL DEFAULT 'video',
   display_name_fa VARCHAR(80) NOT NULL,
   price_per_thousand DECIMAL(15,2) NOT NULL,
+  default_duration_seconds SMALLINT UNSIGNED NOT NULL DEFAULT 15,
   minimum_budget DECIMAL(15,2) NOT NULL,
   currency CHAR(3) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'IRR',
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  display_order TINYINT UNSIGNED NOT NULL DEFAULT 0,
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (placement),
   CONSTRAINT chk_ad_price CHECK (price_per_thousand > 0 AND minimum_budget > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-INSERT INTO ad_placement_prices (placement, display_name_fa, price_per_thousand, minimum_budget, currency)
+INSERT INTO ad_placement_prices
+  (placement, slot_group, display_name_fa, price_per_thousand, default_duration_seconds,
+   minimum_budget, currency, is_enabled, display_order)
 VALUES
-  ('pre_roll', 'پیش‌نمایش ویدیویی', 4500000.00, 9000000.00, 'IRR'),
-  ('timed_banner', 'بنر زمان‌بندی‌شده زیر پلیر', 2800000.00, 5600000.00, 'IRR'),
-  ('pause_overlay', 'لایه هنگام توقف', 3200000.00, 6400000.00, 'IRR')
+  ('pre_roll', 'video', 'پیش از پخش (Pre-roll)', 50000.00, 15, 50000.00, 'IRR', TRUE, 1),
+  ('mid_roll', 'video', 'میان‌پخش (Mid-roll)', 45000.00, 15, 50000.00, 'IRR', TRUE, 2),
+  ('timed_banner', 'video', 'پس از پخش (Post-roll)', 45000.00, 10, 50000.00, 'IRR', TRUE, 3),
+  ('pause_overlay', 'video', 'لایه هنگام توقف (Pause)', 32000.00, 15, 50000.00, 'IRR', TRUE, 4),
+  ('banner_player', 'banner', 'بنر روی پلیر (۷۲۸×۹۰)', 50000.00, 8, 50000.00, 'IRR', TRUE, 5),
+  ('banner_pause', 'banner', 'بنر توقف (۳۰۰×۲۵۰)', 40000.00, 8, 50000.00, 'IRR', TRUE, 6),
+  ('banner_download', 'banner', 'بنر قبل از دانلود (۱۰۸۰×۱۹۲۰)', 60000.00, 8, 50000.00, 'IRR', TRUE, 7),
+  ('link_file_button', 'link', 'دکمه لینک زیر فایل (ربات)', 50000.00, 0, 50000.00, 'IRR', TRUE, 8)
 ON DUPLICATE KEY UPDATE
+  slot_group = VALUES(slot_group),
   display_name_fa = VALUES(display_name_fa),
-  price_per_thousand = VALUES(price_per_thousand),
-  minimum_budget = VALUES(minimum_budget),
-  currency = VALUES(currency);
+  default_duration_seconds = VALUES(default_duration_seconds),
+  display_order = VALUES(display_order);
 
 CREATE TABLE IF NOT EXISTS ads (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -241,6 +271,11 @@ CREATE TABLE IF NOT EXISTS ads (
   spent DECIMAL(15,2) NOT NULL DEFAULT 0.00,
   status ENUM('pending', 'active', 'paused', 'completed', 'rejected') NOT NULL DEFAULT 'pending',
   skip_after_seconds TINYINT UNSIGNED NOT NULL DEFAULT 5,
+  duration_seconds SMALLINT UNSIGNED NULL,
+  owner_campaign BOOLEAN NOT NULL DEFAULT FALSE,
+  creative_local_path VARCHAR(255) NULL,
+  review_note VARCHAR(255) NULL,
+  reviewed_at TIMESTAMP(3) NULL,
   starts_at TIMESTAMP(3) NOT NULL,
   ends_at TIMESTAMP(3) NOT NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -259,7 +294,7 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id BIGINT UNSIGNED NOT NULL,
   ad_id BIGINT UNSIGNED NULL,
-  transaction_type ENUM('credit', 'campaign_reserve', 'refund', 'adjustment') NOT NULL,
+  transaction_type ENUM('credit', 'campaign_reserve', 'refund', 'adjustment', 'coupon_credit') NOT NULL,
   amount DECIMAL(15,2) NOT NULL,
   balance_after DECIMAL(15,2) NOT NULL,
   reference VARCHAR(190) NULL,
@@ -271,6 +306,39 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
   CONSTRAINT fk_wallet_tx_ad FOREIGN KEY (ad_id) REFERENCES ads(id) ON DELETE SET NULL,
   CONSTRAINT chk_wallet_tx_amount CHECK (amount > 0),
   CONSTRAINT chk_wallet_tx_balance CHECK (balance_after >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS advertiser_coupons (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  code VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  credit_amount DECIMAL(15,2) NOT NULL,
+  usage_limit INT UNSIGNED NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_advertiser_coupon_code (code),
+  CONSTRAINT chk_coupon_credit CHECK (credit_amount > 0),
+  CONSTRAINT chk_coupon_usage_limit CHECK (usage_limit IS NULL OR usage_limit > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS advertiser_coupon_redemptions (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  coupon_id BIGINT UNSIGNED NOT NULL,
+  user_id BIGINT UNSIGNED NOT NULL,
+  credit_amount DECIMAL(15,2) NOT NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_coupon_redemption_user (coupon_id, user_id),
+  KEY idx_coupon_redemptions_user (user_id, created_at),
+  CONSTRAINT fk_coupon_redemption_coupon FOREIGN KEY (coupon_id) REFERENCES advertiser_coupons(id) ON DELETE CASCADE,
+  CONSTRAINT fk_coupon_redemption_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT chk_coupon_redemption_credit CHECK (credit_amount > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  setting_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  setting_value TEXT NULL,
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (setting_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS ad_events (
@@ -331,6 +399,54 @@ CREATE TABLE IF NOT EXISTS admin_login_tokens (
   PRIMARY KEY (id),
   UNIQUE KEY uq_admin_token_hash (token_hash),
   KEY idx_admin_tokens_owner (owner_tg_user_id, expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS content_versions (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  content_id BIGINT UNSIGNED NOT NULL,
+  kind ENUM('sub', 'dub') NOT NULL,
+  title VARCHAR(120) NOT NULL,
+  resolution VARCHAR(24) NULL,
+  sort_order SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_content_versions_tree (content_id, kind, sort_order),
+  CONSTRAINT fk_content_version_content FOREIGN KEY (content_id) REFERENCES contents(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS content_version_links (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  version_id BIGINT UNSIGNED NOT NULL,
+  season_number SMALLINT UNSIGNED NULL,
+  episode_number SMALLINT UNSIGNED NULL,
+  episode_title VARCHAR(255) NULL,
+  label VARCHAR(80) NULL,
+  size_text VARCHAR(60) NULL,
+  stream_url VARCHAR(2048) NULL,
+  subtitle_url VARCHAR(2048) NULL,
+  dub_url VARCHAR(2048) NULL,
+  telegram_url VARCHAR(2048) NULL,
+  media_link_id BIGINT UNSIGNED NULL,
+  source ENUM('manual', 'telegram_bot') NOT NULL DEFAULT 'manual',
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_version_links_tree (version_id, season_number, episode_number),
+  UNIQUE KEY uq_version_link_media (media_link_id),
+  CONSTRAINT fk_version_link_version FOREIGN KEY (version_id) REFERENCES content_versions(id) ON DELETE CASCADE,
+  CONSTRAINT fk_version_link_media FOREIGN KEY (media_link_id) REFERENCES media_links(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS admin_events (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  kind ENUM('content', 'media', 'user', 'ad', 'system') NOT NULL DEFAULT 'system',
+  title VARCHAR(180) NOT NULL,
+  detail VARCHAR(400) NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_admin_events_recent (created_at),
+  KEY idx_admin_events_kind (kind, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- The API performs this same shift inside a row-locked transaction and does not

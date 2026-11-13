@@ -3,7 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=5">
-  <meta name="theme-color" content="#000000">
+  <meta name="theme-color" content="#08080d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Filmwork">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/icon-180.png">
   <meta name="color-scheme" content="dark">
   <meta name="description" content="Filmwork؛ تماشای آنلاین و دریافت امن فیلم و سریال از تلگرام">
   <title>Filmwork | سینمای شخصی شما</title>
@@ -17,6 +22,18 @@
   <div id="ambient" aria-hidden="true"></div>
   <header id="site-header" class="site-header">
     <div class="page-shell header-inner">
+      <div class="header-start">
+        <button class="brand" type="button" data-route="/home" aria-label="فیلم‌ورک، صفحه نخست">
+          <span class="brand-mark" aria-hidden="true"><span>F</span></span>
+          <span class="brand-word">FILMWORK</span>
+        </button>
+        <nav class="header-nav" aria-label="ناوبری اصلی دسکتاپ">
+          <button type="button" class="header-nav-item" data-nav="home" data-route="/home">خانه</button>
+          <button type="button" class="header-nav-item" data-nav="search" data-route="/search">جستجو</button>
+          <button type="button" class="header-nav-item" data-nav="favorites" data-route="/favorites">نشان‌شده‌ها</button>
+          <button type="button" class="header-nav-item" data-nav="downloads" data-route="/downloads">دانلودها</button>
+        </nav>
+      </div>
       <button type="button" class="header-tool" data-route="/search" aria-label="جستجو و فیلترها">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h3m4 0h9M4 18h7m4 0h5"/><circle cx="16" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="13" cy="18" r="2"/></svg>
       </button>
@@ -58,6 +75,7 @@
   <div id="modal-root"></div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <noscript><div class="noscript">برای اجرای Filmwork، جاوااسکریپت مرورگر را فعال کنید.</div></noscript>
+  <script>if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));</script>
   <script src="/app.js" defer></script>
 </body>
 </html>

@@ -18,6 +18,10 @@
     routeVisits: 0,
   };
 
+  function onlinePlaybackVisible() {
+    return state.config?.player?.enabled !== false && state.config?.player?.buttonVisible !== false;
+  }
+
   const app = document.getElementById('app');
   const loader = document.getElementById('initial-loader');
   const modalRoot = document.getElementById('modal-root');
@@ -35,6 +39,72 @@
     megaphone: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11v2a2 2 0 0 0 2 2h2l2 5h3l-2-5 9 3V6L8 9H5a2 2 0 0 0-2 2Z"/></svg>',
     close: '×',
   };
+
+  const PERSIAN = /[\u0600-\u06FF]/;
+  const LATIN = /[A-Za-z]/;
+  const byScript = (value, wanted) => String(value || '').split(/[,،؛;|/]+/u)
+    .map((part) => part.trim())
+    .filter((part) => part && (wanted === 'fa' ? PERSIAN.test(part) : LATIN.test(part)));
+
+  function titleFa(content) {
+    const title = String(content?.title || '').trim();
+    const original = String(content?.originalTitle || '').trim();
+    if (PERSIAN.test(title) || !original || !PERSIAN.test(original)) return title;
+    return original;
+  }
+
+  function titleEn(content) {
+    const title = String(content?.title || '').trim();
+    const original = String(content?.originalTitle || '').trim();
+    if (LATIN.test(title)) return title;
+    return LATIN.test(original) ? original : '';
+  }
+
+  /** Filmwork shows both scripts wherever a title fits: `پیت` above `The Pitt`. */
+  function titleMarkup(content, { tag = 'h3', className = '', enClass = 'title-en' } = {}) {
+    const fa = titleFa(content);
+    const en = titleEn(content);
+    const showEn = en && en !== fa;
+    const main = `<${tag} class="${className}">${escapeHtml(fa || en)}</${tag}>`;
+    return showEn
+      ? `${main}<p class="${enClass}" dir="ltr" lang="en">${escapeHtml(en)}</p>`
+      : main;
+  }
+
+  /**
+   * Crew names arrive as `Persian | English` for the same person. Rendering both
+   * scripts side by side keeps the site consistent with the channel post and makes
+   * either spelling findable.
+   */
+  function bilingualNames(values) {
+    const list = Array.isArray(values) ? values.flatMap((value) => String(value || '').split(/\s*\|\s*/u)) : [];
+    const seen = new Set();
+    const fa = [];
+    const en = [];
+    for (const raw of list) {
+      const name = String(raw || '').trim();
+      const key = name.toLowerCase();
+      if (!name || seen.has(key)) continue;
+      seen.add(key);
+      if (PERSIAN.test(name) && !LATIN.test(name)) fa.push(name);
+      else if (LATIN.test(name)) en.push(name);
+      else if (name) fa.push(name);
+    }
+    return { fa, en };
+  }
+
+  function namesMarkup(values, { limit = 6 } = {}) {
+    const { fa, en } = bilingualNames(values);
+    if (!fa.length && !en.length) return 'ثبت نشده';
+    const faPart = fa.slice(0, limit).map(escapeHtml).join('، ');
+    const enPart = en.slice(0, limit).map(escapeHtml).join('، ');
+    if (faPart && enPart) {
+      return `<span class="name-pair"><span class="name-fa">${faPart}</span><span class="name-en" dir="ltr" lang="en">${enPart}</span></span>`;
+    }
+    return faPart
+      ? `<span class="name-fa">${faPart}</span>`
+      : `<span class="name-en" dir="ltr" lang="en">${enPart}</span>`;
+  }
 
   function escapeHtml(value) {
     return String(value ?? '')
@@ -150,6 +220,8 @@
 
   function setActiveNav(section) {
     $$('.dock-item').forEach((item) => item.classList.toggle('active', item.dataset.nav === section));
+    // Desktop header mirrors the dock; keep both in sync from one place.
+    $$('.header-nav-item').forEach((item) => item.classList.toggle('active', Boolean(section) && item.dataset.nav === section));
   }
 
   function setHeaderLabel(label, back = false) {
@@ -181,16 +253,19 @@
   function posterMarkup(content, className = '') {
     const poster = safeUrl(content.posterUrl);
     return `<div class="poster-frame ${className}">
-      ${poster ? `<img src="${poster}" alt="پوستر ${escapeHtml(content.title)}" loading="lazy">` : `<span class="poster-letter" aria-hidden="true">${escapeHtml(firstLetter(content.title))}</span>`}
+      ${poster ? `<img src="${poster}" alt="پوستر ${escapeHtml(titleFa(content) || titleEn(content))}" loading="lazy">` : `<span class="poster-letter" aria-hidden="true">${escapeHtml(firstLetter(titleFa(content) || titleEn(content)))}</span>`}
       ${content.imdbScore !== null && content.imdbScore !== undefined ? `<span class="card-rating"><b>★</b> ${escapeHtml(content.imdbScore)}</span>` : ''}
       <span class="card-type">${content.type === 'series' ? 'سریال' : 'فیلم'}</span>
     </div>`;
   }
 
   function mediaCard(content) {
-    return `<article class="media-card" tabindex="0" role="button" data-route="/content/${encodeURIComponent(content.id)}" aria-label="${escapeHtml(content.title)}">
+    const fa = titleFa(content);
+    const en = titleEn(content);
+    const label = [fa, en].filter(Boolean).join(' / ');
+    return `<article class="media-card" tabindex="0" role="button" data-route="/content/${encodeURIComponent(content.id)}" aria-label="${escapeHtml(label)}">
       ${posterMarkup(content)}
-      <h3>${escapeHtml(content.title)}</h3>
+      ${titleMarkup(content, { enClass: 'title-en title-en--card' })}
       <p>${content.releaseYear ? escapeHtml(content.releaseYear) : 'سال نامشخص'}${content.genres?.[0] ? ` · ${escapeHtml(content.genres[0])}` : ''}</p>
     </article>`;
   }
@@ -203,8 +278,8 @@
     const progress = duration > 0 ? Math.min(100, Math.max(0, (position / duration) * 100)) : 0;
     const remaining = duration > position ? Math.max(1, Math.round((duration - position) / 60)) : 0;
     return `<article class="resume-card" role="button" tabindex="0" data-route="/player/${encodeURIComponent(content.id)}">
-      <div class="resume-media">${image ? `<img src="${image}" alt="" loading="lazy">` : `<span class="poster-letter">${escapeHtml(firstLetter(content.title))}</span>`}<span class="resume-play">${icons.play}</span>${remaining ? `<small>${formatNumber(remaining)} دقیقه باقی‌مانده</small>` : ''}<i><b style="width:${progress.toFixed(1)}%"></b></i></div>
-      <div class="resume-copy"><strong>${escapeHtml(content.title)}</strong><span>${formatTime(position)} از ${formatTime(duration)}</span></div>
+      <div class="resume-media">${image ? `<img src="${image}" alt="" loading="lazy">` : `<span class="poster-letter">${escapeHtml(firstLetter(titleFa(content) || titleEn(content)))}</span>`}<span class="resume-play">${icons.play}</span>${remaining ? `<small>${formatNumber(remaining)} دقیقه باقی‌مانده</small>` : ''}<i><b style="width:${progress.toFixed(1)}%"></b></i></div>
+      <div class="resume-copy"><div class="resume-names"><strong>${escapeHtml(titleFa(content) || titleEn(content))}</strong>${titleEn(content) && titleEn(content) !== titleFa(content) ? `<small class="title-en title-en--card" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</small>` : ''}</div><span>${formatTime(position)} از ${formatTime(duration)}</span></div>
     </article>`;
   }
 
@@ -216,7 +291,8 @@
       <div class="hero-vignette"></div>
       <div class="page-shell hero-content">
         <div class="eyebrow">انتخاب ویژه Filmwork</div>
-        <h1>${escapeHtml(content.title)}</h1>
+        <h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>
+        ${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="hero-en-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}
         <div class="hero-meta">
           ${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}
           ${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}</span>` : ''}
@@ -225,7 +301,7 @@
         </div>
         ${content.description ? `<p class="hero-description">${escapeHtml(content.description)}</p>` : ''}
         <div class="action-row">
-          <button type="button" class="primary-button" data-route="/player/${encodeURIComponent(content.id)}">${icons.play} پخش آنلاین</button>
+          ${onlinePlaybackVisible() ? `<button type="button" class="primary-button" data-route="/player/${encodeURIComponent(content.id)}">${icons.play} پخش آنلاین</button>` : ''}
           <button type="button" class="secondary-button" data-open-download="${escapeHtml(content.id)}">${icons.download} دریافت فایل</button>
           <button type="button" class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="افزودن به علاقه‌مندی‌ها">${icons.heart}</button>
         </div>
@@ -247,10 +323,19 @@
       app.innerHTML = `<div class="page-shell page-top">${emptyState('کتابخانه آماده دریافت محتواست', 'اولین پست فیلم یا سریال را برای ربات خصوصی مدیریت فوروارد کنید؛ اثر بلافاصله در اینجا منتشر می‌شود.')}</div>`;
       return;
     }
-    const hero = items[0];
-    const latest = items.slice(1, 13);
+    // The owner console promotes one title into the hero banner; fall back to the
+    // newest published item so the homepage is never empty.
+    const hero = items.find((item) => item.featuredHero) || items[0];
+    const latest = items.filter((item) => item.id !== hero.id).slice(0, 12);
     const topRated = [...items].filter((item) => item.imdbScore !== null).sort((a, b) => b.imdbScore - a.imdbScore).slice(0, 12);
-    app.innerHTML = `<div class="page-shell home-category-strip" aria-label="دسته‌بندی‌ها">
+    app.innerHTML = `<div class="page-shell home-desktop-top">
+        <div><div class="home-greeting">کتابخانه شخصی شما</div><h1 class="home-title">امشب چه ببینیم؟</h1></div>
+        <form class="home-search" id="home-search" role="search">
+          ${icons.search}<input type="search" name="q" maxlength="100" autocomplete="off" aria-label="جستجو در فیلم‌ورک" placeholder="نام فیلم، سریال، بازیگر یا کارگردان…">
+          <button class="primary-button" type="submit">جستجو</button>
+        </form>
+      </div>
+      <div class="page-shell home-category-strip" aria-label="دسته‌بندی‌ها">
         <button class="chip active" data-route="/home">منتخب</button>
         <button class="chip" data-route="/search?genre=درام">درام</button>
         <button class="chip" data-route="/search?genre=علمی تخیلی">علمی‌تخیلی</button>
@@ -259,7 +344,7 @@
       </div>
       ${heroMarkup(hero)}
       <div class="page-shell">
-        ${continueItems.length ? `<section class="content-section resume-section"><div class="section-head"><div><h2>ادامه تماشا</h2><p>از همان‌جایی که رها کردید</p></div></div><div class="resume-scroller">${continueItems.map(continueCard).join('')}</div></section>` : ''}
+        ${continueItems.length && onlinePlaybackVisible() ? `<section class="content-section resume-section"><div class="section-head"><div><h2>ادامه تماشا</h2><p>از همان‌جایی که رها کردید</p></div></div><div class="resume-scroller">${continueItems.map(continueCard).join('')}</div></section>` : ''}
         <section class="content-section">
           <div class="section-head"><div><h2>تازه‌های فیلم‌ورک</h2><p>جدیدترین فیلم‌ها و سریال‌های اضافه‌شده</p></div><button class="text-button" data-route="/search">مشاهده همه</button></div>
           <div class="media-scroller">${latest.length ? latest.map(mediaCard).join('') : mediaCard(hero)}</div>
@@ -274,7 +359,8 @@
     const genres = ['اکشن', 'درام', 'کمدی', 'جنایی', 'علمی تخیلی', 'انیمیشن'];
     app.innerHTML = `<div class="page-shell page-top search-page">
       <div class="section-head search-title"><div><h1 class="page-title">جستجو</h1><p>در میان فیلم‌ها و سریال‌های فیلم‌ورک</p></div></div>
-      <label class="search-box">${icons.search}<input id="search-input" type="search" maxlength="100" autocomplete="off" placeholder="نام فیلم، سریال یا ژانر…" value="${escapeHtml(initialQuery)}"><span class="sr-only">جستجو</span></label>
+      <label class="search-box">${icons.search}<input id="search-input" type="search" maxlength="100" autocomplete="off" placeholder="نام فارسی یا انگلیسی فیلم، سریال، بازیگر یا کارگردان…" value="${escapeHtml(initialQuery)}"><span class="sr-only">جستجو</span></label>
+      <p class="search-hint">هر دو زبان جستجو می‌شود: «پیت» و «The Pitt» هر دو همین اثر را پیدا می‌کنند؛ نام بازیگران و کارگردانان هم در فهرست نتایج می‌آید.</p>
       <section class="search-discovery"><h2>ژانرهای محبوب</h2><div class="genre-chip-row">
         <button class="genre-chip ${initialGenre ? '' : 'active'}" data-search-genre="">همه</button>
         ${genres.map((genre) => `<button class="genre-chip ${initialGenre === genre ? 'active' : ''}" data-search-genre="${escapeHtml(genre)}">${escapeHtml(genre)}</button>`).join('')}
@@ -314,7 +400,7 @@
       status.textContent = `${formatNumber(data.pagination.total)} نتیجه`;
       results.innerHTML = data.items.length
         ? data.items.map(mediaCard).join('')
-        : `<div style="grid-column:1/-1">${emptyState('نتیجه‌ای پیدا نشد', 'عبارت دیگری را امتحان کنید یا فیلتر نوع را تغییر دهید.')}</div>`;
+        : `<div style="grid-column:1/-1">${emptyState('نتیجه‌ای پیدا نشد', 'عبارت دیگری را امتحان کنید؛ جستجو عنوان فارسی، عنوان انگلیسی، بازیگران، کارگردانان و ژانرها را هم می‌گردد.')}</div>`;
     } catch (error) {
       status.textContent = apiErrorMessage(error);
       results.innerHTML = '';
@@ -349,7 +435,7 @@
         const image = safeUrl(item.content.posterUrl);
         return `<article class="download-history-card">
           <button type="button" class="download-history-poster" data-route="/content/${encodeURIComponent(item.content.id)}">${image ? `<img src="${image}" alt="">` : `<span>${escapeHtml(firstLetter(item.content.title))}</span>`}</button>
-          <div><h2>${escapeHtml(item.content.title)}</h2><p>${[item.media.season ? `فصل ${formatNumber(item.media.season)}` : '', item.media.episode ? `قسمت ${formatNumber(item.media.episode)}` : '', item.media.resolution, item.media.version].filter(Boolean).map(escapeHtml).join(' · ')}</p><small>${formatBytes(item.media.fileSizeBytes)} · ${formatDate(item.downloadedAt)}</small></div>
+          <div><h2>${escapeHtml(titleFa(item.content) || titleEn(item.content))}</h2>${titleEn(item.content) && titleEn(item.content) !== titleFa(item.content) ? `<p class="title-en" dir="ltr" lang="en">${escapeHtml(titleEn(item.content))}</p>` : ''}<p>${[item.media.season ? `فصل ${formatNumber(item.media.season)}` : '', item.media.episode ? `قسمت ${formatNumber(item.media.episode)}` : '', item.media.resolution, item.media.version].filter(Boolean).map(escapeHtml).join(' · ')}</p><small>${formatBytes(item.media.fileSizeBytes)} · ${formatDate(item.downloadedAt)}</small></div>
           <button type="button" class="secondary-button compact" data-open-download="${escapeHtml(item.content.id)}">${icons.download} دریافت دوباره</button>
         </article>`;
       }).join('')}</div>` : emptyState('هنوز فایلی دریافت نکرده‌اید', 'از صفحه یک اثر، نسخه دلخواه را انتخاب کنید تا ربات فایل را برایتان بفرستد.', '<button class="primary-button" style="margin-top:18px" data-route="/home">مرور آثار</button>')}
@@ -380,19 +466,27 @@
     const poster = safeUrl(content.posterUrl || content.backdropUrl);
     const facts = [
       ['نوع', content.type === 'series' ? 'سریال' : 'فیلم سینمایی'],
-      ['سال انتشار', content.releaseYear || 'نامشخص'],
+      ['سال انتشار', content.releaseYear ? `${content.releaseYear}${content.lastAirYear ? ` – ${content.lastAirYear}` : ''}` : 'نامشخص'],
       ['امتیاز IMDb', content.imdbScore ?? 'ثبت نشده'],
       ['ژانر', (content.genres || []).join('، ') || 'ثبت نشده'],
+      ['کارگردان', namesMarkup(content.directors, { limit: 4 })],
+      ['بازیگران', namesMarkup(content.cast, { limit: 8 })],
+      ['کشور', (content.countries || []).map(escapeHtml).join('، ') || 'ثبت نشده'],
+      ['شبکه', content.network ? escapeHtml(content.network) : 'ثبت نشده'],
+      ['رده سنی', content.ageRating ? escapeHtml(content.ageRating) : 'ثبت نشده'],
       ['تعداد نسخه‌ها', formatNumber(media.length)],
     ];
     app.innerHTML = `<section class="detail-hero">
       ${backdrop ? `<img class="detail-backdrop" src="${backdrop}" alt="">` : '<div class="hero-placeholder"></div>'}<div class="detail-overlay"></div>
       <div class="page-shell detail-content">
-        ${poster ? `<img class="detail-poster" src="${poster}" alt="پوستر ${escapeHtml(content.title)}">` : `<div class="detail-poster poster-frame"><span class="poster-letter">${escapeHtml(firstLetter(content.title))}</span></div>`}
-        <div class="detail-copy"><div class="eyebrow">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</div><h1>${escapeHtml(content.title)}</h1>
-          <div class="meta-row">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}</span>` : ''}${content.runtimeMinutes ? `<span class="meta-dot">${formatNumber(content.runtimeMinutes)} دقیقه</span>` : ''}</div>
+        ${poster ? `<img class="detail-poster" src="${poster}" alt="پوستر ${escapeHtml(titleFa(content) || titleEn(content))}">` : `<div class="detail-poster poster-frame"><span class="poster-letter">${escapeHtml(firstLetter(titleFa(content) || titleEn(content)))}</span></div>`}
+        <div class="detail-copy"><div class="eyebrow">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</div><h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>
+          ${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="detail-en-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}
+          <div class="meta-row">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}${content.lastAirYear ? `–${escapeHtml(content.lastAirYear)}` : ''}</span>` : ''}${content.runtimeMinutes ? `<span class="meta-dot">${formatNumber(content.runtimeMinutes)} دقیقه</span>` : ''}${content.seriesRunning && content.currentSeason ? `<span class="meta-dot status-live">فصل ${formatNumber(content.currentSeason)} در حال پخش</span>` : ''}</div>
+          ${(content.directors?.length || content.cast?.length) ? `<div class="credit-line"><span>کارگردان</span> ${namesMarkup(content.directors, { limit: 3 })}</div>` : ''}
+          ${content.cast?.length ? `<div class="credit-line"><span>بازیگران</span> ${namesMarkup(content.cast, { limit: 5 })}</div>` : ''}
           ${content.description ? `<p class="description">${escapeHtml(content.description)}</p>` : ''}
-          <div class="action-row"><button class="primary-button" data-route="/player/${encodeURIComponent(content.id)}">${icons.play} پخش آنلاین</button><button class="secondary-button" data-open-download="${escapeHtml(content.id)}">${icons.download} انتخاب نسخه</button><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="علاقه‌مندی">${icons.heart}</button></div>
+          <div class="action-row">${onlinePlaybackVisible() ? `<button class="primary-button" data-route="/player/${encodeURIComponent(content.id)}">${icons.play} پخش آنلاین</button>` : ''}<button class="secondary-button" data-open-download="${escapeHtml(content.id)}">${icons.download} انتخاب نسخه</button><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="علاقه‌مندی">${icons.heart}</button></div>
         </div>
       </div>
     </section>
@@ -401,7 +495,7 @@
         ${state.user ? '<form class="comment-form" id="comment-form"><input name="body" maxlength="1200" required placeholder="دیدگاه خود را بنویسید…"><button class="primary-button" type="submit">ارسال</button></form>' : '<button class="secondary-button" data-login style="margin-bottom:16px">برای ثبت دیدگاه وارد شوید</button>'}
         <div class="comments" id="comments-list">${commentsMarkup(comments)}</div>
       </section>
-      <aside class="surface-panel"><h2>اطلاعات اثر</h2><div class="fact-list">${facts.map(([label, value]) => `<div class="fact"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('')}</div></aside>
+      <aside class="surface-panel"><h2>اطلاعات اثر</h2><div class="fact-list">${facts.map(([label, value]) => `<div class="fact"><span>${escapeHtml(label)}</span><div class="fact-value">${String(value).startsWith('<span') ? value : escapeHtml(value)}</div></div>`).join('')}</div></aside>
     </div>`;
   }
 
@@ -423,6 +517,10 @@
 
   async function renderPlayer(assetId, version) {
     setActiveNav('');
+    if (state.config?.player?.enabled === false) {
+      app.innerHTML = `<div class="page-shell page-top">${emptyState('پخش آنلاین غیرفعال است', 'برای دریافت نسخه‌ها از دکمه دریافت فایل استفاده کنید.')}</div>`;
+      return;
+    }
     setHeaderLabel('پخش و دانلود', true);
     const [contentData, mediaData, progressData] = await Promise.all([
       api(`/contents/${encodeURIComponent(assetId)}`),
@@ -454,8 +552,9 @@
         </div>
       </details>
       <div id="timed-banner-slot"></div>
+      <div id="pause-banner-slot" class="banner-slot"></div>
       <section class="player-info">
-        <div class="player-info-main"><div class="player-title-row"><div><h1>${escapeHtml(content.title)}</h1>${content.originalTitle ? `<p class="original-title">${escapeHtml(content.originalTitle)}</p>` : ''}</div><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="نشان کردن">${icons.heart}</button></div>
+        <div class="player-info-main"><div class="player-title-row"><div><h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="original-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}</div><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="نشان کردن">${icons.heart}</button></div>
           <div class="hero-meta">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}</span>` : ''}<span class="meta-dot">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</span>${content.genres?.length ? `<span class="meta-dot">${content.genres.slice(0, 3).map(escapeHtml).join('، ')}</span>` : ''}</div>
           ${content.description ? `<p class="player-description">${escapeHtml(content.description)}</p>` : ''}
         </div>
@@ -498,6 +597,7 @@
   function destroyPlayer() {
     if (!state.player) return;
     clearTimeout(state.player.bannerTimer);
+    clearTimeout(state.player.pauseBannerTimer);
     state.player.saveProgress?.(true);
     state.player.externalAudio?.pause();
     state.player.cleanup.forEach((cleanup) => cleanup());
@@ -652,7 +752,15 @@
     on(video, 'durationchange', updateProgress);
     on(video, 'seeking', () => syncExternalAudio(true));
     on(video, 'ratechange', () => { if (player.externalAudio) player.externalAudio.playbackRate = video.playbackRate; refreshSettings(); });
-    on(video, 'ended', () => { player.externalAudio?.pause(); saveProgress(true); });
+    on(video, 'ended', () => {
+      player.externalAudio?.pause();
+      saveProgress(true);
+      // Post-roll: the owner's "پس از پخش" slot, if it is switched on.
+      if (video.currentTime > 0 && !player.postRollShown) {
+        player.postRollShown = true;
+        loadPlayerAd('timed_banner', '#timed-banner-slot', player);
+      }
+    });
     on(seek, 'input', () => { if (video.duration) video.currentTime = (Number(seek.value) / 1000) * video.duration; });
     on(volume, 'input', () => {
       const value = Number(volume.value);
@@ -685,7 +793,12 @@
     });
     shell.tabIndex = 0;
     syncPlayIcon(); refreshSettings();
-    player.bannerTimer = setTimeout(() => loadPlayerAd('timed_banner', '#timed-banner-slot', player), 8000);
+    // The owner controls both which slots exist and how long they show, so the
+    // banner slots are scheduled from config instead of a hardcoded placement.
+    // "پس از پخش" follows the player's own clip; the banner strip under the player
+    // is the owner's banner_player slot.
+    player.bannerTimer = setTimeout(() => loadPlayerAd('banner_player', '#timed-banner-slot', player), 8000);
+    player.pauseBannerTimer = setTimeout(() => loadPlayerAd('banner_pause', '#pause-banner-slot', player), 12_000);
   }
 
   async function bindPlayerSource(type) {
@@ -746,6 +859,13 @@
       if (!ad || state.player !== player) return;
       const host = $(selector);
       if (!host) return;
+      // The owner sets how many seconds a creative stays on screen.
+      document.documentElement.style.setProperty(`--ad-duration-${placement}`, `${Number(ad.durationSeconds || 8)}s`);
+      if (ad.durationSeconds) {
+        setTimeout(() => {
+          if (state.player === player) host.replaceChildren();
+        }, Number(ad.durationSeconds) * 1000);
+      }
       const media = ad.assetType === 'video'
         ? `<video src="${safeUrl(ad.creativeUrl)}" muted autoplay playsinline loop></video>`
         : `<img src="${safeUrl(ad.creativeUrl)}" alt="${escapeHtml(ad.headline)}">`;
@@ -761,7 +881,7 @@
   function roleSwitcher(active = 'user') {
     return `<nav class="role-switcher" aria-label="انتخاب محیط">
       <button class="${active === 'user' ? 'active' : ''}" data-route="/profile">کاربر</button>
-      ${state.user?.role === 'advertiser' ? `<button class="${active === 'advertiser' ? 'active' : ''}" data-route="/advertiser">تبلیغ‌دهنده</button>` : ''}
+      ${state.user ? `<button class="${active === 'advertiser' ? 'active' : ''}" data-route="/advertiser">تبلیغ‌دهنده</button>` : ''}
     </nav>`;
   }
 
@@ -783,14 +903,14 @@
       ${roleSwitcher('user')}
       <section class="account-hero">
         <div class="large-avatar">${escapeHtml(firstLetter(state.user.accountName))}</div>
-        <div><h1>${escapeHtml(state.user.accountName)}</h1><p>${state.user.role === 'advertiser' ? 'عضو و تبلیغ‌دهنده فیلم‌ورک' : 'عضو فیلم‌ورک'} · از ${formatDate(state.user.createdAt)}</p></div>
+        <div><h1>${escapeHtml(state.user.accountName)}</h1><p>عضو و تبلیغ‌دهنده فیلم‌ورک · از ${formatDate(state.user.createdAt)}</p></div>
       </section>
       <section class="account-stats" aria-label="آمار حساب">
         <div><strong>${formatNumber(watchedHours)}</strong><span>ساعت تماشا</span></div>
         <div><strong>${formatNumber(stats.completed)}</strong><span>اثر کامل‌شده</span></div>
         <div><strong>${formatNumber(stats.favorites)}</strong><span>نشان‌شده</span></div>
       </section>
-      ${progress.length ? `<section class="content-section account-progress"><div class="section-head"><div><h2>ادامه تماشا</h2><p>آخرین فعالیت پخش شما</p></div><button class="text-button" data-route="/home">مشاهده همه</button></div><div class="resume-scroller">${progress.map(continueCard).join('')}</div></section>` : ''}
+      ${progress.length && onlinePlaybackVisible() ? `<section class="content-section account-progress"><div class="section-head"><div><h2>ادامه تماشا</h2><p>آخرین فعالیت پخش شما</p></div><button class="text-button" data-route="/home">مشاهده همه</button></div><div class="resume-scroller">${progress.map(continueCard).join('')}</div></section>` : ''}
       <div class="account-groups">
         <section><h2>کتابخانه من</h2><div class="menu-list surface-panel">
           <button class="menu-row" data-route="/favorites"><div><span class="menu-icon">♡</span><span>نشان‌شده‌ها</span></div><small>${formatNumber(stats.favorites)} ←</small></button>
@@ -798,7 +918,7 @@
           <button class="menu-row" data-route="/search"><div>${icons.search}<span>کشف آثار تازه</span></div><small>جستجو ←</small></button>
         </div></section>
         <section><h2>حساب و دسترسی</h2><div class="menu-list surface-panel">
-          ${state.user.role === 'advertiser' ? `<button class="menu-row" data-route="/advertiser"><div>${icons.megaphone}<span>مرکز تبلیغ‌دهندگان</span></div><small>ورود ←</small></button>` : ''}
+          <button class="menu-row" data-route="/advertiser"><div>${icons.megaphone}<span>مرکز تبلیغ‌دهندگان</span></div><small>ورود ←</small></button>
           <button class="menu-row" type="button"><div><span class="menu-icon">✓</span><span>ورود امن تلگرام</span></div><small>فعال</small></button>
           <button class="menu-row danger-row" id="logout-user"><div><span class="menu-icon">↪</span><span>خروج از این دستگاه</span></div><small>←</small></button>
         </div></section>
@@ -811,10 +931,6 @@
     setHeaderLabel('تبلیغات');
     if (!state.user) {
       app.innerHTML = `<div class="page-shell page-top">${emptyState('مرکز تبلیغ‌دهندگان', 'برای مشاهده کیف پول و ساخت کمپین ابتدا وارد شوید.', '<button class="primary-button" style="margin-top:18px" data-login>ورود با تلگرام</button>')}</div>`;
-      return;
-    }
-    if (state.user.role !== 'advertiser') {
-      app.innerHTML = `<div class="page-shell page-top">${emptyState('حساب تبلیغ‌دهنده فعال نیست', 'فعال‌سازی نقش تبلیغ‌دهنده و شارژ اولیه کیف پول توسط مالک سامانه انجام می‌شود.')}</div>`;
       return;
     }
     const data = await api('/advertiser/profile');
@@ -843,7 +959,9 @@
         <div><span>هزینه کل</span><strong>${formatMoney(data.analytics?.spent)}</strong><small>کسرشده از کیف پول</small></div>
       </section>
       <div class="advertiser-top">
-        <section class="surface-panel wallet-card"><span class="wallet-label">موجودی قابل استفاده</span><strong class="wallet-balance">${formatMoney(data.wallet.balance, data.wallet.currency)}</strong><span class="wallet-currency">کیف پول امن کمپین‌ها</span></section>
+        <section class="surface-panel wallet-card"><span class="wallet-label">موجودی قابل استفاده</span><strong class="wallet-balance">${formatMoney(data.wallet.balance, data.wallet.currency)}</strong><span class="wallet-currency">کیف پول امن کمپین‌ها</span>
+          <form id="coupon-redemption-form" class="coupon-redemption"><label class="form-field"><span>کد افزایش موجودی</span><input class="form-input" name="code" maxlength="32" dir="ltr" autocomplete="off" required placeholder="کد تخفیف"></label><button class="primary-button" type="submit">اعمال کد</button></form>
+        </section>
         <section class="surface-panel"><h2>نقشه تعاملی جایگاه‌ها</h2><div class="placement-map"><div class="mock-player">نمای پلیر<button type="button" class="zone zone-pre ${state.selectedPlacement === 'pre_roll' ? 'selected' : ''}" data-placement="pre_roll">Pre-roll</button><button type="button" class="zone zone-pause ${state.selectedPlacement === 'pause_overlay' ? 'selected' : ''}" data-placement="pause_overlay">Pause overlay</button></div><button type="button" class="zone zone-banner ${state.selectedPlacement === 'timed_banner' ? 'selected' : ''}" data-placement="timed_banner">Timed banner below player</button></div><div class="price-cards">${priceCards}</div></section>
       </div>
       <div class="hub-layout">
@@ -1096,6 +1214,21 @@
     } catch (error) { toast(apiErrorMessage(error), 'error'); }
   }
 
+  async function redeemAdvertiserCoupon(form) {
+    const button = $('button[type="submit"]', form);
+    button.disabled = true;
+    try {
+      const result = await api('/advertiser/coupons/redeem', {
+        method: 'POST', body: JSON.stringify({ code: new FormData(form).get('code') }),
+      });
+      toast(`کد پذیرفته شد؛ ${formatMoney(result.wallet.added, result.wallet.currency)} به کیف پول اضافه شد.`);
+      await route();
+    } catch (error) {
+      toast(error.message || 'اعمال کد ناموفق بود.');
+      button.disabled = false;
+    }
+  }
+
   async function submitCampaign(form) {
     const button = $('button[type="submit"]', form);
     const values = Object.fromEntries(new FormData(form));
@@ -1281,6 +1414,12 @@
     if (event.target.id === 'auth-form') { event.preventDefault(); verifyLogin(event.target); }
     if (event.target.id === 'comment-form') { event.preventDefault(); submitComment(event.target); }
     if (event.target.id === 'campaign-form') { event.preventDefault(); submitCampaign(event.target); }
+    if (event.target.id === 'coupon-redemption-form') { event.preventDefault(); redeemAdvertiserCoupon(event.target); }
+    if (event.target.id === 'home-search') {
+      event.preventDefault();
+      const term = String(new FormData(event.target).get('q') || '').trim();
+      navigate(term ? `/search?q=${encodeURIComponent(term)}` : '/search');
+    }
   });
 
   window.addEventListener('hashchange', route);
@@ -1292,6 +1431,13 @@
       if (state.token) tasks.push(api('/me').catch(() => null));
       const [config, me] = await Promise.all(tasks);
       state.config = config;
+      const siteName = config.site?.name || 'Filmwork';
+      document.title = `${siteName} | سینمای شخصی شما`;
+      const brand = $('.header-brand-center strong');
+      if (brand) brand.textContent = siteName;
+      const brandButton = $('.header-brand-center');
+      if (brandButton) brandButton.setAttribute('aria-label', `${siteName}، صفحه نخست`);
+      if (config.site?.tagline) $('meta[name="description"]')?.setAttribute('content', config.site.tagline);
       if (me?.user) state.user = me.user;
     } catch (error) {
       console.warn('Initial configuration could not be loaded:', error);
