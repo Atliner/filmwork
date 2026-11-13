@@ -9,6 +9,7 @@ backend/.env.*
 apps/android/.gradle/
 apps/android/local.properties
 apps/android/app/build/
+apps/desktop/src-tauri/resources/mpv/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
 apps/desktop/node_modules/

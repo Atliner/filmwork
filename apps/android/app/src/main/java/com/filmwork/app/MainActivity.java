@@ -20,6 +20,9 @@ import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
+import java.util.Collections;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -91,6 +94,23 @@ public final class MainActivity extends Activity {
     webView.getSettings().setAllowContentAccess(false);
     webView.getSettings().setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW);
     if (Build.VERSION.SDK_INT >= 26) webView.getSettings().setSafeBrowsingEnabled(true);
+    // Only the top-level, configured HTTPS site may request playback. Do not
+    // expose an unrestricted JavaScript interface to arbitrary frames/pages.
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+      Uri origin = Uri.parse(BuildConfig.APP_URL);
+      String allowedOrigin = origin.getScheme() + "://" + origin.getHost()
+          + (origin.getPort() == -1 ? "" : ":" + origin.getPort());
+      WebViewCompat.addWebMessageListener(webView, "VizostenNative", Collections.singleton(allowedOrigin),
+          (view, message, sourceOrigin, isMainFrame, reply) -> {
+            if (!isMainFrame || message.getData() == null) return;
+            Uri stream = NativePlayerActivity.validStreamUri(message.getData());
+            if (stream == null) { reply.postMessage("invalid-url"); return; }
+            Intent intent = new Intent(MainActivity.this, NativePlayerActivity.class);
+            intent.setData(stream);
+            startActivity(intent);
+            reply.postMessage("ok");
+          });
+    }
     webView.setWebChromeClient(new WebChromeClient());
     webView.setWebViewClient(new WebViewClient() {
       @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {

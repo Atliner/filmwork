@@ -1,0 +1,6 @@
+Vizosten bundles the unmodified official mpv v0.41.0 x86_64 Windows executable.
+mpv is distributed under the GNU General Public License, version 2 or later.
+License: LICENSE.GPL (included in this directory).
+Source code and build information: https://github.com/mpv-player/mpv/tree/v0.41.0
+Release binaries: https://github.com/mpv-player/mpv/releases/tag/v0.41.0
+Third-party libraries may have additional license terms included by the mpv release.

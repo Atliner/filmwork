@@ -78,6 +78,9 @@
   .app-splash-loader { width:110px;height:2px;margin:24px auto;background:#3e2a12;overflow:hidden;border-radius:8px; }
   .app-splash-loader::after { content:"";display:block;width:45%;height:100%;background:#ffb92f;box-shadow:0 0 12px #ffb92f;animation:splash-sweep 1s ease-in-out infinite alternate; }
 
+  .native-player-entry { display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:16px 0; }
+  .native-player-entry p { color:var(--subdued);font-size:12px;line-height:1.8; }
+
   .loading-page { padding-top:12px; }
   .skeleton { background:linear-gradient(100deg,#111 20%,#202024 45%,#111 70%);background-size:200% 100%;animation:shimmer 1.4s infinite; }
   .hero-skeleton { height:min(58vh,570px);border-radius:26px; }

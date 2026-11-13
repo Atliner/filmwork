@@ -31,14 +31,12 @@ jobs:
         env:
           FILMWORK_APP_URL: ${{ inputs.public_app_url }}
         run: gradle assembleRelease
-      - name: Enforce 10 MiB APK limit
+      - name: Report APK size
         shell: bash
         run: |
           apk=$(find apps/android/app/build/outputs/apk/release -name '*.apk' -print -quit)
           test -n "$apk"
-          size=$(stat -c%s "$apk")
-          echo "APK size: $size bytes"
-          test "$size" -le 10485760
+          echo "APK size: $(stat -c%s "$apk") bytes"
       - uses: actions/upload-artifact@v4
         with:
           name: Filmwork-Android-APK
@@ -53,16 +51,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
-      - name: Build compact Windows installer
+      - name: Prepare bundled mpv runtime
+        shell: pwsh
+        run: ./apps/desktop/prepare-mpv.ps1
+      - name: Build Windows installer
         working-directory: apps/desktop/src-tauri
         run: cargo tauri build --bundles nsis
-      - name: Enforce 10 MiB installer limit
+      - name: Report Windows installer size
         shell: pwsh
         run: |
           $installer = Get-ChildItem apps/desktop/src-tauri/target/release/bundle/nsis -Filter *.exe | Select-Object -First 1
           if (-not $installer) { throw 'No Windows installer was created.' }
           Write-Host "Installer size: $($installer.Length) bytes"
-          if ($installer.Length -gt 10MB) { throw 'Installer exceeds the 10 MiB limit.' }
       - uses: actions/upload-artifact@v4
         with:
           name: Filmwork-Windows-Installer

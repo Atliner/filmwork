@@ -543,7 +543,8 @@
         ${!safeStream ? `<div class="player-unavailable" id="unavailable-overlay">${icons.film}<strong>پخش آنلاین در دسترس نیست - دریافت از تلگرام</strong><span>می‌توانید نشانی مستقیم را وارد کنید یا یکی از نسخه‌ها را دریافت کنید.</span></div>` : ''}
         ${playerControlMarkup()}<div id="pause-ad-slot"></div>
       </div>
-      <details class="source-tools">
+      ${window.VizostenNative || window.__TAURI__?.core?.invoke ? `<div class="native-player-entry"><button class="secondary-button" type="button" data-native-player>پخش با پلیر بومی</button><p>برای انتخاب صدا و زیرنویس داخلی، نشانی مستقیم HTTPS وارد کنید. در ویندوز پلیر در پنجره‌ای جدا باز می‌شود؛ برای فهرست ترک‌ها روی نماد صدا یا زیرنویس راست‌کلیک کنید. این حالت هنوز سابقهٔ پخش و تبلیغات داخل پلیر وب را همگام نمی‌کند.</p></div>` : ''}
+      <details class="source-tools" ${(window.VizostenNative || window.__TAURI__?.core?.invoke) && !safeStream ? 'open' : ''}>
         <summary>اتصال منبع شخصی، زیرنویس یا صدای دوبله <span>اختیاری</span></summary>
         <div class="player-fields">
           <div class="bind-card"><label><i></i>نشانی مستقیم ویدیو</label><div class="input-bind"><input id="video-url" type="url" inputmode="url" placeholder="https://…/video.mp4" value="${safeStream}"><button type="button" data-bind="video">اتصال</button></div></div>
@@ -562,6 +563,11 @@
       </section>
       ${related.length ? `<section class="content-section"><div class="section-head"><div><h2>شاید بپسندید</h2><p>آثار مشابه در همین ژانر</p></div></div><div class="media-scroller">${related.map(mediaCard).join('')}</div></section>` : ''}
     </div>`;
+    if (window.VizostenNative) {
+      window.VizostenNative.onmessage = (event) => {
+        if (event.data !== 'ok') toast('پلیر بومی نتوانست این نشانی را باز کند.', 'error');
+      };
+    }
     initializePlayer(content.id, Number(resumeEntry?.positionSeconds || 0));
   }
 
@@ -1286,6 +1292,22 @@
     if (option) { beginDownload(option.dataset.downloadMedia); return; }
     const favorite = event.target.closest('[data-favorite]');
     if (favorite) { toggleFavorite(favorite.dataset.favorite); return; }
+    const nativePlayer = event.target.closest('[data-native-player]');
+    if (nativePlayer) {
+      const value = $('#video-url')?.value.trim() || '';
+      let url;
+      try {
+        url = new URL(value);
+        if (url.protocol !== 'https:' || url.username || url.password) throw new Error('invalid URL');
+      } catch { toast('لطفاً نشانی مستقیم HTTPS معتبر وارد کنید.', 'error'); return; }
+      try {
+        state.player?.video.pause();
+        if (window.VizostenNative) window.VizostenNative.postMessage(url.href);
+        else if (window.__TAURI__?.core?.invoke) await window.__TAURI__.core.invoke('open_native_player', { url: url.href });
+        else throw new Error('پلیر بومی در دسترس نیست.');
+      } catch (error) { toast(`اجرای پلیر بومی ممکن نشد: ${String(error)}`, 'error'); }
+      return;
+    }
     const bind = event.target.closest('[data-bind]');
     if (bind) { bindPlayerSource(bind.dataset.bind); return; }
     const skip = event.target.closest('#skip-ad');
