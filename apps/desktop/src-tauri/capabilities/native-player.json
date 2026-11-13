@@ -1,0 +1,8 @@
+{
+  "identifier": "native-player",
+  "description": "Only the trusted Vizosten site can open an HTTPS stream in the packaged player.",
+  "windows": ["main"],
+  "local": false,
+  "remote": { "urls": ["https://namdarcompost.ir/*"] },
+  "permissions": ["allow-open-native-player"]
+}

@@ -6,26 +6,37 @@
   <meta name="theme-color" content="#08080d">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Filmwork">
+  <meta name="apple-mobile-web-app-title" content="Vizosten">
   <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
   <link rel="apple-touch-icon" href="/icons/icon-180.png">
   <meta name="color-scheme" content="dark">
-  <meta name="description" content="Filmwork؛ تماشای آنلاین و دریافت امن فیلم و سریال از تلگرام">
-  <title>Filmwork | سینمای شخصی شما</title>
+  <meta name="description" content="ویزوستن؛ تماشای آنلاین و دریافت امن فیلم و سریال از تلگرام">
+  <title>Vizosten | ویزوستن</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=5">
 </head>
 <body class="bg-black text-white antialiased selection:bg-purple-600 selection:text-white">
+  <div id="app-splash" class="app-splash" hidden role="status" aria-label="ویزوستن، در حال بارگذاری">
+    <div class="app-splash-content"><img src="/icons/splash.jpg" alt="Vizosten | فیلم، سریال، هرجا"><div class="app-splash-loader" aria-hidden="true"></div></div>
+  </div>
+  <script>
+    if (window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true) {
+      const splash = document.getElementById('app-splash');
+      splash.hidden = false;
+      setTimeout(() => { splash.classList.add('is-leaving'); setTimeout(() => splash.remove(), 200); }, 1500);
+    }
+  </script>
   <a class="skip-link" href="#main-content">رفتن به محتوای اصلی</a>
   <div id="ambient" aria-hidden="true"></div>
   <header id="site-header" class="site-header">
     <div class="page-shell header-inner">
       <div class="header-start">
-        <button class="brand" type="button" data-route="/home" aria-label="فیلم‌ورک، صفحه نخست">
-          <span class="brand-mark" aria-hidden="true"><span>F</span></span>
-          <span class="brand-word">FILMWORK</span>
+        <button class="brand" type="button" data-route="/home" aria-label="ویزوستن، صفحه نخست">
+          <span class="brand-name">Vizosten</span>
         </button>
         <nav class="header-nav" aria-label="ناوبری اصلی دسکتاپ">
           <button type="button" class="header-nav-item" data-nav="home" data-route="/home">خانه</button>
@@ -37,8 +48,8 @@
       <button type="button" class="header-tool" data-route="/search" aria-label="جستجو و فیلترها">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h3m4 0h9M4 18h7m4 0h5"/><circle cx="16" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="13" cy="18" r="2"/></svg>
       </button>
-      <button class="header-brand-center" type="button" data-route="/home" aria-label="Filmwork، صفحه نخست">
-        <strong>فیلم‌ورک</strong>
+      <button class="header-brand-center" type="button" data-route="/home" aria-label="ویزوستن، صفحه نخست">
+        <strong>ویزوستن</strong>
         <small id="header-page-label">خانه</small>
       </button>
       <button type="button" class="profile-trigger" data-route="/profile" aria-label="حساب کاربری">
@@ -74,8 +85,8 @@
 
   <div id="modal-root"></div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <noscript><div class="noscript">برای اجرای Filmwork، جاوااسکریپت مرورگر را فعال کنید.</div></noscript>
+  <noscript><div class="noscript">برای اجرای ویزوستن، جاوااسکریپت مرورگر را فعال کنید.</div></noscript>
   <script>if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));</script>
-  <script src="/app.js" defer></script>
+  <script src="/app.js?v=5" defer></script>
 </body>
 </html>
