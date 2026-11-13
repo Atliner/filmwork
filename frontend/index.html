@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=4">
 </head>
 <body class="bg-black text-white antialiased selection:bg-purple-600 selection:text-white">
   <div id="app-splash" class="app-splash" hidden role="status" aria-label="ویزوستن، در حال بارگذاری">
@@ -36,7 +36,7 @@
     <div class="page-shell header-inner">
       <div class="header-start">
         <button class="brand" type="button" data-route="/home" aria-label="ویزوستن، صفحه نخست">
-          <img class="brand-logo" src="/icons/brand.jpg" alt="Vizosten | فیلم، سریال، هرجا">
+          <span class="brand-name">Vizosten</span>
         </button>
         <nav class="header-nav" aria-label="ناوبری اصلی دسکتاپ">
           <button type="button" class="header-nav-item" data-nav="home" data-route="/home">خانه</button>
@@ -87,6 +87,6 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <noscript><div class="noscript">برای اجرای ویزوستن، جاوااسکریپت مرورگر را فعال کنید.</div></noscript>
   <script>if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));</script>
-  <script src="/app.js" defer></script>
+  <script src="/app.js?v=4" defer></script>
 </body>
 </html>

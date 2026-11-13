@@ -12,6 +12,17 @@ test('Vizosten browser and PWA branding reference shipped assets', () => {
   const manifest = JSON.parse(read('frontend/manifest.webmanifest'));
   assert.match(html, /<title>Vizosten \| ویزوستن<\/title>/);
   assert.match(html, /href="\/favicon.ico"/);
+  const header = html.match(/<header\b[\s\S]*?<\/header>/)?.[0];
+  assert.ok(header);
+  assert.match(header, /<span class="brand-name">Vizosten<\/span>/);
+  assert.doesNotMatch(header, /<img\b/);
+  assert.doesNotMatch(html, /سینمای شخصی شما/);
+  const worker = read('frontend/sw.js');
+  for (const asset of ['/styles.css?v=4', '/app.js?v=4']) {
+    assert.ok(html.includes(asset));
+    assert.ok(worker.includes(asset));
+  }
+  assert.match(worker, /SHELL_PATHS\.has\(url\.pathname\)/);
   assert.equal(manifest.name, 'Vizosten | ویزوستن');
   for (const file of ['frontend/favicon.ico', 'frontend/icons/icon-192.png', 'frontend/icons/icon-512.png', 'frontend/icons/splash.jpg']) {
     assert.ok(fs.statSync(path.join(root, file)).size > 0, file);
