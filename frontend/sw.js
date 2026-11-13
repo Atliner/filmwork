@@ -1,6 +1,6 @@
 /* Cache only the offline shell; never cache API responses or account data. */
-const CACHE = 'filmwork-shell-v1';
-const SHELL = ['/', '/manifest.webmanifest', '/styles.css', '/app.js', '/icons/icon-192.png', '/icons/icon-512.png'];
+const CACHE = 'vizosten-shell-v2';
+const SHELL = ['/', '/manifest.webmanifest', '/styles.css', '/app.js', '/icons/brand.jpg', '/icons/icon-192.png', '/icons/icon-512.png'];
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
 });

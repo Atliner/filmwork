@@ -290,7 +290,7 @@
       ${backdrop ? `<img class="hero-media" src="${backdrop}" alt="" fetchpriority="high">` : '<div class="hero-placeholder"></div>'}
       <div class="hero-vignette"></div>
       <div class="page-shell hero-content">
-        <div class="eyebrow">انتخاب ویژه Filmwork</div>
+        <div class="eyebrow">انتخاب ویژه Vizosten</div>
         <h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>
         ${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="hero-en-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}
         <div class="hero-meta">
@@ -331,7 +331,7 @@
     app.innerHTML = `<div class="page-shell home-desktop-top">
         <div><div class="home-greeting">کتابخانه شخصی شما</div><h1 class="home-title">امشب چه ببینیم؟</h1></div>
         <form class="home-search" id="home-search" role="search">
-          ${icons.search}<input type="search" name="q" maxlength="100" autocomplete="off" aria-label="جستجو در فیلم‌ورک" placeholder="نام فیلم، سریال، بازیگر یا کارگردان…">
+          ${icons.search}<input type="search" name="q" maxlength="100" autocomplete="off" aria-label="جستجو در ویزوستن" placeholder="نام فیلم، سریال، بازیگر یا کارگردان…">
           <button class="primary-button" type="submit">جستجو</button>
         </form>
       </div>
@@ -346,7 +346,7 @@
       <div class="page-shell">
         ${continueItems.length && onlinePlaybackVisible() ? `<section class="content-section resume-section"><div class="section-head"><div><h2>ادامه تماشا</h2><p>از همان‌جایی که رها کردید</p></div></div><div class="resume-scroller">${continueItems.map(continueCard).join('')}</div></section>` : ''}
         <section class="content-section">
-          <div class="section-head"><div><h2>تازه‌های فیلم‌ورک</h2><p>جدیدترین فیلم‌ها و سریال‌های اضافه‌شده</p></div><button class="text-button" data-route="/search">مشاهده همه</button></div>
+          <div class="section-head"><div><h2>تازه‌های ویزوستن</h2><p>جدیدترین فیلم‌ها و سریال‌های اضافه‌شده</p></div><button class="text-button" data-route="/search">مشاهده همه</button></div>
           <div class="media-scroller">${latest.length ? latest.map(mediaCard).join('') : mediaCard(hero)}</div>
         </section>
         ${topRated.length ? `<section class="content-section"><div class="section-head"><div><h2>بالاترین امتیاز</h2><p>انتخاب‌ها بر اساس امتیاز IMDb</p></div></div><div class="media-scroller">${topRated.map(mediaCard).join('')}</div></section>` : ''}
@@ -358,7 +358,7 @@
     setHeaderLabel('جستجو');
     const genres = ['اکشن', 'درام', 'کمدی', 'جنایی', 'علمی تخیلی', 'انیمیشن'];
     app.innerHTML = `<div class="page-shell page-top search-page">
-      <div class="section-head search-title"><div><h1 class="page-title">جستجو</h1><p>در میان فیلم‌ها و سریال‌های فیلم‌ورک</p></div></div>
+      <div class="section-head search-title"><div><h1 class="page-title">جستجو</h1><p>در میان فیلم‌ها و سریال‌های ویزوستن</p></div></div>
       <label class="search-box">${icons.search}<input id="search-input" type="search" maxlength="100" autocomplete="off" placeholder="نام فارسی یا انگلیسی فیلم، سریال، بازیگر یا کارگردان…" value="${escapeHtml(initialQuery)}"><span class="sr-only">جستجو</span></label>
       <p class="search-hint">هر دو زبان جستجو می‌شود: «پیت» و «The Pitt» هر دو همین اثر را پیدا می‌کنند؛ نام بازیگران و کارگردانان هم در فهرست نتایج می‌آید.</p>
       <section class="search-discovery"><h2>ژانرهای محبوب</h2><div class="genre-chip-row">
@@ -903,7 +903,7 @@
       ${roleSwitcher('user')}
       <section class="account-hero">
         <div class="large-avatar">${escapeHtml(firstLetter(state.user.accountName))}</div>
-        <div><h1>${escapeHtml(state.user.accountName)}</h1><p>عضو و تبلیغ‌دهنده فیلم‌ورک · از ${formatDate(state.user.createdAt)}</p></div>
+        <div><h1>${escapeHtml(state.user.accountName)}</h1><p>عضو و تبلیغ‌دهنده ویزوستن · از ${formatDate(state.user.createdAt)}</p></div>
       </section>
       <section class="account-stats" aria-label="آمار حساب">
         <div><strong>${formatNumber(watchedHours)}</strong><span>ساعت تماشا</span></div>
@@ -1147,7 +1147,7 @@
       ? `<video id="preroll-video" src="${safeUrl(ad.creativeUrl)}" autoplay playsinline muted></video>`
       : `<img src="${safeUrl(ad.creativeUrl)}" alt="${escapeHtml(ad.headline)}">`;
     let seconds = Math.max(0, Number(ad.skipAfterSeconds || 0));
-    openModal(`${modalHeader('پیام حامی Filmwork')}<div class="ad-stage"><span class="ad-label">تبلیغ</span>${media}<button class="ad-skip" id="skip-ad" type="button" ${seconds ? 'disabled' : ''}>${seconds ? `رد کردن · ${formatNumber(seconds)}` : 'رد کردن تبلیغ'}</button></div><div class="ad-copy"><h3>${escapeHtml(ad.headline)}</h3><p>${escapeHtml(ad.body || '')}</p><a class="text-button" href="${escapeHtml(ad.tunnelUrl)}" target="_blank" rel="noopener" data-ad-click="${escapeHtml(ad.id)}" data-ad-session="${escapeHtml(ad.session)}">مشاهده جزئیات در صفحه بدون فیلتر</a></div>`, { locked: true });
+    openModal(`${modalHeader('پیام حامی Vizosten')}<div class="ad-stage"><span class="ad-label">تبلیغ</span>${media}<button class="ad-skip" id="skip-ad" type="button" ${seconds ? 'disabled' : ''}>${seconds ? `رد کردن · ${formatNumber(seconds)}` : 'رد کردن تبلیغ'}</button></div><div class="ad-copy"><h3>${escapeHtml(ad.headline)}</h3><p>${escapeHtml(ad.body || '')}</p><a class="text-button" href="${escapeHtml(ad.tunnelUrl)}" target="_blank" rel="noopener" data-ad-click="${escapeHtml(ad.id)}" data-ad-session="${escapeHtml(ad.session)}">مشاهده جزئیات در صفحه بدون فیلتر</a></div>`, { locked: true });
     recordAdEvent(ad, 'impression');
     const skip = $('#skip-ad');
     skip.dataset.mediaId = mediaId;
@@ -1431,7 +1431,7 @@
       if (state.token) tasks.push(api('/me').catch(() => null));
       const [config, me] = await Promise.all(tasks);
       state.config = config;
-      const siteName = config.site?.name || 'Filmwork';
+      const siteName = !config.site?.name || config.site.name === 'Filmwork' ? 'Vizosten' : config.site.name;
       document.title = `${siteName} | سینمای شخصی شما`;
       const brand = $('.header-brand-center strong');
       if (brand) brand.textContent = siteName;
