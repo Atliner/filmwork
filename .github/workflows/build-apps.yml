@@ -26,21 +26,51 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Build APK
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Exercise native playback on Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          arch: x86_64
+          target: default
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: cd apps/android && gradle connectedDebugAndroidTest
+      - name: Build APKs
         working-directory: apps/android
         env:
           FILMWORK_APP_URL: ${{ inputs.public_app_url }}
         run: gradle assembleRelease
-      - name: Report APK size
+      - name: Report APK sizes
         shell: bash
         run: |
-          apk=$(find apps/android/app/build/outputs/apk/release -name '*.apk' -print -quit)
-          test -n "$apk"
-          echo "APK size: $(stat -c%s "$apk") bytes"
+          find apps/android/app/build/outputs/apk/release -name '*.apk' -printf '%f %s bytes\n'
       - uses: actions/upload-artifact@v4
         with:
-          name: Filmwork-Android-APK
-          path: apps/android/app/build/outputs/apk/release/*.apk
+          name: Vizosten-Android-ARM64
+          path: apps/android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vizosten-Android-ARM32
+          path: apps/android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vizosten-Android-x86_64
+          path: apps/android/app/build/outputs/apk/release/app-x86_64-release.apk
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vizosten-Android-x86
+          path: apps/android/app/build/outputs/apk/release/app-x86-release.apk
           if-no-files-found: error
           retention-days: 30
 

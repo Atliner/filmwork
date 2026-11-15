@@ -16,7 +16,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
-import android.view.SurfaceView;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowManager;
@@ -34,6 +33,7 @@ import org.videolan.libvlc.LibVLC;
 import org.videolan.libvlc.Media;
 import org.videolan.libvlc.MediaPlayer;
 import org.videolan.libvlc.interfaces.IMedia;
+import org.videolan.libvlc.util.VLCVideoLayout;
 
 import java.util.ArrayList;
 import java.util.Locale;
@@ -49,7 +49,11 @@ public final class NativePlayerActivity extends Activity {
   private final ArrayList<Uri> audios = new ArrayList<>();
   private LibVLC vlc;
   private MediaPlayer player;
-  private SurfaceView surface;
+  private VLCVideoLayout videoLayout;
+  private LinearLayout playbackStatus;
+  private TextView playbackStatusText;
+  private Button retryPlayback;
+  private int mediaStartSequence;
   private Uri source;
   private TextView elapsed;
   private TextView duration;
@@ -104,7 +108,7 @@ public final class NativePlayerActivity extends Activity {
       if (player == null || isFinishing()) return;
       if (phase == Phase.AD && activeAd != null) {
         long elapsedAd = Math.max(0, player.getTime());
-        if (!adImpression && visible && hasWindowFocus() && surface.isShown() && player.isPlaying() && elapsedAd > 0) {
+        if (!adImpression && visible && hasWindowFocus() && videoLayout.isShown() && player.isPlaying() && elapsedAd > 0) {
           adImpression = true;
           adClient.record(activeAd, "impression");
         }
@@ -234,11 +238,11 @@ public final class NativePlayerActivity extends Activity {
       content.setPadding(left, top, right, bottom);
       return insets;
     });
-    surface = new SurfaceView(this);
-    content.addView(surface, new FrameLayout.LayoutParams(-1, -1));
-    surface.addOnLayoutChangeListener((v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
-      if (player != null) player.getVLCVout().setWindowSize(right - left, bottom - top);
-    });
+    // LibVLC's managed TextureView handles surface creation, aspect ratio and
+    // resizing. Reattaching a bare SurfaceView before it is ready can flash
+    // black or leave video invisible on some devices.
+    videoLayout = new VLCVideoLayout(this);
+    content.addView(videoLayout, new FrameLayout.LayoutParams(-1, -1));
 
     LinearLayout top = new LinearLayout(this);
     top.setGravity(Gravity.CENTER_VERTICAL);
@@ -332,6 +336,19 @@ public final class NativePlayerActivity extends Activity {
     bannerParams.bottomMargin = dp(105);
     content.addView(bannerHost, bannerParams);
     bannerHost.setVisibility(View.GONE);
+    playbackStatus = new LinearLayout(this);
+    playbackStatus.setOrientation(LinearLayout.VERTICAL);
+    playbackStatus.setGravity(Gravity.CENTER);
+    playbackStatus.setPadding(dp(16), dp(12), dp(16), dp(12));
+    playbackStatus.setBackgroundColor(0xdd18181b);
+    playbackStatusText = label("در حال آماده‌سازی پخش…", 14);
+    playbackStatusText.setGravity(Gravity.CENTER);
+    playbackStatus.addView(playbackStatusText);
+    retryPlayback = button("تلاش دوباره", () -> { if (phase == Phase.CONTENT) startContent(); });
+    retryPlayback.setVisibility(View.GONE);
+    playbackStatus.addView(retryPlayback);
+    FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER);
+    content.addView(playbackStatus, statusParams);
     adLayer = new FrameLayout(this);
     adLayer.setVisibility(View.GONE);
     content.addView(adLayer, new FrameLayout.LayoutParams(-1, -1));
@@ -352,9 +369,6 @@ public final class NativePlayerActivity extends Activity {
   private void createPlayer() {
     player = new MediaPlayer(vlc);
     player.setVolume(playbackVolume);
-    player.getVLCVout().setVideoView(surface);
-    player.getVLCVout().attachViews();
-    if (surface.getWidth() > 0 && surface.getHeight() > 0) player.getVLCVout().setWindowSize(surface.getWidth(), surface.getHeight());
     tracksAdded = false;
     final MediaPlayer activePlayer = player;
     player.setEventListener(event -> {
@@ -363,7 +377,7 @@ public final class NativePlayerActivity extends Activity {
       if (event.type == MediaPlayer.Event.EncounteredError) runOnUiThread(() -> {
         if (player != activePlayer) return;
         if (phase == Phase.AD) finishAd(null);
-        else Toast.makeText(this, "پخش ممکن نشد؛ اتصال، قالب و نشانی فایل را بررسی کنید.", Toast.LENGTH_LONG).show();
+        else if (phase == Phase.CONTENT) showPlaybackStatus("پخش ممکن نشد. اتصال اینترنت یا دسترسی و فرمت فایل را بررسی کنید.", true);
       });
     });
   }
@@ -374,17 +388,34 @@ public final class NativePlayerActivity extends Activity {
     // must never be mistaken for completion or progress of the next video.
     releasePlayer();
     createPlayer();
+    final int sequence = ++mediaStartSequence;
+    player.attachViews(videoLayout, null, true, true);
+    if (phase == Phase.CONTENT) {
+      showPlaybackStatus("در حال بارگیری ویدیو…", false);
+      handler.postDelayed(() -> {
+        if (phase == Phase.CONTENT && mediaStartSequence == sequence && player != null && !player.isPlaying())
+          showPlaybackStatus("ویدیو هنوز آماده نشده؛ اتصال و دسترسی فایل را بررسی کنید.", true);
+      }, 25000);
+    } else playbackStatus.setVisibility(View.GONE);
     Media media = new Media(vlc, uri);
     player.setMedia(media);
     media.release();
     if (visible) player.play();
   }
 
+  private void showPlaybackStatus(String message, boolean retry) {
+    playbackStatusText.setText(message);
+    retryPlayback.setVisibility(retry ? View.VISIBLE : View.GONE);
+    playbackStatus.setVisibility(View.VISIBLE);
+  }
+
   private void onMediaPlaying() {
     if (player == null) return;
     player.setVolume(playbackVolume);
     if (phase == Phase.AD) return; // impression is recorded on visible playback progress
-    if (phase != Phase.CONTENT || tracksAdded) return;
+    if (phase != Phase.CONTENT) return;
+    playbackStatus.setVisibility(View.GONE);
+    if (tracksAdded) return;
     tracksAdded = true;
     for (Uri uri : subtitles) player.addSlave(IMedia.Slave.Type.Subtitle, uri, false);
     for (Uri uri : audios) player.addSlave(IMedia.Slave.Type.Audio, uri, false);
@@ -416,6 +447,7 @@ public final class NativePlayerActivity extends Activity {
     resumeAfterAd = resume;
     finishAfterAd = finishAfter;
     phase = Phase.AD_LOADING;
+    playbackStatus.setVisibility(View.GONE);
     adLayer.removeAllViews();
     adLayer.setBackgroundColor(0xcc000000);
     adLayer.setClickable(true);
@@ -745,7 +777,7 @@ public final class NativePlayerActivity extends Activity {
     MediaPlayer old = player;
     player = null; // ignore already-queued events from this instance
     old.setEventListener(null);
-    old.stop(); old.getVLCVout().detachViews(); old.release();
+    old.stop(); old.detachViews(); old.release();
   }
   private void releaseEngine() {
     releasePlayer();

@@ -47,3 +47,16 @@ test('experimental ad client parses and follows the current site routes', async 
   }
   // These source checks do not establish that Android can compile or play an ad.
 });
+
+
+test('native renderer uses managed texture views and split APKs', () => {
+  const code = read('apps/android/app/src/experimentalNative/java/com/filmwork/app/NativePlayerActivity.java');
+  const build = read('apps/android/app/build.gradle');
+  assert.match(code, /VLCVideoLayout/);
+  assert.match(code, /player\.attachViews\(videoLayout, null, true, true\)/);
+  assert.match(code, /showPlaybackStatus/);
+  assert.doesNotMatch(code, /new SurfaceView\(/);
+  for (const abi of ['arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64']) assert.ok(build.includes(abi));
+  assert.match(build, /useLegacyPackaging true/);
+  assert.match(build, /testInstrumentationRunner/);
+});
