@@ -21,4 +21,4 @@
 
 ## ساخت
 
-- APK قدیمی [Actions 43625387471](https://github.com/Atliner/filmwork/actions/runs/43625387471) از پلیر وب استفاده می‌کند و نسخهٔ جدید Android نیست. ساخت و آزمون روی دستگاه باید جداگانه بررسی شود.
+- job اندروید در [Actions 43716337233](https://github.com/Atliner/filmwork/actions/runs/43716337233) با موفقیت APK حاوی پلیر بومی را ساخته است؛ این موفقیت build است، نه تأیید عملکرد روی دستگاه. برای فعال‌شدن پل ارتباطی باید `frontend/app.js`، `frontend/index.html` و `frontend/sw.js` جدید روی هاست منتشر شوند. APK قدیمی اجرای 43625387471 فقط پلیر وب داشت.
