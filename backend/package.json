@@ -28,6 +28,8 @@
     "telegraf": "^4.16.3"
   },
   "devDependencies": {
+    "java-parser": "^3.0.1",
+    "jsdom": "^26.1.0",
     "tailwindcss": "^3.4.17"
   }
 }
