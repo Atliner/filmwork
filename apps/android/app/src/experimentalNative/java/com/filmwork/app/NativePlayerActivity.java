@@ -3,6 +3,7 @@ package com.filmwork.app;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.os.SystemClock;
 import android.graphics.Color;
 import android.graphics.Insets;
@@ -81,6 +82,9 @@ public final class NativePlayerActivity extends Activity {
   private long adLastPosition;
   private long adLastAdvanceAt;
   private long lastProgressAt;
+  private int adRequestSequence;
+  private float playbackRate = 1f;
+  private int playbackVolume = 100;
   private boolean userSeeking;
   private boolean tracksAdded;
   private boolean resumeAfterRebuild = true;
@@ -169,8 +173,10 @@ public final class NativePlayerActivity extends Activity {
     }
     contentId = getIntent().getStringExtra("contentId");
     sessionToken = getIntent().getStringExtra("sessionToken");
+    android.content.SharedPreferences prefs = getSharedPreferences("vizosten-player", MODE_PRIVATE);
+    playbackRate = Math.max(0.5f, Math.min(2f, prefs.getFloat("playbackRate", 1f)));
+    playbackVolume = Math.max(0, Math.min(100, prefs.getInt("playbackVolume", 100)));
     if (savedState == null) {
-      android.content.SharedPreferences prefs = getSharedPreferences("vizosten-player", MODE_PRIVATE);
       subtitleDelayUs = Math.max(-60000000L, Math.min(60000000L, prefs.getLong("subtitleDelayUs", 0)));
       subtitleScale = Math.max(6, Math.min(20, prefs.getInt("subtitleScale", 16)));
       subtitleColor = prefs.getInt("subtitleColor", 0xffffff) & 0xffffff;
@@ -279,8 +285,12 @@ public final class NativePlayerActivity extends Activity {
     timeline.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
     timeline.setPadding(dp(10), dp(6), dp(10), dp(6));
     timeline.setBackgroundColor(0xc9000000);
+    LinearLayout bottom = new LinearLayout(this);
+    bottom.setOrientation(LinearLayout.VERTICAL);
+    bottom.setBackgroundColor(0xc9000000);
     FrameLayout.LayoutParams timelineParams = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-    content.addView(timeline, timelineParams);
+    content.addView(bottom, timelineParams);
+    bottom.addView(timeline, new LinearLayout.LayoutParams(-1, -2));
     elapsed = label("00:00", 12); duration = label("00:00", 12);
     seek = new SeekBar(this); seek.setMax(1000);
     timeline.addView(elapsed); timeline.addView(seek, new LinearLayout.LayoutParams(0, -2, 1)); timeline.addView(duration);
@@ -292,9 +302,34 @@ public final class NativePlayerActivity extends Activity {
         userSeeking = false;
       }
     });
+    LinearLayout options = new LinearLayout(this);
+    options.setGravity(Gravity.CENTER_VERTICAL);
+    options.setPadding(dp(8), 0, dp(8), dp(4));
+    options.addView(button("سرعت", this::showSpeed));
+    options.addView(button("⛶", () -> {
+      if (getRequestedOrientation() == ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE)
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+      else setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+    }));
+    TextView volumeLabel = label("صدا", 12);
+    volumeLabel.setPadding(dp(8), 0, dp(4), 0);
+    options.addView(volumeLabel);
+    SeekBar volumeBar = new SeekBar(this); volumeBar.setMax(100); volumeBar.setProgress(playbackVolume);
+    options.addView(volumeBar, new LinearLayout.LayoutParams(0, -2, 1));
+    volumeBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+      @Override public void onProgressChanged(SeekBar bar, int value, boolean fromUser) {
+        if (!fromUser) return;
+        playbackVolume = value;
+        if (player != null) player.setVolume(value);
+        getSharedPreferences("vizosten-player", MODE_PRIVATE).edit().putInt("playbackVolume", value).apply();
+      }
+      @Override public void onStartTrackingTouch(SeekBar bar) { }
+      @Override public void onStopTrackingTouch(SeekBar bar) { }
+    });
+    bottom.addView(options, new LinearLayout.LayoutParams(-1, -2));
     bannerHost = new FrameLayout(this);
     FrameLayout.LayoutParams bannerParams = new FrameLayout.LayoutParams(-1, dp(88), Gravity.BOTTOM);
-    bannerParams.bottomMargin = dp(54);
+    bannerParams.bottomMargin = dp(105);
     content.addView(bannerHost, bannerParams);
     bannerHost.setVisibility(View.GONE);
     adLayer = new FrameLayout(this);
@@ -316,6 +351,7 @@ public final class NativePlayerActivity extends Activity {
 
   private void createPlayer() {
     player = new MediaPlayer(vlc);
+    player.setVolume(playbackVolume);
     player.getVLCVout().setVideoView(surface);
     player.getVLCVout().attachViews();
     if (surface.getWidth() > 0 && surface.getHeight() > 0) player.getVLCVout().setWindowSize(surface.getWidth(), surface.getHeight());
@@ -346,6 +382,7 @@ public final class NativePlayerActivity extends Activity {
 
   private void onMediaPlaying() {
     if (player == null) return;
+    player.setVolume(playbackVolume);
     if (phase == Phase.AD) return; // impression is recorded on visible playback progress
     if (phase != Phase.CONTENT || tracksAdded) return;
     tracksAdded = true;
@@ -353,6 +390,7 @@ public final class NativePlayerActivity extends Activity {
     for (Uri uri : audios) player.addSlave(IMedia.Slave.Type.Audio, uri, false);
     if (pendingSeek > 0) { player.setTime(pendingSeek); pendingSeek = 0; }
     player.setSpuDelay(subtitleDelayUs);
+    player.setRate(playbackRate);
     if (!resumeAfterRebuild) player.pause();
     resumeAfterRebuild = true;
     if (waitingPauseBanner) {
@@ -385,8 +423,12 @@ public final class NativePlayerActivity extends Activity {
     TextView loading = label("در حال دریافت تبلیغ…", 15);
     loading.setGravity(Gravity.CENTER);
     adLayer.addView(loading, new FrameLayout.LayoutParams(-1, -1));
+    final int requestId = ++adRequestSequence;
+    handler.postDelayed(() -> {
+      if (phase == Phase.AD_LOADING && adRequestSequence == requestId) finishAd(null);
+    }, 12000);
     adClient.requestAd(placement, ad -> {
-      if (phase != Phase.AD_LOADING || isFinishing()) return;
+      if (phase != Phase.AD_LOADING || adRequestSequence != requestId || isFinishing()) return;
       if (ad == null || !"video".equals(ad.assetType)) { finishAd(null); return; }
       activeAd = ad;
       adImpression = false;
@@ -429,6 +471,7 @@ public final class NativePlayerActivity extends Activity {
   private void finishAd(String outcome) {
     if (phase != Phase.AD && phase != Phase.AD_LOADING) return;
     if (activeAd != null && adImpression && outcome != null) adClient.record(activeAd, outcome);
+    adRequestSequence++;
     activeAd = null;
     adLayer.setVisibility(View.GONE);
     adLayer.removeAllViews();
@@ -625,6 +668,18 @@ public final class NativePlayerActivity extends Activity {
           boolean ok = player.addSlave(subtitle ? IMedia.Slave.Type.Subtitle : IMedia.Slave.Type.Audio, uri, true);
           Toast.makeText(this, ok ? "ترک اضافه شد." : "افزودن ترک ممکن نشد.", Toast.LENGTH_SHORT).show();
         }).show();
+  }
+
+  private void showSpeed() {
+    if (phase != Phase.CONTENT || player == null) return;
+    String[] labels = {"۰٫۵×", "۰٫۷۵×", "عادی", "۱٫۲۵×", "۱٫۵×", "۲×"};
+    float[] rates = {0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f};
+    new AlertDialog.Builder(this).setTitle("سرعت پخش").setItems(labels, (dialog, which) -> {
+      if (player == null || phase != Phase.CONTENT) return;
+      playbackRate = rates[which];
+      player.setRate(playbackRate);
+      getSharedPreferences("vizosten-player", MODE_PRIVATE).edit().putFloat("playbackRate", playbackRate).apply();
+    }).setNegativeButton("بستن", null).show();
   }
 
   private void showSubtitleSettings() {
