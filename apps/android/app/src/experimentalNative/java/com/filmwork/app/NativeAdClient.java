@@ -28,6 +28,7 @@ import java.util.concurrent.Executors;
 final class NativeAdClient {
   interface Callback { void onResult(Ad ad); }
   interface ImageCallback { void onResult(Bitmap image); }
+  interface ProbeCallback { void onResult(String result); }
   static final class Ad {
     final String id, session, placement, creativeUrl, headline, body, assetType;
     final int skipSeconds, durationSeconds;
@@ -118,6 +119,29 @@ final class NativeAdClient {
       finally { if (connection != null) connection.disconnect(); }
       final Bitmap result = bitmap;
       main.post(() -> { if (!closed) callback.onResult(result); });
+    });
+  }
+
+  /** Test only the direct host after a playback error. No URL is logged or sent to the site. */
+  void probeMedia(Uri media, ProbeCallback callback) {
+    if (closed || media == null) return;
+    executor.execute(() -> {
+      String result = "NETWORK_ERROR";
+      HttpURLConnection connection = null;
+      try {
+        connection = (HttpURLConnection) new URL(media.toString()).openConnection();
+        connection.setInstanceFollowRedirects(false);
+        connection.setConnectTimeout(4000); connection.setReadTimeout(4000);
+        connection.setRequestProperty("Range", "bytes=0-0");
+        connection.setRequestProperty("Accept-Encoding", "identity");
+        result = "HTTP_" + connection.getResponseCode();
+      } catch (javax.net.ssl.SSLException error) { result = "TLS_ERROR"; }
+        catch (java.net.UnknownHostException error) { result = "DNS_ERROR"; }
+        catch (java.net.SocketTimeoutException error) { result = "TIMEOUT"; }
+        catch (Exception ignored) { }
+      finally { if (connection != null) connection.disconnect(); }
+      final String safeResult = result;
+      main.post(() -> { if (!closed) callback.onResult(safeResult); });
     });
   }
 

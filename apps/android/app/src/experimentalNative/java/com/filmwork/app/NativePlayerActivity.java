@@ -152,8 +152,9 @@ public final class NativePlayerActivity extends Activity {
   @SuppressWarnings("deprecation")
   @Override public void onCreate(Bundle savedState) {
     super.onCreate(savedState);
+    PlayerDiagnostics.mark(this, "PLAYER_CREATE");
     source = safeHttps(getIntent().getDataString());
-    if (source == null) { finish(); return; }
+    if (source == null) { PlayerDiagnostics.mark(this, "INVALID_SOURCE"); finish(); return; }
     getWindow().setStatusBarColor(Color.BLACK);
     getWindow().setNavigationBarColor(Color.BLACK);
     getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -191,7 +192,16 @@ public final class NativePlayerActivity extends Activity {
     }
     adClient = new NativeAdClient(BuildConfig.APP_URL, sessionToken);
     buildUi();
-    createEngine();
+    PlayerDiagnostics.mark(this, "PLAYER_UI_READY");
+    try {
+      PlayerDiagnostics.mark(this, "VLC_INITIALIZING");
+      createEngine();
+      PlayerDiagnostics.mark(this, "VLC_INITIALIZED");
+    } catch (RuntimeException | LinkageError error) {
+      PlayerDiagnostics.recordFailure(this, "VLC_INITIALIZING", error, false);
+      showPlaybackStatus("موتور پخش راه‌اندازی نشد. از دکمهٔ عیب‌یابی گزارش را ببینید.", false);
+      return;
+    }
     if (savedState != null) {
       preRollDone = savedState.getBoolean("preRollDone", false);
       midRollDone = savedState.getBoolean("midRollDone", false);
@@ -260,6 +270,7 @@ public final class NativePlayerActivity extends Activity {
     subtitleCount.setPadding(dp(8), dp(12), dp(8), dp(12));
     top.addView(audioCount); top.addView(subtitleCount);
     top.addView(button("⚙", this::showSubtitleSettings));
+    top.addView(button("ⓘ", () -> PlayerDiagnostics.show(this, false)));
 
     LinearLayout center = new LinearLayout(this);
     center.setGravity(Gravity.CENTER);
@@ -376,14 +387,25 @@ public final class NativePlayerActivity extends Activity {
       if (event.type == MediaPlayer.Event.EndReached) runOnUiThread(() -> { if (player == activePlayer) onMediaEnded(); });
       if (event.type == MediaPlayer.Event.EncounteredError) runOnUiThread(() -> {
         if (player != activePlayer) return;
+        PlayerDiagnostics.mark(this, phase == Phase.AD ? "AD_MEDIA_ERROR" : "CONTENT_MEDIA_ERROR");
         if (phase == Phase.AD) finishAd(null);
-        else if (phase == Phase.CONTENT) showPlaybackStatus("پخش ممکن نشد. اتصال اینترنت یا دسترسی و فرمت فایل را بررسی کنید.", true);
+        else if (phase == Phase.CONTENT) {
+          showPlaybackStatus("پخش ممکن نشد. اتصال اینترنت یا دسترسی و فرمت فایل را بررسی کنید.", true);
+          final int failedSequence = mediaStartSequence;
+          adClient.probeMedia(source, result -> {
+            if (phase != Phase.CONTENT || mediaStartSequence != failedSequence || isFinishing()) return;
+            PlayerDiagnostics.mark(this, "SOURCE_" + result);
+            showPlaybackStatus("پخش ممکن نشد. نتیجهٔ بررسی اتصال: " + result + "\nجزئیات بیشتر در عیب‌یابی", true);
+          });
+        }
       });
     });
   }
 
   private void playStream(Uri uri) {
     if (vlc == null || uri == null) return;
+    PlayerDiagnostics.mark(this, phase == Phase.AD ? "AD_PREPARE" : "CONTENT_PREPARE");
+    try {
     // Each media gets its own player identity. Queued events from a stopped ad
     // must never be mistaken for completion or progress of the next video.
     releasePlayer();
@@ -401,6 +423,11 @@ public final class NativePlayerActivity extends Activity {
     player.setMedia(media);
     media.release();
     if (visible) player.play();
+    } catch (RuntimeException | LinkageError error) {
+      PlayerDiagnostics.recordFailure(this, phase == Phase.AD ? "AD_PREPARE" : "CONTENT_PREPARE", error, false);
+      if (phase == Phase.AD) finishAd(null);
+      else showPlaybackStatus("راه‌اندازی فایل ممکن نشد. از عیب‌یابی گزارش را ببینید.", true);
+    }
   }
 
   private void showPlaybackStatus(String message, boolean retry) {
@@ -412,8 +439,9 @@ public final class NativePlayerActivity extends Activity {
   private void onMediaPlaying() {
     if (player == null) return;
     player.setVolume(playbackVolume);
-    if (phase == Phase.AD) return; // impression is recorded on visible playback progress
+    if (phase == Phase.AD) { PlayerDiagnostics.mark(this, "AD_PLAYING"); return; }
     if (phase != Phase.CONTENT) return;
+    if (!tracksAdded) PlayerDiagnostics.mark(this, "CONTENT_PLAYING");
     playbackStatus.setVisibility(View.GONE);
     if (tracksAdded) return;
     tracksAdded = true;
@@ -443,6 +471,7 @@ public final class NativePlayerActivity extends Activity {
     }
     clearBanner();
     if (trackDialog != null) { trackDialog.dismiss(); trackDialog = null; }
+    PlayerDiagnostics.mark(this, "AD_REQUEST_" + placement.toUpperCase(Locale.ROOT));
     pendingPlacement = placement;
     resumeAfterAd = resume;
     finishAfterAd = finishAfter;
@@ -461,7 +490,7 @@ public final class NativePlayerActivity extends Activity {
     }, 12000);
     adClient.requestAd(placement, ad -> {
       if (phase != Phase.AD_LOADING || adRequestSequence != requestId || isFinishing()) return;
-      if (ad == null || !"video".equals(ad.assetType)) { finishAd(null); return; }
+      if (ad == null || !"video".equals(ad.assetType)) { PlayerDiagnostics.mark(this, "AD_UNAVAILABLE"); finishAd(null); return; }
       activeAd = ad;
       adImpression = false;
       phase = Phase.AD;
@@ -521,7 +550,7 @@ public final class NativePlayerActivity extends Activity {
   }
 
   private void startContent() {
-    if (player == null || isFinishing()) return;
+    if (vlc == null || isFinishing()) return;
     phase = Phase.CONTENT;
     tracksAdded = false;
     playStream(source);

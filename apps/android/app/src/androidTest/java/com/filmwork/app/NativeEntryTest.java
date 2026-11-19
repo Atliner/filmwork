@@ -78,6 +78,9 @@ public class NativeEntryTest {
           if (activity instanceof NativePlayerActivity && hasText(activity.getWindow().getDecorView(), "Bridge playback test")) present = true;
         }
         assertTrue("release player remains open after native initialisation", present);
+        for (Activity activity : ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED)) {
+          if (activity instanceof NativePlayerActivity) activity.finish();
+        }
       });
     }
   }

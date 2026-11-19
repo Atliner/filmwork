@@ -4,7 +4,7 @@ set -uo pipefail
 # external artifact/log CDN is unavailable to a developer.
 log_file="${RUNNER_TEMP:-/tmp}/vizosten-release-test.log"
 gradle --console=plain connectedReleaseAndroidTest \
-  -Pandroid.testInstrumentationRunnerArguments.class=com.filmwork.app.NativeEntryTest >"$log_file" 2>&1
+  -Pandroid.testInstrumentationRunnerArguments.class=com.filmwork.app.NativeEntryTest,com.filmwork.app.NativePlaybackTest >"$log_file" 2>&1
 status=$?
 cat "$log_file"
 if [ "$status" -ne 0 ]; then

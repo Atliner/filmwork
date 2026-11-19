@@ -28,8 +28,8 @@ android {
         targetSdk 35
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         testProguardFiles 'test-proguard-rules.pro'
-        versionCode 7
-        versionName '1.6.0'
+        versionCode 8
+        versionName '1.7.0'
         buildConfigField 'String', 'APP_URL', '"' + appUrl.replace('\\', '\\\\').replace('"', '\\"') + '"'
     }
     // Each standalone APK carries just one CPU architecture. Never offer the
@@ -50,8 +50,10 @@ android {
     buildTypes {
         release {
             signingConfig signingConfigs.debug
-            minifyEnabled true
-            shrinkResources true
+            // Release shrinking has caused JNI-only LibVLC symbols to disappear
+            // in some integrations. Prefer a reliable player over tiny Java savings.
+            minifyEnabled false
+            shrinkResources false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }

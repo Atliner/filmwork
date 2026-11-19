@@ -60,3 +60,21 @@ test('native renderer uses managed texture views and split APKs', () => {
   assert.match(build, /useLegacyPackaging true/);
   assert.match(build, /testInstrumentationRunner/);
 });
+
+
+test('diagnostics are local, privacy-preserving, and available from both screens', async () => {
+  const { parse } = await import('java-parser');
+  const diagnostics = read('apps/android/app/src/main/java/com/filmwork/app/PlayerDiagnostics.java');
+  const application = read('apps/android/app/src/main/java/com/filmwork/app/VizostenApplication.java');
+  const main = read('apps/android/app/src/main/java/com/filmwork/app/MainActivity.java');
+  const player = read('apps/android/app/src/experimentalNative/java/com/filmwork/app/NativePlayerActivity.java');
+  for (const java of [diagnostics, application, main, player]) assert.doesNotThrow(() => parse(java));
+  assert.match(application, /installCrashHandler/);
+  assert.match(diagnostics, /setDefaultUncaughtExceptionHandler/);
+  assert.match(diagnostics, /failureStage/);
+  assert.doesNotMatch(diagnostics, /getMessage\(\)|getDataString\(\)|sessionToken|Authorization/);
+  assert.match(main, /PlayerDiagnostics\.show/);
+  assert.match(player, /PlayerDiagnostics\.show/);
+  assert.match(player, /VLC_INITIALIZING/);
+  assert.match(player, /catch \(RuntimeException \| LinkageError error\)/);
+});

@@ -24,6 +24,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.TextView;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 import org.json.JSONArray;
@@ -41,6 +42,7 @@ public final class MainActivity extends Activity {
   private long splashStarted;
   private boolean splashDismissed;
   private boolean playerOpen;
+  private boolean crashReportShown;
   private final Runnable dismissSplash = () -> {
     if (splashDismissed || splash == null) return;
     splashDismissed = true;
@@ -99,6 +101,7 @@ public final class MainActivity extends Activity {
     webView.getSettings().setAllowContentAccess(false);
     webView.getSettings().setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW);
     if (Build.VERSION.SDK_INT >= 26) webView.getSettings().setSafeBrowsingEnabled(true);
+    PlayerDiagnostics.mark(this, "WEBVIEW_READY");
     installPlayerBridge();
     webView.setWebChromeClient(new WebChromeClient());
     webView.setWebViewClient(new WebViewClient() {
@@ -116,6 +119,15 @@ public final class MainActivity extends Activity {
       }
     });
     content.addView(webView, new FrameLayout.LayoutParams(-1, -1));
+    TextView diagnostics = new TextView(this);
+    diagnostics.setText("عیب‌یابی"); diagnostics.setTextSize(11); diagnostics.setTextColor(Color.WHITE);
+    diagnostics.setPadding(12, 8, 12, 8); diagnostics.setBackgroundColor(0xcc27272a);
+    diagnostics.setContentDescription("باز کردن گزارش عیب‌یابی پلیر");
+    diagnostics.setOnClickListener(v -> PlayerDiagnostics.show(this, false));
+    FrameLayout.LayoutParams diagParams = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.LEFT);
+    diagParams.leftMargin = (int) (8 * getResources().getDisplayMetrics().density);
+    diagParams.bottomMargin = (int) (82 * getResources().getDisplayMetrics().density);
+    content.addView(diagnostics, diagParams);
     splash = createSplash();
     content.addView(splash, new FrameLayout.LayoutParams(-1, -1));
     setContentView(root);
@@ -126,11 +138,15 @@ public final class MainActivity extends Activity {
   }
 
   private void installPlayerBridge() {
-    if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return;
+    if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+      PlayerDiagnostics.mark(this, "BRIDGE_UNSUPPORTED"); return;
+    }
+    PlayerDiagnostics.mark(this, "BRIDGE_INSTALLED");
     Uri base = Uri.parse(BuildConfig.APP_URL);
     String origin = base.getScheme() + "://" + base.getHost() + (base.getPort() < 0 ? "" : ":" + base.getPort());
     WebViewCompat.addWebMessageListener(webView, "VizostenNative", Collections.singleton(origin),
         (view, message, sourceOrigin, isMainFrame, reply) -> {
+          PlayerDiagnostics.mark(MainActivity.this, "BRIDGE_MESSAGE");
           String raw = message.getData();
           if (!isMainFrame || sourceOrigin == null || !origin.equalsIgnoreCase(sourceOrigin.toString())
               || raw == null || raw.length() > 65536) { reply.postMessage("invalid-request"); return; }
@@ -158,6 +174,7 @@ public final class MainActivity extends Activity {
             intent.putStringArrayListExtra("subtitleUrls", safeTrackUrls(data.optJSONArray("subtitleUrls")));
             intent.putStringArrayListExtra("audioUrls", safeTrackUrls(data.optJSONArray("audioUrls")));
             playerOpen = true;
+            PlayerDiagnostics.mark(MainActivity.this, "PLAYER_LAUNCH_REQUESTED");
             try { startActivity(intent); } catch (Exception error) { playerOpen = false; throw error; }
             reply.postMessage("ok");
           } catch (Exception ignored) { reply.postMessage("invalid-request"); }
@@ -196,7 +213,13 @@ public final class MainActivity extends Activity {
     return layout;
   }
 
-  @Override protected void onResume() { super.onResume(); playerOpen = false; }
+  @Override protected void onResume() {
+    super.onResume(); playerOpen = false;
+    if (!crashReportShown && PlayerDiagnostics.hasPendingCrash(this)) {
+      crashReportShown = true;
+      handler.post(() -> { if (!isFinishing()) PlayerDiagnostics.show(this, true); });
+    }
+  }
   @Override protected void onDestroy() { handler.removeCallbacksAndMessages(null); super.onDestroy(); }
   @Override protected void onSaveInstanceState(Bundle out) { webView.saveState(out); super.onSaveInstanceState(out); }
   @Override public void onBackPressed() { if (webView != null && webView.canGoBack()) webView.goBack(); else super.onBackPressed(); }
