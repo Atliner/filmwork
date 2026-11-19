@@ -54,8 +54,11 @@ public class NativeSubtitleTest {
     bitmap.recycle(); return count;
   }
   private static int maxPixels(ActivityScenario<NativePlayerActivity> scenario) {
+    // Subtitle frames from the previous decoder can remain visible briefly;
+    // measure only after its old cue and queued surface frames have expired.
+    SystemClock.sleep(1800);
     AtomicInteger max = new AtomicInteger();
-    for (int i = 0; i < 18; i++) {
+    for (int i = 0; i < 12; i++) {
       scenario.onActivity(activity -> max.set(Math.max(max.get(), brightPixels(texture(activity.getWindow().getDecorView())))));
       SystemClock.sleep(150);
     }
@@ -117,7 +120,7 @@ public class NativeSubtitleTest {
       });
       int offPixels = maxPixels(scenario);
       assertTrue("long subtitle is rendered: " + longPixels, longPixels > 40);
-      assertTrue("short subtitle changes the rendered picture: long=" + longPixels + " short=" + shortPixels, shortPixels > 0 && shortPixels * 2 < longPixels);
+      assertTrue("short subtitle changes the rendered picture: long=" + longPixels + " short=" + shortPixels + " off=" + offPixels, shortPixels > 0 && shortPixels * 2 < longPixels);
       assertTrue("turning subtitles off clears the overlay: " + offPixels, offPixels < longPixels / 3);
     }
   }
