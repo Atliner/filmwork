@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 import android.os.SystemClock;
 import android.graphics.Color;
 import android.graphics.Insets;
@@ -18,6 +19,7 @@ import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.FrameLayout;
@@ -450,6 +452,34 @@ public final class NativePlayerActivity extends Activity {
     content.addView(adLayer, new FrameLayout.LayoutParams(-1, -1));
     setContentView(root);
     root.requestApplyInsets();
+    applySystemBars();
+  }
+
+  @SuppressWarnings("deprecation")
+  private void applySystemBars() {
+    boolean landscape = getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
+    if (Build.VERSION.SDK_INT >= 30) {
+      WindowInsetsController controller = getWindow().getInsetsController();
+      if (controller == null) return;
+      controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+      if (landscape) controller.hide(WindowInsets.Type.systemBars());
+      else controller.show(WindowInsets.Type.systemBars());
+    } else {
+      int flags = View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
+      if (landscape) flags |= View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
+      getWindow().getDecorView().setSystemUiVisibility(flags);
+    }
+    getWindow().getDecorView().requestApplyInsets();
+  }
+
+  @Override public void onConfigurationChanged(Configuration configuration) {
+    super.onConfigurationChanged(configuration);
+    applySystemBars();
+  }
+
+  @Override public void onWindowFocusChanged(boolean hasFocus) {
+    super.onWindowFocusChanged(hasFocus);
+    if (hasFocus) applySystemBars();
   }
 
   private void createEngine() {
@@ -811,7 +841,7 @@ public final class NativePlayerActivity extends Activity {
     LinearLayout list = new LinearLayout(this);
     list.setOrientation(LinearLayout.VERTICAL);
     list.setPadding(dp(16), dp(8), dp(16), dp(8));
-    if (isSubtitle) addTrackButton(list, "خاموش", selected == -1, () -> player.setSpuTrack(-1));
+    if (isSubtitle) addTrackButton(list, "خاموش", selected == -1, () -> selectSubtitle(-1));
     if (tracks != null) for (MediaPlayer.TrackDescription track : tracks) {
       if (track.id < 0) continue;
       String name = track.name == null ? "" : track.name.trim();
@@ -820,7 +850,10 @@ public final class NativePlayerActivity extends Activity {
       if (name.matches("(?is).*https?://.*")) name = "ترک خارجی " + track.id;
       if (name.isEmpty() || name.equalsIgnoreCase("null")) name = "ترک " + track.id;
       final int id = track.id;
-      addTrackButton(list, name, id == selected, () -> { if (isSubtitle) player.setSpuTrack(id); else player.setAudioTrack(id); });
+      addTrackButton(list, name, id == selected, () -> {
+        if (isSubtitle) selectSubtitle(id);
+        else { pendingAudioId = null; if (!player.setAudioTrack(id)) Toast.makeText(this, "انتخاب صدا ممکن نشد.", Toast.LENGTH_SHORT).show(); }
+      });
     }
     if (trackCount(tracks) == 0) {
       TextView empty = label("ترکی یافت نشد؛ اگر ویدیو در حال بارگیری است کمی صبر کنید.", 14);
@@ -831,6 +864,18 @@ public final class NativePlayerActivity extends Activity {
     trackDialog = new AlertDialog.Builder(this, R.style.PlayerDialog).setTitle(isSubtitle ? "انتخاب زیرنویس" : "انتخاب صدا")
         .setView(scroller).setNegativeButton("بستن", null).create();
     trackDialog.show();
+  }
+
+  private void selectSubtitle(int id) {
+    if (player == null || phase != Phase.CONTENT) return;
+    // Explicit user choice must override a pending track restoration from an ad
+    // or Activity recreation, including when the user turns subtitles off.
+    pendingSubtitleId = null;
+    restoreAttempts = 0;
+    boolean accepted = player.setSpuTrack(id);
+    PlayerDiagnostics.mark(this, accepted ? (id < 0 ? "SUBTITLE_OFF" : "SUBTITLE_SELECTED") : "SUBTITLE_SELECT_FAILED");
+    if (!accepted) Toast.makeText(this, "انتخاب زیرنویس ممکن نشد؛ پس از بارگیری دوباره تلاش کنید.", Toast.LENGTH_SHORT).show();
+    else if (id >= 0 && !player.isPlaying()) Toast.makeText(this, "پس از ادامهٔ پخش، زیرنویس جدید نمایش داده می‌شود.", Toast.LENGTH_SHORT).show();
   }
 
   private void addTrackButton(LinearLayout list, String text, boolean selected, Runnable action) {
