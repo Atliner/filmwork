@@ -193,7 +193,7 @@ public final class MainActivity extends Activity {
 
   private JSONArray safeVersions(JSONArray input) throws org.json.JSONException {
     if (input == null) return null; // Backward-compatible single-source bridge.
-    if (input.length() > 100) throw new org.json.JSONException("too many versions");
+    if (input.length() > 1000) throw new org.json.JSONException("too many versions");
     JSONArray result = new JSONArray();
     for (int i = 0; i < input.length(); i++) {
       JSONObject item = input.getJSONObject(i);

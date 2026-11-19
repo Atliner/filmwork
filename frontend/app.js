@@ -635,8 +635,8 @@
         try { return new URL(item.streamUrl).protocol === 'https:'; } catch { return false; }
       });
       // Android's bridge and Binder impose size limits; keep the selected item.
-      if (nativeVersions.length > 100) {
-        nativeVersions = [versions[initialIndex], ...nativeVersions.filter((item) => item !== versions[initialIndex])].slice(0, 100);
+      if (nativeVersions.length > 1000) {
+        nativeVersions = [versions[initialIndex], ...nativeVersions.filter((item) => item !== versions[initialIndex])].slice(0, 1000);
       }
       const nativeIndex = nativeVersions.indexOf(versions[initialIndex]);
       let localResume = 0;

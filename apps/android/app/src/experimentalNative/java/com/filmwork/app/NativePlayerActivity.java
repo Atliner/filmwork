@@ -253,7 +253,7 @@ public final class NativePlayerActivity extends Activity {
     if (json == null) return;
     try {
       JSONArray items = new JSONArray(json);
-      for (int i = 0; i < items.length() && i < 100; i++) {
+      for (int i = 0; i < items.length() && i < 1000; i++) {
         JSONObject item = items.getJSONObject(i);
         Uri uri = safeHttps(item.optString("streamUrl"));
         if (uri == null) { versions.clear(); return; }
