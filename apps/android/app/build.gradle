@@ -1,0 +1,56 @@
+plugins { id 'com.android.application' }
+
+String appUrl = providers.environmentVariable('FILMWORK_APP_URL')
+    .orElse('https://namdarcompost.ir/#/home').get().trim()
+if (!appUrl.matches('^https://[^/]+(/.*)?$')) {
+    throw new GradleException('FILMWORK_APP_URL must be the public HTTPS site URL, not the origin IP.')
+}
+
+// Native playback is bundled in the Android app. The activity is private and
+// can only be launched through the origin-scoped bridge in MainActivity.
+dependencies {
+    implementation 'org.videolan.android:libvlc-all:3.6.2'
+    implementation 'androidx.webkit:webkit:1.12.1'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test:core:1.6.1'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+}
+
+android {
+    sourceSets.main.java.srcDir 'src/experimentalNative/java'
+    testBuildType 'release'
+    namespace 'com.filmwork.app'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'com.filmwork.app'
+        minSdk 23
+        targetSdk 35
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        versionCode 7
+        versionName '1.6.0'
+        buildConfigField 'String', 'APP_URL', '"' + appUrl.replace('\\', '\\\\').replace('"', '\\"') + '"'
+    }
+    // Each standalone APK carries just one CPU architecture. Never offer the
+    // ARM package to Intel or old 32-bit devices as a universal build.
+    splits {
+        abi {
+            enable true
+            reset()
+            include 'arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64'
+            universalApk false
+        }
+    }
+    // Compressed native libraries reduce the downloaded APK size. Android may
+    // need more storage after installation because it extracts those libraries.
+    packaging { jniLibs { useLegacyPackaging true } }
+    buildFeatures { buildConfig true }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    buildTypes {
+        release {
+            signingConfig signingConfigs.debug
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+}

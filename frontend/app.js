@@ -18,6 +18,10 @@
     routeVisits: 0,
   };
 
+  function onlinePlaybackVisible() {
+    return state.config?.player?.enabled !== false && state.config?.player?.buttonVisible !== false;
+  }
+
   const app = document.getElementById('app');
   const loader = document.getElementById('initial-loader');
   const modalRoot = document.getElementById('modal-root');
@@ -35,6 +39,72 @@
     megaphone: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11v2a2 2 0 0 0 2 2h2l2 5h3l-2-5 9 3V6L8 9H5a2 2 0 0 0-2 2Z"/></svg>',
     close: '×',
   };
+
+  const PERSIAN = /[\u0600-\u06FF]/;
+  const LATIN = /[A-Za-z]/;
+  const byScript = (value, wanted) => String(value || '').split(/[,،؛;|/]+/u)
+    .map((part) => part.trim())
+    .filter((part) => part && (wanted === 'fa' ? PERSIAN.test(part) : LATIN.test(part)));
+
+  function titleFa(content) {
+    const title = String(content?.title || '').trim();
+    const original = String(content?.originalTitle || '').trim();
+    if (PERSIAN.test(title) || !original || !PERSIAN.test(original)) return title;
+    return original;
+  }
+
+  function titleEn(content) {
+    const title = String(content?.title || '').trim();
+    const original = String(content?.originalTitle || '').trim();
+    if (LATIN.test(title)) return title;
+    return LATIN.test(original) ? original : '';
+  }
+
+  /** Filmwork shows both scripts wherever a title fits: `پیت` above `The Pitt`. */
+  function titleMarkup(content, { tag = 'h3', className = '', enClass = 'title-en' } = {}) {
+    const fa = titleFa(content);
+    const en = titleEn(content);
+    const showEn = en && en !== fa;
+    const main = `<${tag} class="${className}">${escapeHtml(fa || en)}</${tag}>`;
+    return showEn
+      ? `${main}<p class="${enClass}" dir="ltr" lang="en">${escapeHtml(en)}</p>`
+      : main;
+  }
+
+  /**
+   * Crew names arrive as `Persian | English` for the same person. Rendering both
+   * scripts side by side keeps the site consistent with the channel post and makes
+   * either spelling findable.
+   */
+  function bilingualNames(values) {
+    const list = Array.isArray(values) ? values.flatMap((value) => String(value || '').split(/\s*\|\s*/u)) : [];
+    const seen = new Set();
+    const fa = [];
+    const en = [];
+    for (const raw of list) {
+      const name = String(raw || '').trim();
+      const key = name.toLowerCase();
+      if (!name || seen.has(key)) continue;
+      seen.add(key);
+      if (PERSIAN.test(name) && !LATIN.test(name)) fa.push(name);
+      else if (LATIN.test(name)) en.push(name);
+      else if (name) fa.push(name);
+    }
+    return { fa, en };
+  }
+
+  function namesMarkup(values, { limit = 6 } = {}) {
+    const { fa, en } = bilingualNames(values);
+    if (!fa.length && !en.length) return 'ثبت نشده';
+    const faPart = fa.slice(0, limit).map(escapeHtml).join('، ');
+    const enPart = en.slice(0, limit).map(escapeHtml).join('، ');
+    if (faPart && enPart) {
+      return `<span class="name-pair"><span class="name-fa">${faPart}</span><span class="name-en" dir="ltr" lang="en">${enPart}</span></span>`;
+    }
+    return faPart
+      ? `<span class="name-fa">${faPart}</span>`
+      : `<span class="name-en" dir="ltr" lang="en">${enPart}</span>`;
+  }
 
   function escapeHtml(value) {
     return String(value ?? '')
@@ -150,6 +220,8 @@
 
   function setActiveNav(section) {
     $$('.dock-item').forEach((item) => item.classList.toggle('active', item.dataset.nav === section));
+    // Desktop header mirrors the dock; keep both in sync from one place.
+    $$('.header-nav-item').forEach((item) => item.classList.toggle('active', Boolean(section) && item.dataset.nav === section));
   }
 
   function setHeaderLabel(label, back = false) {
@@ -181,16 +253,19 @@
   function posterMarkup(content, className = '') {
     const poster = safeUrl(content.posterUrl);
     return `<div class="poster-frame ${className}">
-      ${poster ? `<img src="${poster}" alt="پوستر ${escapeHtml(content.title)}" loading="lazy">` : `<span class="poster-letter" aria-hidden="true">${escapeHtml(firstLetter(content.title))}</span>`}
+      ${poster ? `<img src="${poster}" alt="پوستر ${escapeHtml(titleFa(content) || titleEn(content))}" loading="lazy">` : `<span class="poster-letter" aria-hidden="true">${escapeHtml(firstLetter(titleFa(content) || titleEn(content)))}</span>`}
       ${content.imdbScore !== null && content.imdbScore !== undefined ? `<span class="card-rating"><b>★</b> ${escapeHtml(content.imdbScore)}</span>` : ''}
       <span class="card-type">${content.type === 'series' ? 'سریال' : 'فیلم'}</span>
     </div>`;
   }
 
   function mediaCard(content) {
-    return `<article class="media-card" tabindex="0" role="button" data-route="/content/${encodeURIComponent(content.id)}" aria-label="${escapeHtml(content.title)}">
+    const fa = titleFa(content);
+    const en = titleEn(content);
+    const label = [fa, en].filter(Boolean).join(' / ');
+    return `<article class="media-card" tabindex="0" role="button" data-route="/content/${encodeURIComponent(content.id)}" aria-label="${escapeHtml(label)}">
       ${posterMarkup(content)}
-      <h3>${escapeHtml(content.title)}</h3>
+      ${titleMarkup(content, { enClass: 'title-en title-en--card' })}
       <p>${content.releaseYear ? escapeHtml(content.releaseYear) : 'سال نامشخص'}${content.genres?.[0] ? ` · ${escapeHtml(content.genres[0])}` : ''}</p>
     </article>`;
   }
@@ -203,8 +278,8 @@
     const progress = duration > 0 ? Math.min(100, Math.max(0, (position / duration) * 100)) : 0;
     const remaining = duration > position ? Math.max(1, Math.round((duration - position) / 60)) : 0;
     return `<article class="resume-card" role="button" tabindex="0" data-route="/player/${encodeURIComponent(content.id)}">
-      <div class="resume-media">${image ? `<img src="${image}" alt="" loading="lazy">` : `<span class="poster-letter">${escapeHtml(firstLetter(content.title))}</span>`}<span class="resume-play">${icons.play}</span>${remaining ? `<small>${formatNumber(remaining)} دقیقه باقی‌مانده</small>` : ''}<i><b style="width:${progress.toFixed(1)}%"></b></i></div>
-      <div class="resume-copy"><strong>${escapeHtml(content.title)}</strong><span>${formatTime(position)} از ${formatTime(duration)}</span></div>
+      <div class="resume-media">${image ? `<img src="${image}" alt="" loading="lazy">` : `<span class="poster-letter">${escapeHtml(firstLetter(titleFa(content) || titleEn(content)))}</span>`}<span class="resume-play">${icons.play}</span>${remaining ? `<small>${formatNumber(remaining)} دقیقه باقی‌مانده</small>` : ''}<i><b style="width:${progress.toFixed(1)}%"></b></i></div>
+      <div class="resume-copy"><div class="resume-names"><strong>${escapeHtml(titleFa(content) || titleEn(content))}</strong>${titleEn(content) && titleEn(content) !== titleFa(content) ? `<small class="title-en title-en--card" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</small>` : ''}</div><span>${formatTime(position)} از ${formatTime(duration)}</span></div>
     </article>`;
   }
 
@@ -215,8 +290,9 @@
       ${backdrop ? `<img class="hero-media" src="${backdrop}" alt="" fetchpriority="high">` : '<div class="hero-placeholder"></div>'}
       <div class="hero-vignette"></div>
       <div class="page-shell hero-content">
-        <div class="eyebrow">انتخاب ویژه Filmwork</div>
-        <h1>${escapeHtml(content.title)}</h1>
+        <div class="eyebrow">انتخاب ویژه Vizosten</div>
+        <h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>
+        ${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="hero-en-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}
         <div class="hero-meta">
           ${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}
           ${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}</span>` : ''}
@@ -225,7 +301,7 @@
         </div>
         ${content.description ? `<p class="hero-description">${escapeHtml(content.description)}</p>` : ''}
         <div class="action-row">
-          <button type="button" class="primary-button" data-route="/player/${encodeURIComponent(content.id)}">${icons.play} پخش آنلاین</button>
+          ${onlinePlaybackVisible() ? `<button type="button" class="primary-button" data-route="/player/${encodeURIComponent(content.id)}">${icons.play} پخش آنلاین</button>` : ''}
           <button type="button" class="secondary-button" data-open-download="${escapeHtml(content.id)}">${icons.download} دریافت فایل</button>
           <button type="button" class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="افزودن به علاقه‌مندی‌ها">${icons.heart}</button>
         </div>
@@ -247,10 +323,19 @@
       app.innerHTML = `<div class="page-shell page-top">${emptyState('کتابخانه آماده دریافت محتواست', 'اولین پست فیلم یا سریال را برای ربات خصوصی مدیریت فوروارد کنید؛ اثر بلافاصله در اینجا منتشر می‌شود.')}</div>`;
       return;
     }
-    const hero = items[0];
-    const latest = items.slice(1, 13);
+    // The owner console promotes one title into the hero banner; fall back to the
+    // newest published item so the homepage is never empty.
+    const hero = items.find((item) => item.featuredHero) || items[0];
+    const latest = items.filter((item) => item.id !== hero.id).slice(0, 12);
     const topRated = [...items].filter((item) => item.imdbScore !== null).sort((a, b) => b.imdbScore - a.imdbScore).slice(0, 12);
-    app.innerHTML = `<div class="page-shell home-category-strip" aria-label="دسته‌بندی‌ها">
+    app.innerHTML = `<div class="page-shell home-desktop-top">
+        <div><div class="home-greeting">کتابخانه شخصی شما</div><h1 class="home-title">امشب چه ببینیم؟</h1></div>
+        <form class="home-search" id="home-search" role="search">
+          ${icons.search}<input type="search" name="q" maxlength="100" autocomplete="off" aria-label="جستجو در ویزوستن" placeholder="نام فیلم، سریال، بازیگر یا کارگردان…">
+          <button class="primary-button" type="submit">جستجو</button>
+        </form>
+      </div>
+      <div class="page-shell home-category-strip" aria-label="دسته‌بندی‌ها">
         <button class="chip active" data-route="/home">منتخب</button>
         <button class="chip" data-route="/search?genre=درام">درام</button>
         <button class="chip" data-route="/search?genre=علمی تخیلی">علمی‌تخیلی</button>
@@ -259,9 +344,9 @@
       </div>
       ${heroMarkup(hero)}
       <div class="page-shell">
-        ${continueItems.length ? `<section class="content-section resume-section"><div class="section-head"><div><h2>ادامه تماشا</h2><p>از همان‌جایی که رها کردید</p></div></div><div class="resume-scroller">${continueItems.map(continueCard).join('')}</div></section>` : ''}
+        ${continueItems.length && onlinePlaybackVisible() ? `<section class="content-section resume-section"><div class="section-head"><div><h2>ادامه تماشا</h2><p>از همان‌جایی که رها کردید</p></div></div><div class="resume-scroller">${continueItems.map(continueCard).join('')}</div></section>` : ''}
         <section class="content-section">
-          <div class="section-head"><div><h2>تازه‌های فیلم‌ورک</h2><p>جدیدترین فیلم‌ها و سریال‌های اضافه‌شده</p></div><button class="text-button" data-route="/search">مشاهده همه</button></div>
+          <div class="section-head"><div><h2>تازه‌های ویزوستن</h2><p>جدیدترین فیلم‌ها و سریال‌های اضافه‌شده</p></div><button class="text-button" data-route="/search">مشاهده همه</button></div>
           <div class="media-scroller">${latest.length ? latest.map(mediaCard).join('') : mediaCard(hero)}</div>
         </section>
         ${topRated.length ? `<section class="content-section"><div class="section-head"><div><h2>بالاترین امتیاز</h2><p>انتخاب‌ها بر اساس امتیاز IMDb</p></div></div><div class="media-scroller">${topRated.map(mediaCard).join('')}</div></section>` : ''}
@@ -273,8 +358,9 @@
     setHeaderLabel('جستجو');
     const genres = ['اکشن', 'درام', 'کمدی', 'جنایی', 'علمی تخیلی', 'انیمیشن'];
     app.innerHTML = `<div class="page-shell page-top search-page">
-      <div class="section-head search-title"><div><h1 class="page-title">جستجو</h1><p>در میان فیلم‌ها و سریال‌های فیلم‌ورک</p></div></div>
-      <label class="search-box">${icons.search}<input id="search-input" type="search" maxlength="100" autocomplete="off" placeholder="نام فیلم، سریال یا ژانر…" value="${escapeHtml(initialQuery)}"><span class="sr-only">جستجو</span></label>
+      <div class="section-head search-title"><div><h1 class="page-title">جستجو</h1><p>در میان فیلم‌ها و سریال‌های ویزوستن</p></div></div>
+      <label class="search-box">${icons.search}<input id="search-input" type="search" maxlength="100" autocomplete="off" placeholder="نام فارسی یا انگلیسی فیلم، سریال، بازیگر یا کارگردان…" value="${escapeHtml(initialQuery)}"><span class="sr-only">جستجو</span></label>
+      <p class="search-hint">هر دو زبان جستجو می‌شود: «پیت» و «The Pitt» هر دو همین اثر را پیدا می‌کنند؛ نام بازیگران و کارگردانان هم در فهرست نتایج می‌آید.</p>
       <section class="search-discovery"><h2>ژانرهای محبوب</h2><div class="genre-chip-row">
         <button class="genre-chip ${initialGenre ? '' : 'active'}" data-search-genre="">همه</button>
         ${genres.map((genre) => `<button class="genre-chip ${initialGenre === genre ? 'active' : ''}" data-search-genre="${escapeHtml(genre)}">${escapeHtml(genre)}</button>`).join('')}
@@ -314,7 +400,7 @@
       status.textContent = `${formatNumber(data.pagination.total)} نتیجه`;
       results.innerHTML = data.items.length
         ? data.items.map(mediaCard).join('')
-        : `<div style="grid-column:1/-1">${emptyState('نتیجه‌ای پیدا نشد', 'عبارت دیگری را امتحان کنید یا فیلتر نوع را تغییر دهید.')}</div>`;
+        : `<div style="grid-column:1/-1">${emptyState('نتیجه‌ای پیدا نشد', 'عبارت دیگری را امتحان کنید؛ جستجو عنوان فارسی، عنوان انگلیسی، بازیگران، کارگردانان و ژانرها را هم می‌گردد.')}</div>`;
     } catch (error) {
       status.textContent = apiErrorMessage(error);
       results.innerHTML = '';
@@ -349,7 +435,7 @@
         const image = safeUrl(item.content.posterUrl);
         return `<article class="download-history-card">
           <button type="button" class="download-history-poster" data-route="/content/${encodeURIComponent(item.content.id)}">${image ? `<img src="${image}" alt="">` : `<span>${escapeHtml(firstLetter(item.content.title))}</span>`}</button>
-          <div><h2>${escapeHtml(item.content.title)}</h2><p>${[item.media.season ? `فصل ${formatNumber(item.media.season)}` : '', item.media.episode ? `قسمت ${formatNumber(item.media.episode)}` : '', item.media.resolution, item.media.version].filter(Boolean).map(escapeHtml).join(' · ')}</p><small>${formatBytes(item.media.fileSizeBytes)} · ${formatDate(item.downloadedAt)}</small></div>
+          <div><h2>${escapeHtml(titleFa(item.content) || titleEn(item.content))}</h2>${titleEn(item.content) && titleEn(item.content) !== titleFa(item.content) ? `<p class="title-en" dir="ltr" lang="en">${escapeHtml(titleEn(item.content))}</p>` : ''}<p>${[item.media.season ? `فصل ${formatNumber(item.media.season)}` : '', item.media.episode ? `قسمت ${formatNumber(item.media.episode)}` : '', item.media.resolution, item.media.version].filter(Boolean).map(escapeHtml).join(' · ')}</p><small>${formatBytes(item.media.fileSizeBytes)} · ${formatDate(item.downloadedAt)}</small></div>
           <button type="button" class="secondary-button compact" data-open-download="${escapeHtml(item.content.id)}">${icons.download} دریافت دوباره</button>
         </article>`;
       }).join('')}</div>` : emptyState('هنوز فایلی دریافت نکرده‌اید', 'از صفحه یک اثر، نسخه دلخواه را انتخاب کنید تا ربات فایل را برایتان بفرستد.', '<button class="primary-button" style="margin-top:18px" data-route="/home">مرور آثار</button>')}
@@ -380,19 +466,27 @@
     const poster = safeUrl(content.posterUrl || content.backdropUrl);
     const facts = [
       ['نوع', content.type === 'series' ? 'سریال' : 'فیلم سینمایی'],
-      ['سال انتشار', content.releaseYear || 'نامشخص'],
+      ['سال انتشار', content.releaseYear ? `${content.releaseYear}${content.lastAirYear ? ` – ${content.lastAirYear}` : ''}` : 'نامشخص'],
       ['امتیاز IMDb', content.imdbScore ?? 'ثبت نشده'],
       ['ژانر', (content.genres || []).join('، ') || 'ثبت نشده'],
+      ['کارگردان', namesMarkup(content.directors, { limit: 4 })],
+      ['بازیگران', namesMarkup(content.cast, { limit: 8 })],
+      ['کشور', (content.countries || []).map(escapeHtml).join('، ') || 'ثبت نشده'],
+      ['شبکه', content.network ? escapeHtml(content.network) : 'ثبت نشده'],
+      ['رده سنی', content.ageRating ? escapeHtml(content.ageRating) : 'ثبت نشده'],
       ['تعداد نسخه‌ها', formatNumber(media.length)],
     ];
     app.innerHTML = `<section class="detail-hero">
       ${backdrop ? `<img class="detail-backdrop" src="${backdrop}" alt="">` : '<div class="hero-placeholder"></div>'}<div class="detail-overlay"></div>
       <div class="page-shell detail-content">
-        ${poster ? `<img class="detail-poster" src="${poster}" alt="پوستر ${escapeHtml(content.title)}">` : `<div class="detail-poster poster-frame"><span class="poster-letter">${escapeHtml(firstLetter(content.title))}</span></div>`}
-        <div class="detail-copy"><div class="eyebrow">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</div><h1>${escapeHtml(content.title)}</h1>
-          <div class="meta-row">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}</span>` : ''}${content.runtimeMinutes ? `<span class="meta-dot">${formatNumber(content.runtimeMinutes)} دقیقه</span>` : ''}</div>
+        ${poster ? `<img class="detail-poster" src="${poster}" alt="پوستر ${escapeHtml(titleFa(content) || titleEn(content))}">` : `<div class="detail-poster poster-frame"><span class="poster-letter">${escapeHtml(firstLetter(titleFa(content) || titleEn(content)))}</span></div>`}
+        <div class="detail-copy"><div class="eyebrow">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</div><h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>
+          ${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="detail-en-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}
+          <div class="meta-row">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}${content.lastAirYear ? `–${escapeHtml(content.lastAirYear)}` : ''}</span>` : ''}${content.runtimeMinutes ? `<span class="meta-dot">${formatNumber(content.runtimeMinutes)} دقیقه</span>` : ''}${content.seriesRunning && content.currentSeason ? `<span class="meta-dot status-live">فصل ${formatNumber(content.currentSeason)} در حال پخش</span>` : ''}</div>
+          ${(content.directors?.length || content.cast?.length) ? `<div class="credit-line"><span>کارگردان</span> ${namesMarkup(content.directors, { limit: 3 })}</div>` : ''}
+          ${content.cast?.length ? `<div class="credit-line"><span>بازیگران</span> ${namesMarkup(content.cast, { limit: 5 })}</div>` : ''}
           ${content.description ? `<p class="description">${escapeHtml(content.description)}</p>` : ''}
-          <div class="action-row"><button class="primary-button" data-route="/player/${encodeURIComponent(content.id)}">${icons.play} پخش آنلاین</button><button class="secondary-button" data-open-download="${escapeHtml(content.id)}">${icons.download} انتخاب نسخه</button><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="علاقه‌مندی">${icons.heart}</button></div>
+          <div class="action-row">${onlinePlaybackVisible() ? `<button class="primary-button" data-route="/player/${encodeURIComponent(content.id)}">${icons.play} پخش آنلاین</button>` : ''}<button class="secondary-button" data-open-download="${escapeHtml(content.id)}">${icons.download} انتخاب نسخه</button><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="علاقه‌مندی">${icons.heart}</button></div>
         </div>
       </div>
     </section>
@@ -401,12 +495,14 @@
         ${state.user ? '<form class="comment-form" id="comment-form"><input name="body" maxlength="1200" required placeholder="دیدگاه خود را بنویسید…"><button class="primary-button" type="submit">ارسال</button></form>' : '<button class="secondary-button" data-login style="margin-bottom:16px">برای ثبت دیدگاه وارد شوید</button>'}
         <div class="comments" id="comments-list">${commentsMarkup(comments)}</div>
       </section>
-      <aside class="surface-panel"><h2>اطلاعات اثر</h2><div class="fact-list">${facts.map(([label, value]) => `<div class="fact"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('')}</div></aside>
+      <aside class="surface-panel"><h2>اطلاعات اثر</h2><div class="fact-list">${facts.map(([label, value]) => `<div class="fact"><span>${escapeHtml(label)}</span><div class="fact-value">${String(value).startsWith('<span') ? value : escapeHtml(value)}</div></div>`).join('')}</div></aside>
     </div>`;
   }
 
-  function playerControlMarkup() {
-    return `<div class="subtitle-overlay" id="external-subtitle" aria-live="off"></div>
+  function playerControlMarkup(title) {
+    return `<div class="player-topbar"><button type="button" class="player-back" data-go-back aria-label="بازگشت">‹</button><strong class="player-top-title">${escapeHtml(title)}</strong><div class="player-top-actions"><button type="button" id="player-audio-menu">صدا</button><button type="button" id="player-subtitle-menu">زیرنویس</button></div></div>
+      <div class="player-center-controls"><button type="button" id="skip-back" aria-label="ده ثانیه عقب">↶<small>۱۰</small></button><button type="button" id="center-play" aria-label="پخش">▶</button><button type="button" id="skip-forward" aria-label="ده ثانیه جلو">↷<small>۱۰</small></button></div>
+      <div class="subtitle-overlay" id="external-subtitle" aria-live="off"></div>
       <div class="player-controls">
         <div class="progress-row"><time id="current-time">00:00</time><input class="media-range" id="seek" type="range" min="0" max="1000" value="0" aria-label="زمان پخش"><time id="duration">00:00</time></div>
         <div class="control-row">
@@ -418,16 +514,27 @@
           <div class="control-cluster"><input class="media-range volume-range" id="volume" type="range" min="0" max="1" step="0.05" value="1" aria-label="صدا"><button class="control-button" id="mute" type="button" aria-label="قطع صدا"><svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Zm4 5a3 3 0 0 1 0 4m3-7a7 7 0 0 1 0 10"/></svg></button><button class="control-button" id="play-toggle" type="button" aria-label="پخش"><svg viewBox="0 0 24 24"><path class="fill" d="m8 5 11 7-11 7V5Z"/></svg></button></div>
         </div>
       </div>
-      <div class="settings-menu" id="settings-menu"><div class="settings-title">مسیر صدا</div><div id="audio-options"></div><div class="settings-title">زیرنویس</div><div id="subtitle-options"></div><div class="settings-title">سرعت</div><div id="speed-options"></div></div>`;
+      <div class="settings-menu" id="settings-menu"><div class="settings-title">مسیر صدا</div><div id="audio-options"></div><div class="settings-title">زیرنویس</div><div id="subtitle-options"></div><div class="settings-title">ظاهر و زمان زیرنویس</div>
+      <div class="subtitle-settings">
+        <label>اندازه <input id="subtitle-size" type="range" min="12" max="48" step="1" value="24"><output id="subtitle-size-value">24px</output></label>
+        <label>رنگ <input id="subtitle-color" type="color" value="#ffffff"></label>
+        <label>فونت <select id="subtitle-font"><option value="Vazirmatn, sans-serif">وزیرمتن</option><option value="sans-serif">ساده</option><option value="serif">سریف</option><option value="monospace">تک‌فاصله</option></select></label>
+        <label>تأخیر (ثانیه) <input id="subtitle-delay" type="number" min="-60" max="60" step="0.5" value="0"></label>
+      </div><div class="settings-title">سرعت</div><div id="speed-options"></div></div>`;
   }
 
   async function renderPlayer(assetId, version) {
     setActiveNav('');
+    if (state.config?.player?.enabled === false) {
+      app.innerHTML = `<div class="page-shell page-top">${emptyState('پخش آنلاین غیرفعال است', 'برای دریافت نسخه‌ها از دکمه دریافت فایل استفاده کنید.')}</div>`;
+      return;
+    }
     setHeaderLabel('پخش و دانلود', true);
-    const [contentData, mediaData, progressData] = await Promise.all([
+    const [contentData, mediaData, progressData, sourceData] = await Promise.all([
       api(`/contents/${encodeURIComponent(assetId)}`),
       api(`/contents/${encodeURIComponent(assetId)}/media-options`),
       state.user ? api('/progress').catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
+      api(`/contents/${encodeURIComponent(assetId)}/player-sources`).catch(() => ({ sources: [] })),
     ]);
     if (version !== state.routeVersion) return;
     const content = contentData.content;
@@ -437,25 +544,34 @@
       : { items: [] };
     if (version !== state.routeVersion) return;
     const related = (relatedData.items || []).filter((item) => item.id !== content.id).slice(0, 8);
-    const streamUrl = content.streamUrl || mediaData.items.find((item) => item.streamUrl)?.streamUrl || '';
+    const streamUrl = content.streamUrl || mediaData.items.find((item) => item.streamUrl)?.streamUrl || sourceData.sources[0]?.streamUrl || '';
+    const matchingSources = sourceData.sources.filter((source) => source.streamUrl === streamUrl);
     const safeStream = safeUrl(streamUrl);
+    // Android uses the native renderer, never an HTML video fallback. The marker
+    // also lets us show a useful error on old WebViews without message support.
+    if (/\bVizostenAndroid\//.test(navigator.userAgent)) {
+      renderAndroidPlayerLaunch(content, streamUrl, matchingSources, resumeEntry);
+      return;
+    }
     app.innerHTML = `<div class="page-shell player-page">
       <div class="player-shell controls-visible" id="player-shell">
         <video id="video" class="${safeStream ? '' : 'pixelated'}" playsinline preload="metadata" ${safeStream ? `src="${safeStream}"` : ''}></video>
         ${!safeStream ? `<div class="player-unavailable" id="unavailable-overlay">${icons.film}<strong>پخش آنلاین در دسترس نیست - دریافت از تلگرام</strong><span>می‌توانید نشانی مستقیم را وارد کنید یا یکی از نسخه‌ها را دریافت کنید.</span></div>` : ''}
-        ${playerControlMarkup()}<div id="pause-ad-slot"></div>
+        ${playerControlMarkup(titleFa(content) || titleEn(content))}<div id="pause-ad-slot"></div><div id="player-ad-slot"></div>
       </div>
       <details class="source-tools">
         <summary>اتصال منبع شخصی، زیرنویس یا صدای دوبله <span>اختیاری</span></summary>
         <div class="player-fields">
           <div class="bind-card"><label><i></i>نشانی مستقیم ویدیو</label><div class="input-bind"><input id="video-url" type="url" inputmode="url" placeholder="https://…/video.mp4" value="${safeStream}"><button type="button" data-bind="video">اتصال</button></div></div>
-          <div class="bind-card"><label><i></i>زیرنویس خارجی SRT / VTT</label><div class="input-bind"><input id="subtitle-url" type="url" inputmode="url" placeholder="https://…/subtitle.srt"><button type="button" data-bind="subtitle">اتصال</button></div></div>
-          <div class="bind-card"><label><i></i>صدای دوبله خارجی</label><div class="input-bind"><input id="audio-url" type="url" inputmode="url" placeholder="https://…/dubbed.m4a"><button type="button" data-bind="audio">اتصال</button></div></div>
+          <div class="bind-card"><label><i></i>افزودن زیرنویس خارجی SRT / VTT</label><div class="input-bind"><input id="subtitle-url" type="url" inputmode="url" placeholder="https://…/subtitle.srt"><button type="button" data-bind="subtitle">اتصال</button></div></div>
+          <div class="bind-card"><label><i></i>افزودن صدای خارجی</label><div class="input-bind"><input id="audio-url" type="url" inputmode="url" placeholder="https://…/dubbed.m4a"><button type="button" data-bind="audio">اتصال</button></div></div>
         </div>
+        <p class="player-help">هر نشانی را جداگانه اضافه کنید؛ سپس از تنظیمات پلیر انتخاب کنید. زیرنویس خارجی به CORS نیاز دارد. پشتیبانی از فایل و ترک داخلی به مرورگر بستگی دارد.</p>
       </details>
       <div id="timed-banner-slot"></div>
+      <div id="pause-banner-slot" class="banner-slot"></div>
       <section class="player-info">
-        <div class="player-info-main"><div class="player-title-row"><div><h1>${escapeHtml(content.title)}</h1>${content.originalTitle ? `<p class="original-title">${escapeHtml(content.originalTitle)}</p>` : ''}</div><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="نشان کردن">${icons.heart}</button></div>
+        <div class="player-info-main"><div class="player-title-row"><div><h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="original-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}</div><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="نشان کردن">${icons.heart}</button></div>
           <div class="hero-meta">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}</span>` : ''}<span class="meta-dot">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</span>${content.genres?.length ? `<span class="meta-dot">${content.genres.slice(0, 3).map(escapeHtml).join('، ')}</span>` : ''}</div>
           ${content.description ? `<p class="player-description">${escapeHtml(content.description)}</p>` : ''}
         </div>
@@ -463,7 +579,52 @@
       </section>
       ${related.length ? `<section class="content-section"><div class="section-head"><div><h2>شاید بپسندید</h2><p>آثار مشابه در همین ژانر</p></div></div><div class="media-scroller">${related.map(mediaCard).join('')}</div></section>` : ''}
     </div>`;
-    initializePlayer(content.id, Number(resumeEntry?.positionSeconds || 0));
+    let localResume = 0;
+    try { localResume = Number(JSON.parse(localStorage.getItem(`vizosten-progress:${content.id}`) || 'null')?.position || 0); } catch { /* storage is optional */ }
+    initializePlayer(content.id, state.user ? Number(resumeEntry?.positionSeconds || 0) : localResume);
+    // Several admin rows may describe alternate tracks for the same video URL.
+    for (const url of new Set(matchingSources.map((source) => source.subtitleUrl).filter(Boolean))) bindPlayerSource('subtitle', url, false);
+    for (const url of new Set(matchingSources.map((source) => source.audioUrl).filter(Boolean))) bindPlayerSource('audio', url, false);
+  }
+
+  function renderAndroidPlayerLaunch(content, streamUrl, matchingSources, resumeEntry) {
+    app.innerHTML = `<div class="page-shell page-top"><section class="surface-panel">
+      <h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>
+      <p>پخش در پلیر اختصاصی اندروید انجام می‌شود.</p>
+      <label for="native-video-url">نشانی مستقیم ویدیو (HTTPS)</label>
+      <div class="input-bind"><input id="native-video-url" type="url" value="${safeUrl(streamUrl)}" placeholder="https://…/video.mkv"><button class="primary-button" id="native-player-open" type="button">باز کردن پلیر</button></div>
+      <p id="native-player-status" role="status"></p></section></div>`;
+    const bridge = window.VizostenNative;
+    const status = $('#native-player-status');
+    if (!bridge || typeof bridge.postMessage !== 'function') {
+      status.textContent = 'پلیر بومی در این نسخه از برنامه در دسترس نیست؛ WebView اندروید را به‌روزرسانی کنید.';
+      return;
+    }
+    bridge.onmessage = (event) => {
+      if (event.data !== 'ok' && status.isConnected) status.textContent = 'باز کردن پلیر ممکن نشد؛ نشانی و دسترسی فایل را بررسی کنید.';
+    };
+    const open = () => {
+      let uri;
+      try {
+        uri = new URL($('#native-video-url').value.trim());
+        if (uri.protocol !== 'https:' || uri.username || uri.password) throw new Error();
+      } catch { status.textContent = 'نشانی مستقیم HTTPS معتبر وارد کنید.'; return; }
+      let sourceMatches = false;
+      try { sourceMatches = uri.href === new URL(streamUrl).href; } catch { /* no configured source */ }
+      const tracks = (key) => sourceMatches ? [...new Set(matchingSources.map((item) => item[key]).filter(Boolean))].slice(0, 30) : [];
+      let localResume = 0;
+      try { localResume = Number(JSON.parse(localStorage.getItem(`vizosten-progress:${content.id}`) || 'null')?.position || 0); } catch { /* storage is optional */ }
+      const seconds = state.user ? Number(resumeEntry?.positionSeconds || 0) : localResume;
+      const payload = { action: 'openPlayer', contentId: content.id, title: titleFa(content) || titleEn(content),
+        streamUrl: uri.href, subtitleUrls: tracks('subtitleUrl'), audioUrls: tracks('audioUrl'),
+        resumeMillis: Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds * 1000)) : 0,
+        sessionToken: state.user ? state.token : '' };
+      status.textContent = '';
+      try { bridge.postMessage(JSON.stringify(payload)); }
+      catch { status.textContent = 'باز کردن پلیر بومی ممکن نشد.'; }
+    };
+    $('#native-player-open').addEventListener('click', open);
+    if (streamUrl) open();
   }
 
   function formatTime(seconds) {
@@ -482,15 +643,19 @@
   }
 
   function parseSrt(text) {
-    return String(text).replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim().split(/\n{2,}/).map((block) => {
+    return String(text).replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim().split(/\n[ \t]*\n+/).map((block) => {
       const lines = block.split('\n');
-      if (/^\d+$/.test(lines[0]?.trim())) lines.shift();
-      const timing = lines.shift()?.match(/(.+?)\s*-->\s*(.+?)(?:\s|$)/);
+      // WebVTT metadata/comments do not contain cues. A cue identifier can be
+      // arbitrary text (not just an SRT numeric index).
+      if (/^(?:WEBVTT(?:\s|$)|NOTE(?:\s|$)|STYLE\s*$|REGION\s*$)/.test(lines[0]?.trim() || '')) return null;
+      const timingIndex = lines.findIndex((line, index) => index <= 1 && line.includes('-->'));
+      if (timingIndex < 0) return null;
+      const timing = lines[timingIndex].match(/^\s*(\S+)\s*-->\s*(\S+)(?:\s.*)?$/);
       if (!timing) return null;
       const start = parseSubtitleTime(timing[1]);
       const end = parseSubtitleTime(timing[2]);
       if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
-      const cueText = lines.join('\n').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>/g, '').trim();
+      const cueText = lines.slice(timingIndex + 1).join('\n').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>/g, '').trim();
       return cueText ? { start, end, text: cueText } : null;
     }).filter(Boolean).sort((a, b) => a.start - b.start);
   }
@@ -498,8 +663,11 @@
   function destroyPlayer() {
     if (!state.player) return;
     clearTimeout(state.player.bannerTimer);
+    clearTimeout(state.player.pauseBannerTimer);
+    clearTimeout(state.player.controlsTimer);
+    state.player.cancelAd?.();
     state.player.saveProgress?.(true);
-    state.player.externalAudio?.pause();
+    state.player.externalAudios.forEach((track) => track.audio.pause());
     state.player.cleanup.forEach((cleanup) => cleanup());
     state.player = null;
   }
@@ -514,8 +682,15 @@
       shell,
       externalAudio: null,
       externalAudioEnabled: false,
+      externalAudios: [],
       externalCues: [],
+      subtitles: [],
+      selectedSubtitle: 'off',
+      subtitleDelay: 0,
       externalSubtitlesEnabled: false,
+      preRollChecked: false,
+      midRollChecked: false,
+      adActive: false,
       cleanup: [],
       controlsTimer: null,
       pauseAdLoaded: false,
@@ -544,43 +719,49 @@
         ? '<svg viewBox="0 0 24 24"><path class="fill" d="m8 5 11 7-11 7V5Z"/></svg>'
         : '<svg viewBox="0 0 24 24"><path class="fill" d="M7 5h4v14H7zm6 0h4v14h-4z"/></svg>';
       playButton.setAttribute('aria-label', video.paused ? 'پخش' : 'توقف');
+      $('#center-play').textContent = video.paused ? '▶' : '❚❚';
+      $('#center-play').setAttribute('aria-label', video.paused ? 'پخش' : 'توقف');
     }
     async function togglePlay() {
+      if (player.adActive) return;
       try {
-        if (video.paused) await video.play(); else video.pause();
-      } catch { toast('مرورگر اجازه پخش این نشانی را نداد.', 'error'); }
+        if (!video.paused) { video.pause(); return; }
+        if (!player.preRollChecked) {
+          player.preRollChecked = true;
+          await playPlayerAd('pre_roll', player);
+          if (state.player !== player) return;
+        }
+        await video.play();
+      } catch { toast('پخش ممکن نشد؛ دوباره دکمه پخش را بزنید و فرمت و نشانی فایل را بررسی کنید.', 'error'); }
     }
     function syncExternalAudio(force = false) {
       const audio = player.externalAudio;
       if (!audio || !player.externalAudioEnabled) return;
-      if (force || Math.abs(audio.currentTime - video.currentTime) > 0.22) audio.currentTime = video.currentTime;
+      if (force || Math.abs(audio.currentTime - video.currentTime) > 0.22) { try { audio.currentTime = video.currentTime; } catch { /* wait for metadata */ } }
       audio.playbackRate = video.playbackRate;
     }
     function renderExternalCue() {
-      if (!player.externalSubtitlesEnabled || !player.externalCues.length) {
-        subtitleOverlay.style.display = 'none';
-        subtitleOverlay.textContent = '';
-        return;
+      let cues = [];
+      if (player.selectedSubtitle.startsWith('external-')) {
+        cues = player.subtitles[Number(player.selectedSubtitle.slice(9))]?.cues || [];
+      } else if (player.selectedSubtitle.startsWith('text-')) {
+        const track = video.textTracks[Number(player.selectedSubtitle.slice(5))];
+        if (track?.cues) cues = [...track.cues].map((cue) => ({ start: cue.startTime, end: cue.endTime, text: cue.text }));
       }
-      const time = video.currentTime;
-      let low = 0;
-      let high = player.externalCues.length - 1;
-      let cue = null;
-      while (low <= high) {
-        const middle = (low + high) >> 1;
-        const candidate = player.externalCues[middle];
-        if (time < candidate.start) high = middle - 1;
-        else if (time > candidate.end) low = middle + 1;
-        else { cue = candidate; break; }
-      }
-      subtitleOverlay.textContent = cue?.text || '';
-      subtitleOverlay.style.display = cue ? 'block' : 'none';
+      const time = video.currentTime - player.subtitleDelay;
+      const active = cues.filter((cue) => cue.start <= time && time < cue.end);
+      subtitleOverlay.textContent = active.map((cue) => String(cue.text).replace(/<[^>]*>/g, '')).join('\n');
+      subtitleOverlay.style.display = active.length ? 'block' : 'none';
     }
     function saveProgress(force = false) {
-      if (!state.user || !Number.isFinite(video.duration) || video.duration <= 0 || video.currentTime < 1) return;
+      if (!Number.isFinite(video.duration) || video.duration <= 0 || video.currentTime < 1) return;
       const now = Date.now();
       if (!force && now - player.lastProgressSave < 15_000) return;
       player.lastProgressSave = now;
+      if (!state.user) {
+        try { localStorage.setItem(`vizosten-progress:${assetId}`, JSON.stringify({ position: video.currentTime / video.duration >= 0.92 ? 0 : Math.floor(video.currentTime) })); } catch { /* storage is optional */ }
+        return;
+      }
       api(`/contents/${encodeURIComponent(assetId)}/progress`, {
         method: 'POST',
         keepalive: force,
@@ -601,44 +782,73 @@
       syncExternalAudio(false);
       renderExternalCue();
       saveProgress(false);
+      if (!player.midRollChecked && !player.adActive && !video.paused && Number.isFinite(video.duration) && video.duration > 60 && video.currentTime >= video.duration / 2) {
+        player.midRollChecked = true;
+        player.adActive = true;
+        video.pause();
+        playPlayerAd('mid_roll', player).then(() => {
+          if (state.player === player && !video.ended) video.play().catch(() => toast('برای ادامه دکمه پخش را بزنید.', 'error'));
+        });
+      }
     }
     function refreshSettings() {
       const audioContainer = $('#audio-options');
       const subtitleContainer = $('#subtitle-options');
       if (!audioContainer || !subtitleContainer) return;
-      const audioOptions = [{ id: 'embedded-default', label: 'صدای داخلی پیش‌فرض', active: !player.externalAudioEnabled }];
-      if (video.audioTracks) {
+      const audioOptions = [];
+      if (video.audioTracks?.length) {
         for (let index = 0; index < video.audioTracks.length; index += 1) {
           const track = video.audioTracks[index];
           audioOptions.push({ id: `audio-${index}`, label: track.label || track.language || `مسیر داخلی ${index + 1}`, active: track.enabled && !player.externalAudioEnabled });
         }
-      }
-      if (player.externalAudio) audioOptions.push({ id: 'external-audio', label: 'صدای دوبله خارجی', active: player.externalAudioEnabled });
+      } else audioOptions.push({ id: 'embedded-default', label: 'صدای پیش‌فرض (انتخاب ترک داخلی در این مرورگر ممکن نیست)', active: !player.externalAudioEnabled });
+      player.externalAudios.forEach((track, index) => audioOptions.push({ id: `external-audio-${index}`, label: track.label, active: player.externalAudioEnabled && player.externalAudio === track.audio }));
       audioContainer.innerHTML = audioOptions.map((option) => `<button type="button" class="setting-option ${option.active ? 'active' : ''}" data-audio-track="${option.id}">${escapeHtml(option.label)}</button>`).join('');
-
-      const subtitleOptions = [{ id: 'off', label: 'خاموش', active: !player.externalSubtitlesEnabled && ![...video.textTracks].some((track) => track.mode === 'showing') }];
-      if (player.externalCues.length) subtitleOptions.push({ id: 'external', label: 'زیرنویس خارجی', active: player.externalSubtitlesEnabled });
+      const subtitleOptions = [{ id: 'off', label: 'خاموش', active: player.selectedSubtitle === 'off' }];
+      player.subtitles.forEach((track, index) => subtitleOptions.push({ id: `external-${index}`, label: track.label, active: player.selectedSubtitle === `external-${index}` }));
       for (let index = 0; index < video.textTracks.length; index += 1) {
         const track = video.textTracks[index];
-        subtitleOptions.push({ id: `text-${index}`, label: track.label || track.language || `زیرنویس داخلی ${index + 1}`, active: track.mode === 'showing' });
+        if (!['subtitles', 'captions'].includes(track.kind)) continue;
+        subtitleOptions.push({ id: `text-${index}`, label: track.label || track.language || `زیرنویس داخلی ${index + 1}`, active: player.selectedSubtitle === `text-${index}` });
       }
       subtitleContainer.innerHTML = subtitleOptions.map((option) => `<button type="button" class="setting-option ${option.active ? 'active' : ''}" data-subtitle-track="${option.id}">${escapeHtml(option.label)}</button>`).join('');
+      $('#player-audio-menu').textContent = video.audioTracks?.length ? `صدا ${formatNumber(audioOptions.length)}` : player.externalAudios.length ? `صدا · ${formatNumber(player.externalAudios.length)} خارجی` : 'صدا';
+      $('#player-subtitle-menu').textContent = `زیرنویس ${formatNumber(subtitleOptions.length - 1)}`;
       $('#speed-options').innerHTML = [0.5, 0.75, 1, 1.25, 1.5, 2].map((speed) => `<button type="button" class="setting-option ${video.playbackRate === speed ? 'active' : ''}" data-speed="${speed}">${speed === 1 ? 'عادی' : `${speed}×`}</button>`).join('');
     }
 
+    player.refreshSettings = refreshSettings;
     on(playButton, 'click', togglePlay);
+    on($('#center-play'), 'click', togglePlay);
+    on($('#skip-back'), 'click', () => { if (!player.adActive) video.currentTime = Math.max(0, video.currentTime - 10); });
+    on($('#skip-forward'), 'click', () => { if (!player.adActive && Number.isFinite(video.duration)) video.currentTime = Math.min(video.duration, video.currentTime + 10); });
+    function openTrackSettings(target) {
+      refreshSettings();
+      $('#settings-menu').classList.add('open');
+      $(`#${target}`)?.scrollIntoView?.({ block: 'nearest' });
+    }
+    on($('#player-audio-menu'), 'click', () => openTrackSettings('audio-options'));
+    on($('#player-subtitle-menu'), 'click', () => openTrackSettings('subtitle-options'));
     on(video, 'click', togglePlay);
     on(video, 'play', async () => {
+      if (player.adActive) { video.pause(); return; }
       syncPlayIcon(); showControls();
       if (player.externalAudioEnabled && player.externalAudio) {
         syncExternalAudio(true);
         try { await player.externalAudio.play(); } catch { toast('پخش صدای خارجی ممکن نشد.', 'error'); }
       }
-      $('#pause-ad-slot')?.replaceChildren();
+      clearAdSlot($('#pause-ad-slot'));
+      clearAdSlot($('#pause-banner-slot'));
     });
     on(video, 'pause', () => {
       syncPlayIcon(); showControls(); player.externalAudio?.pause(); saveProgress(true);
-      if (video.currentTime > 1 && !video.ended && !player.pauseAdLoaded) loadPlayerAd('pause_overlay', '#pause-ad-slot', player);
+      if (video.currentTime > 1 && !video.ended && !player.adActive) { loadPlayerAd('pause_overlay', '#pause-ad-slot', player); loadPlayerAd('banner_pause', '#pause-banner-slot', player); }
+    });
+    on(video, 'waiting', () => { if (player.externalAudioEnabled) player.externalAudio?.pause(); });
+    on(video, 'playing', () => {
+      if (!player.externalAudioEnabled || !player.externalAudio || player.adActive) return;
+      syncExternalAudio(true);
+      player.externalAudio.play().catch(() => toast('پخش صدای خارجی ممکن نشد.', 'error'));
     });
     on(video, 'timeupdate', updateProgress);
     on(video, 'loadedmetadata', () => {
@@ -650,9 +860,17 @@
       updateProgress(); refreshSettings();
     });
     on(video, 'durationchange', updateProgress);
-    on(video, 'seeking', () => syncExternalAudio(true));
+    on(video, 'seeking', () => { syncExternalAudio(true); renderExternalCue(); });
     on(video, 'ratechange', () => { if (player.externalAudio) player.externalAudio.playbackRate = video.playbackRate; refreshSettings(); });
-    on(video, 'ended', () => { player.externalAudio?.pause(); saveProgress(true); });
+    on(video, 'ended', () => {
+      player.externalAudio?.pause();
+      saveProgress(true);
+      // Post-roll: the owner's "پس از پخش" slot, if it is switched on.
+      if (video.currentTime > 0 && !player.postRollShown) {
+        player.postRollShown = true;
+        playPlayerAd('timed_banner', player);
+      }
+    });
     on(seek, 'input', () => { if (video.duration) video.currentTime = (Number(seek.value) / 1000) * video.duration; });
     on(volume, 'input', () => {
       const value = Number(volume.value);
@@ -668,13 +886,34 @@
       else shell.requestFullscreen?.().catch(() => toast('تمام‌صفحه در این مرورگر پشتیبانی نمی‌شود.', 'error'));
     });
     on($('#settings-button'), 'click', () => { refreshSettings(); $('#settings-menu').classList.toggle('open'); });
-    on($('#caption-button'), 'click', () => {
-      if (player.externalCues.length) {
-        player.externalSubtitlesEnabled = !player.externalSubtitlesEnabled;
-        [...video.textTracks].forEach((track) => { track.mode = 'disabled'; });
-        renderExternalCue(); refreshSettings();
-      } else $('#settings-menu').classList.toggle('open');
-    });
+    on($('#caption-button'), 'click', () => { refreshSettings(); $('#settings-menu').classList.toggle('open'); });
+    function updateSubtitleStyle() {
+      const settings = {
+        size: Number($('#subtitle-size').value), color: $('#subtitle-color').value,
+        font: $('#subtitle-font').value,
+        delay: Math.max(-60, Math.min(60, Number($('#subtitle-delay').value) || 0)),
+      };
+      subtitleOverlay.style.fontSize = `${settings.size}px`;
+      subtitleOverlay.style.color = settings.color;
+      subtitleOverlay.style.fontFamily = settings.font;
+      player.subtitleDelay = settings.delay;
+      $('#subtitle-size-value').textContent = `${settings.size}px`;
+      try { localStorage.setItem('vizosten-subtitle-settings', JSON.stringify(settings)); } catch { /* storage is optional */ }
+      renderExternalCue();
+    }
+    try {
+      const saved = JSON.parse(localStorage.getItem('vizosten-subtitle-settings') || '{}');
+      if (Number.isFinite(saved.size) && saved.size >= 12 && saved.size <= 48) $('#subtitle-size').value = saved.size;
+      if (/^#[0-9a-f]{6}$/i.test(saved.color || '')) $('#subtitle-color').value = saved.color;
+      if ([...$('#subtitle-font').options].some((option) => option.value === saved.font)) $('#subtitle-font').value = saved.font;
+      if (Number.isFinite(saved.delay) && saved.delay >= -60 && saved.delay <= 60) $('#subtitle-delay').value = saved.delay;
+    } catch { /* malformed or unavailable local storage */ }
+    updateSubtitleStyle();
+    for (const id of ['subtitle-size', 'subtitle-color', 'subtitle-font', 'subtitle-delay']) on($(`#${id}`), 'input', updateSubtitleStyle);
+    for (const list of [video.textTracks, video.audioTracks]) if (list?.addEventListener) {
+      on(list, 'addtrack', refreshSettings); on(list, 'removetrack', refreshSettings);
+    }
+    on(video, 'error', () => { if (video.currentSrc) toast('پخش فایل ممکن نشد؛ نشانی، دسترسی و فرمت فایل را بررسی کنید.', 'error'); });
     on(shell, 'pointermove', showControls);
     on(shell, 'pointerleave', () => { if (!video.paused) shell.classList.remove('controls-visible'); });
     on(shell, 'keydown', (event) => {
@@ -685,16 +924,23 @@
     });
     shell.tabIndex = 0;
     syncPlayIcon(); refreshSettings();
-    player.bannerTimer = setTimeout(() => loadPlayerAd('timed_banner', '#timed-banner-slot', player), 8000);
+    // The owner controls both which slots exist and how long they show, so the
+    // banner slots are scheduled from config instead of a hardcoded placement.
+    // "پس از پخش" follows the player's own clip; the banner strip under the player
+    // is the owner's banner_player slot.
+    player.bannerTimer = setTimeout(() => loadPlayerAd('banner_player', '#timed-banner-slot', player), 8000);
+
   }
 
-  async function bindPlayerSource(type) {
+  async function bindPlayerSource(type, sourceUrl = '', activate = true) {
     const player = state.player;
     if (!player) return;
     const input = $(`#${type}-url`);
     let url;
     try {
-      const parsed = new URL(input.value.trim(), window.location.origin);
+      const rawUrl = (sourceUrl || input.value).trim();
+      if (!rawUrl) throw new Error();
+      const parsed = new URL(rawUrl, window.location.origin);
       if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error();
       url = parsed.toString();
     } catch {
@@ -702,6 +948,20 @@
       return;
     }
     if (type === 'video') {
+      player.video.pause();
+      player.externalAudios.forEach((track) => track.audio.pause());
+      player.externalAudios = [];
+      player.externalAudio = null;
+      player.externalAudioEnabled = false;
+      player.video.muted = false;
+      player.subtitles = [];
+      player.selectedSubtitle = 'off';
+      $('#external-subtitle').textContent = '';
+      $('#external-subtitle').style.display = 'none';
+      player.hasAppliedResume = true;
+      player.preRollChecked = false;
+      player.midRollChecked = false;
+      player.postRollShown = false;
       player.video.src = url;
       player.video.classList.remove('pixelated');
       $('#unavailable-overlay')?.remove();
@@ -710,17 +970,20 @@
       return;
     }
     if (type === 'audio') {
-      player.externalAudio?.pause();
       const audio = new Audio(url);
-      audio.preload = 'auto';
-      audio.volume = Number($('#volume')?.value || 1);
+      audio.preload = 'metadata';
+      audio.volume = Number($('#volume')?.value ?? 1);
+      const index = player.externalAudios.push({ audio, label: `صدای خارجی ${player.externalAudios.length + 1}` }) - 1;
+      if (!activate) { player.refreshSettings?.(); return; }
+      player.externalAudio?.pause();
       player.externalAudio = audio;
       player.externalAudioEnabled = true;
       player.video.muted = true;
-      audio.currentTime = player.video.currentTime;
-      if (!player.video.paused) audio.play().catch(() => {});
+      try { audio.currentTime = player.video.currentTime; } catch { /* metadata may not yet be available */ }
+      if (!player.video.paused) audio.play().catch(() => toast('پخش صدای خارجی ممکن نشد.', 'error'));
+      input.value = '';
       $('#settings-button')?.click();
-      toast('صدای دوبله خارجی فعال شد.', 'success');
+      toast(`صدای خارجی ${formatNumber(index + 1)} اضافه شد.`, 'success');
       return;
     }
     try {
@@ -729,30 +992,171 @@
       const text = await response.text();
       const cues = parseSrt(text);
       if (!cues.length) throw new Error('هیچ بازه زمانی معتبری پیدا نشد');
-      player.externalCues = cues;
-      player.externalSubtitlesEnabled = true;
-      [...player.video.textTracks].forEach((track) => { track.mode = 'disabled'; });
-      toast(`${formatNumber(cues.length)} خط زیرنویس بارگذاری شد.`, 'success');
-      $('#settings-button')?.click();
+      if (state.player !== player) return;
+      const index = player.subtitles.push({ cues, label: `زیرنویس خارجی ${player.subtitles.length + 1}` }) - 1;
+      player.refreshSettings?.();
+      if (activate) {
+        player.selectedSubtitle = `external-${index}`;
+        [...player.video.textTracks].forEach((track) => { track.mode = 'disabled'; });
+        input.value = '';
+        toast(`${formatNumber(cues.length)} خط زیرنویس بارگذاری شد.`, 'success');
+        $('#settings-button')?.click();
+      }
     } catch (error) {
-      toast(`زیرنویس بارگذاری نشد؛ سرور فایل باید CORS را مجاز کند. ${error.message}`, 'error');
+      if (activate && state.player === player) toast(`زیرنویس بارگذاری نشد؛ سرور فایل باید CORS را مجاز کند. ${error.message}`, 'error');
     }
   }
 
+  // Count a rendered creative, not merely an ad-server response. This is an
+  // observable client-side signal, not proof that a person saw the advert.
+  function observeAdImpression(ad, element) {
+    if (!element) return () => {};
+    let reported = false;
+    let intersecting = false;
+    const isVideo = element.tagName === 'VIDEO';
+    let mediaReady = isVideo ? false : Boolean(element.complete && element.naturalWidth);
+    let observer;
+    const fallbackVisible = () => {
+      const rect = element.getBoundingClientRect();
+      const width = Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0));
+      const height = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
+      return rect.width > 0 && rect.height > 0 && width * height >= rect.width * rect.height * 0.5;
+    };
+    const cleanup = () => {
+      observer?.disconnect();
+      document.removeEventListener('visibilitychange', check);
+      element.removeEventListener('playing', onReady);
+      element.removeEventListener('load', onReady);
+      window.removeEventListener('scroll', check, true);
+      window.removeEventListener('resize', check);
+    };
+    function check() {
+      if (reported || !element.isConnected || document.visibilityState !== 'visible' || !mediaReady) return;
+      if (isVideo && (element.paused || element.ended)) return;
+      if (!(observer ? intersecting : fallbackVisible())) return;
+      reported = true;
+      recordAdEvent(ad, 'impression');
+      cleanup();
+    }
+    function onReady() { mediaReady = true; check(); }
+    document.addEventListener('visibilitychange', check);
+    element.addEventListener(isVideo ? 'playing' : 'load', onReady);
+    if ('IntersectionObserver' in window) {
+      observer = new IntersectionObserver((entries) => {
+        const entry = entries.find((item) => item.target === element);
+        intersecting = Boolean(entry?.isIntersecting && entry.intersectionRatio >= 0.5);
+        check();
+      }, { threshold: [0, 0.5] });
+      observer.observe(element);
+    } else {
+      window.addEventListener('scroll', check, true);
+      window.addEventListener('resize', check);
+    }
+    check();
+    return cleanup;
+  }
+
+  function clearAdSlot(host) {
+    if (!host) return;
+    host._adCleanup?.();
+    host._adCleanup = null;
+    host.replaceChildren();
+  }
+
+  // Ad requests fail open: playback must not be held hostage by an unavailable ad server.
+  async function playPlayerAd(placement, player) {
+    if (state.player !== player) return;
+    player.adActive = true;
+    let requestTimer;
+    let ad;
+    try {
+      const result = await Promise.race([
+        api(`/ads/serve?placement=${placement}`),
+        new Promise((resolve) => { requestTimer = setTimeout(() => resolve({ ad: null }), 4000); }),
+      ]);
+      ad = result.ad;
+    } catch { ad = null; }
+    clearTimeout(requestTimer);
+    if (state.player !== player) return;
+    const host = $('#player-ad-slot');
+    if (!ad || !host || !safeUrl(ad.creativeUrl)) { player.adActive = false; return; }
+    await new Promise((resolve) => {
+      let finished = false;
+      let elapsed = 0;
+      const duration = Math.max(1, Math.min(120, Number(ad.durationSeconds) || 15));
+      const skipAt = Math.max(0, Math.min(120, Number(ad.skipAfterSeconds) || 0));
+      const media = ad.assetType === 'video'
+        ? `<video class="player-ad-video" src="${safeUrl(ad.creativeUrl)}" playsinline controls></video>`
+        : `<img class="player-ad-image" src="${safeUrl(ad.creativeUrl)}" alt="${escapeHtml(ad.headline)}">`;
+      host.innerHTML = `<div class="player-ad-stage" role="region" aria-label="تبلیغ"><span class="player-ad-label">تبلیغ</span>${media}<a class="player-ad-link" href="${escapeHtml(ad.tunnelUrl)}" target="_blank" rel="noopener" data-ad-click="${escapeHtml(ad.id)}" data-ad-session="${escapeHtml(ad.session)}">${escapeHtml(ad.headline)} ↗</a><button class="player-ad-skip" type="button" disabled>رد کردن</button></div>`;
+      const creative = $('.player-ad-video', host);
+      const image = $('.player-ad-image', host);
+      const skip = $('.player-ad-skip', host);
+      let lastVideoTime = 0;
+      let stalledFor = 0;
+      const stopObserving = observeAdImpression(ad, creative || image);
+      function finish(eventType) {
+        if (finished) return;
+        finished = true;
+        clearInterval(timer);
+        stopObserving();
+        creative?.pause();
+        host.replaceChildren();
+        if (eventType) recordAdEvent(ad, eventType);
+        player.cancelAd = null;
+        player.adActive = false;
+        resolve();
+      }
+      player.cancelAd = () => finish(null);
+      function updateSkip() {
+        const left = Math.max(0, Math.ceil(skipAt - elapsed));
+        skip.disabled = left > 0;
+        skip.textContent = left ? `رد کردن · ${formatNumber(left)}` : 'رد کردن تبلیغ';
+      }
+      updateSkip();
+      skip.addEventListener('click', () => finish('skip'));
+      creative?.addEventListener('ended', () => finish('complete'), { once: true });
+      creative?.addEventListener('error', () => finish(null), { once: true });
+      image?.addEventListener('error', () => finish(null), { once: true });
+      const timer = setInterval(() => {
+        if (state.player !== player) { finish(null); return; }
+        if (creative) {
+          const current = creative.currentTime;
+          if (!creative.paused && current > lastVideoTime) { elapsed += Math.min(1, current - lastVideoTime); stalledFor = 0; }
+          else if (!creative.paused) stalledFor += 1;
+          lastVideoTime = current;
+          if (stalledFor >= 15) { finish(null); return; }
+        } else { elapsed += 1; if (elapsed >= duration) { finish('complete'); return; } }
+        updateSkip();
+      }, 1000);
+      if (creative) { creative.muted = true; creative.play().catch(() => { /* native controls let the viewer start it */ }); }
+    });
+  }
+
   async function loadPlayerAd(placement, selector, player) {
-    if (placement === 'pause_overlay') player.pauseAdLoaded = true;
     try {
       const { ad } = await api(`/ads/serve?placement=${placement}`);
-      if (!ad || state.player !== player) return;
+      if (!ad || state.player !== player || (['pause_overlay', 'banner_pause'].includes(placement) && (!player.video.paused || player.adActive || player.video.ended))) return;
       const host = $(selector);
       if (!host) return;
+      // The owner sets how many seconds a creative stays on screen.
+      document.documentElement.style.setProperty(`--ad-duration-${placement}`, `${Number(ad.durationSeconds || 8)}s`);
+      const displayId = `${ad.id}:${ad.session}`;
+      clearAdSlot(host);
+      host.dataset.displayId = displayId;
+      if (ad.durationSeconds) {
+        setTimeout(() => {
+          if (state.player === player && host.dataset.displayId === displayId) clearAdSlot(host);
+        }, Number(ad.durationSeconds) * 1000);
+      }
       const media = ad.assetType === 'video'
         ? `<video src="${safeUrl(ad.creativeUrl)}" muted autoplay playsinline loop></video>`
         : `<img src="${safeUrl(ad.creativeUrl)}" alt="${escapeHtml(ad.headline)}">`;
       host.innerHTML = placement === 'pause_overlay'
         ? `<a class="pause-ad-card" href="${escapeHtml(ad.tunnelUrl)}" target="_blank" rel="noopener" data-ad-click="${escapeHtml(ad.id)}" data-ad-session="${escapeHtml(ad.session)}"><span>تبلیغ</span>${media}<strong>${escapeHtml(ad.headline)}</strong></a>`
         : `<a class="timed-banner" href="${escapeHtml(ad.tunnelUrl)}" target="_blank" rel="noopener" data-ad-click="${escapeHtml(ad.id)}" data-ad-session="${escapeHtml(ad.session)}">${media}<div><small>پیشنهاد ویژه</small><strong>${escapeHtml(ad.headline)}</strong><p>${escapeHtml(ad.body || '')}</p></div><b>مشاهده</b></a>`;
-      recordAdEvent(ad, 'impression');
+      host._adCleanup = observeAdImpression(ad, $('video, img', host));
+      player.cleanup.push(() => clearAdSlot(host));
     } catch {
       // Ad inventory must never interrupt playback.
     }
@@ -761,7 +1165,7 @@
   function roleSwitcher(active = 'user') {
     return `<nav class="role-switcher" aria-label="انتخاب محیط">
       <button class="${active === 'user' ? 'active' : ''}" data-route="/profile">کاربر</button>
-      ${state.user?.role === 'advertiser' ? `<button class="${active === 'advertiser' ? 'active' : ''}" data-route="/advertiser">تبلیغ‌دهنده</button>` : ''}
+      ${state.user ? `<button class="${active === 'advertiser' ? 'active' : ''}" data-route="/advertiser">تبلیغ‌دهنده</button>` : ''}
     </nav>`;
   }
 
@@ -783,14 +1187,14 @@
       ${roleSwitcher('user')}
       <section class="account-hero">
         <div class="large-avatar">${escapeHtml(firstLetter(state.user.accountName))}</div>
-        <div><h1>${escapeHtml(state.user.accountName)}</h1><p>${state.user.role === 'advertiser' ? 'عضو و تبلیغ‌دهنده فیلم‌ورک' : 'عضو فیلم‌ورک'} · از ${formatDate(state.user.createdAt)}</p></div>
+        <div><h1>${escapeHtml(state.user.accountName)}</h1><p>عضو و تبلیغ‌دهنده ویزوستن · از ${formatDate(state.user.createdAt)}</p></div>
       </section>
       <section class="account-stats" aria-label="آمار حساب">
         <div><strong>${formatNumber(watchedHours)}</strong><span>ساعت تماشا</span></div>
         <div><strong>${formatNumber(stats.completed)}</strong><span>اثر کامل‌شده</span></div>
         <div><strong>${formatNumber(stats.favorites)}</strong><span>نشان‌شده</span></div>
       </section>
-      ${progress.length ? `<section class="content-section account-progress"><div class="section-head"><div><h2>ادامه تماشا</h2><p>آخرین فعالیت پخش شما</p></div><button class="text-button" data-route="/home">مشاهده همه</button></div><div class="resume-scroller">${progress.map(continueCard).join('')}</div></section>` : ''}
+      ${progress.length && onlinePlaybackVisible() ? `<section class="content-section account-progress"><div class="section-head"><div><h2>ادامه تماشا</h2><p>آخرین فعالیت پخش شما</p></div><button class="text-button" data-route="/home">مشاهده همه</button></div><div class="resume-scroller">${progress.map(continueCard).join('')}</div></section>` : ''}
       <div class="account-groups">
         <section><h2>کتابخانه من</h2><div class="menu-list surface-panel">
           <button class="menu-row" data-route="/favorites"><div><span class="menu-icon">♡</span><span>نشان‌شده‌ها</span></div><small>${formatNumber(stats.favorites)} ←</small></button>
@@ -798,7 +1202,7 @@
           <button class="menu-row" data-route="/search"><div>${icons.search}<span>کشف آثار تازه</span></div><small>جستجو ←</small></button>
         </div></section>
         <section><h2>حساب و دسترسی</h2><div class="menu-list surface-panel">
-          ${state.user.role === 'advertiser' ? `<button class="menu-row" data-route="/advertiser"><div>${icons.megaphone}<span>مرکز تبلیغ‌دهندگان</span></div><small>ورود ←</small></button>` : ''}
+          <button class="menu-row" data-route="/advertiser"><div>${icons.megaphone}<span>مرکز تبلیغ‌دهندگان</span></div><small>ورود ←</small></button>
           <button class="menu-row" type="button"><div><span class="menu-icon">✓</span><span>ورود امن تلگرام</span></div><small>فعال</small></button>
           <button class="menu-row danger-row" id="logout-user"><div><span class="menu-icon">↪</span><span>خروج از این دستگاه</span></div><small>←</small></button>
         </div></section>
@@ -813,10 +1217,6 @@
       app.innerHTML = `<div class="page-shell page-top">${emptyState('مرکز تبلیغ‌دهندگان', 'برای مشاهده کیف پول و ساخت کمپین ابتدا وارد شوید.', '<button class="primary-button" style="margin-top:18px" data-login>ورود با تلگرام</button>')}</div>`;
       return;
     }
-    if (state.user.role !== 'advertiser') {
-      app.innerHTML = `<div class="page-shell page-top">${emptyState('حساب تبلیغ‌دهنده فعال نیست', 'فعال‌سازی نقش تبلیغ‌دهنده و شارژ اولیه کیف پول توسط مالک سامانه انجام می‌شود.')}</div>`;
-      return;
-    }
     const data = await api('/advertiser/profile');
     if (version !== state.routeVersion) return;
     const prices = state.config.placementPrices || [];
@@ -828,7 +1228,7 @@
       return `<article class="campaign-card">
         <div class="campaign-creative">${campaign.creativeUrl ? (campaign.assetType === 'video' ? `<video src="${safeUrl(campaign.creativeUrl)}" muted preload="metadata"></video>` : `<img src="${safeUrl(campaign.creativeUrl)}" alt="">`) : '<span>AD</span>'}<i class="status-dot status-${escapeHtml(campaign.status)}"></i></div>
         <div class="campaign-main"><div class="campaign-title"><div><h3>${escapeHtml(campaign.name)}</h3><p>${escapeHtml(campaign.headline)}</p></div><span class="status-pill status-${escapeHtml(campaign.status)}">${escapeHtml(statusLabels[campaign.status] || campaign.status)}</span></div>
-          <div class="campaign-metrics"><span><b>${formatNumber(campaign.impressions)}</b> نمایش</span><span><b>${formatNumber(campaign.clicks)}</b> کلیک</span><span><b>${formatMoney(campaign.spent)}</b> هزینه</span></div>
+          <div class="campaign-metrics"><span><b>${formatNumber(campaign.impressions)}</b> نمایش</span><span><b>${formatNumber(campaign.clicks)}</b> کلیک</span><span><b>${formatNumber(campaign.completes)}</b> پایان</span><span><b>${formatNumber(campaign.skips)}</b> رد</span><span><b>${formatMoney(campaign.spent)}</b> هزینه</span></div>
           <div class="budget-progress"><i><b style="width:${percent.toFixed(1)}%"></b></i><small>${formatNumber(percent.toFixed(0))}٪ بودجه · تا ${formatDate(campaign.endsAt)}</small></div>
         </div>
         ${['active', 'paused'].includes(campaign.status) ? `<button type="button" class="campaign-toggle" data-campaign-status="${campaign.status === 'active' ? 'paused' : 'active'}" data-campaign-id="${escapeHtml(campaign.id)}">${campaign.status === 'active' ? 'توقف' : 'ادامه'}</button>` : ''}
@@ -843,7 +1243,9 @@
         <div><span>هزینه کل</span><strong>${formatMoney(data.analytics?.spent)}</strong><small>کسرشده از کیف پول</small></div>
       </section>
       <div class="advertiser-top">
-        <section class="surface-panel wallet-card"><span class="wallet-label">موجودی قابل استفاده</span><strong class="wallet-balance">${formatMoney(data.wallet.balance, data.wallet.currency)}</strong><span class="wallet-currency">کیف پول امن کمپین‌ها</span></section>
+        <section class="surface-panel wallet-card"><span class="wallet-label">موجودی قابل استفاده</span><strong class="wallet-balance">${formatMoney(data.wallet.balance, data.wallet.currency)}</strong><span class="wallet-currency">کیف پول امن کمپین‌ها</span>
+          <form id="coupon-redemption-form" class="coupon-redemption"><label class="form-field"><span>کد افزایش موجودی</span><input class="form-input" name="code" maxlength="32" dir="ltr" autocomplete="off" required placeholder="کد تخفیف"></label><button class="primary-button" type="submit">اعمال کد</button></form>
+        </section>
         <section class="surface-panel"><h2>نقشه تعاملی جایگاه‌ها</h2><div class="placement-map"><div class="mock-player">نمای پلیر<button type="button" class="zone zone-pre ${state.selectedPlacement === 'pre_roll' ? 'selected' : ''}" data-placement="pre_roll">Pre-roll</button><button type="button" class="zone zone-pause ${state.selectedPlacement === 'pause_overlay' ? 'selected' : ''}" data-placement="pause_overlay">Pause overlay</button></div><button type="button" class="zone zone-banner ${state.selectedPlacement === 'timed_banner' ? 'selected' : ''}" data-placement="timed_banner">Timed banner below player</button></div><div class="price-cards">${priceCards}</div></section>
       </div>
       <div class="hub-layout">
@@ -864,6 +1266,16 @@
       </div>
     </div>`;
     setCampaignDateDefaults();
+    setCampaignCreativeType();
+  }
+
+  function setCampaignCreativeType() {
+    const select = $('#campaign-form [name="assetType"]');
+    if (!select) return;
+    const group = state.config.placementPrices?.find((price) => price.placement === state.selectedPlacement)?.group || 'video';
+    const type = group === 'video' ? 'video' : 'image';
+    select.value = type;
+    [...select.options].forEach((option) => { option.disabled = option.value !== type; });
   }
 
   function setCampaignDateDefaults() {
@@ -916,6 +1328,8 @@
   }
 
   function closeModal() {
+    state.modalAdCleanup?.();
+    state.modalAdCleanup = null;
     clearInterval(state.modalTimer);
     state.modalTimer = null;
     modalRoot.innerHTML = '';
@@ -1015,13 +1429,32 @@
     }
   }
 
+  const adEventQueues = new Map();
+  async function sendAdEvent(ad, eventType) {
+    // A session/event pair is idempotent on the server. Retry transient errors;
+    // do not retry validation/authentication failures or keep playback waiting.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await api(`/ads/${encodeURIComponent(ad.id)}/events`, {
+          method: 'POST', keepalive: true,
+          headers: { 'X-Ad-Session': ad.session },
+          body: JSON.stringify({ eventType, session: ad.session }),
+        });
+        return;
+      } catch (error) {
+        if (attempt === 2 || (error.status && error.status < 500 && error.status !== 429)) return;
+        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+      }
+    }
+  }
   function recordAdEvent(ad, eventType) {
-    if (!ad?.id || !ad?.session) return;
-    api(`/ads/${encodeURIComponent(ad.id)}/events`, {
-      method: 'POST',
-      headers: { 'X-Ad-Session': ad.session },
-      body: JSON.stringify({ eventType, session: ad.session }),
-    }).catch(() => {});
+    if (!ad?.id || !ad?.session) return Promise.resolve();
+    const key = `${ad.id}:${ad.session}`;
+    const previous = adEventQueues.get(key) || Promise.resolve();
+    const queued = previous.catch(() => {}).then(() => sendAdEvent(ad, eventType));
+    adEventQueues.set(key, queued);
+    queued.finally(() => { if (adEventQueues.get(key) === queued) adEventQueues.delete(key); });
+    return queued;
   }
 
   function showPreRoll(ad, mediaId) {
@@ -1029,8 +1462,9 @@
       ? `<video id="preroll-video" src="${safeUrl(ad.creativeUrl)}" autoplay playsinline muted></video>`
       : `<img src="${safeUrl(ad.creativeUrl)}" alt="${escapeHtml(ad.headline)}">`;
     let seconds = Math.max(0, Number(ad.skipAfterSeconds || 0));
-    openModal(`${modalHeader('پیام حامی Filmwork')}<div class="ad-stage"><span class="ad-label">تبلیغ</span>${media}<button class="ad-skip" id="skip-ad" type="button" ${seconds ? 'disabled' : ''}>${seconds ? `رد کردن · ${formatNumber(seconds)}` : 'رد کردن تبلیغ'}</button></div><div class="ad-copy"><h3>${escapeHtml(ad.headline)}</h3><p>${escapeHtml(ad.body || '')}</p><a class="text-button" href="${escapeHtml(ad.tunnelUrl)}" target="_blank" rel="noopener" data-ad-click="${escapeHtml(ad.id)}" data-ad-session="${escapeHtml(ad.session)}">مشاهده جزئیات در صفحه بدون فیلتر</a></div>`, { locked: true });
-    recordAdEvent(ad, 'impression');
+    openModal(`${modalHeader('پیام حامی Vizosten')}<div class="ad-stage"><span class="ad-label">تبلیغ</span>${media}<button class="ad-skip" id="skip-ad" type="button" ${seconds ? 'disabled' : ''}>${seconds ? `رد کردن · ${formatNumber(seconds)}` : 'رد کردن تبلیغ'}</button></div><div class="ad-copy"><h3>${escapeHtml(ad.headline)}</h3><p>${escapeHtml(ad.body || '')}</p><a class="text-button" href="${escapeHtml(ad.tunnelUrl)}" target="_blank" rel="noopener" data-ad-click="${escapeHtml(ad.id)}" data-ad-session="${escapeHtml(ad.session)}">مشاهده جزئیات در صفحه بدون فیلتر</a></div>`, { locked: true });
+    const stopObserving = observeAdImpression(ad, $('.ad-stage video, .ad-stage img', modalRoot));
+    state.modalAdCleanup = stopObserving;
     const skip = $('#skip-ad');
     skip.dataset.mediaId = mediaId;
     skip.dataset.adId = ad.id;
@@ -1054,8 +1488,20 @@
     }
   }
 
+  async function loadDownloadBanner(host) {
+    try {
+      const { ad } = await api('/ads/serve?placement=banner_download');
+      if (!ad || !host.isConnected || !safeUrl(ad.creativeUrl)) return;
+      host.innerHTML = `<a class="timed-banner" href="${escapeHtml(ad.tunnelUrl)}" target="_blank" rel="noopener" data-ad-click="${escapeHtml(ad.id)}" data-ad-session="${escapeHtml(ad.session)}"><img src="${safeUrl(ad.creativeUrl)}" alt="${escapeHtml(ad.headline)}"><div><small>تبلیغ</small><strong>${escapeHtml(ad.headline)}</strong><p>${escapeHtml(ad.body || '')}</p></div><b>مشاهده</b></a>`;
+      const cleanup = observeAdImpression(ad, $('img', host));
+      const timer = setTimeout(() => { cleanup(); if (host.isConnected) host.replaceChildren(); }, Math.max(1, Number(ad.durationSeconds) || 8) * 1000);
+      state.modalAdCleanup = () => { clearTimeout(timer); cleanup(); };
+    } catch { /* Download remains available when advertising is unavailable. */ }
+  }
+
   function showDownloadWarning(mediaId) {
-    openModal(`${modalHeader('ارسال فایل به تلگرام')}<div class="warning-box">کاربر گرامی، برای دریافت فایل حتما فیلترشکن یا پروکسی تلگرام خود را روشن کنید</div><p style="color:#a1a1aa;font-size:11px;line-height:1.9;margin:13px 4px">سامانه ابتدا نسخه اصلی را بررسی می‌کند و اگر حذف شده باشد، بدون وقفه نسخه پشتیبان را جایگزین خواهد کرد.</p><button class="primary-button" id="confirm-delivery" data-media-id="${escapeHtml(mediaId)}" type="button" style="width:100%">تأیید و ارسال در ربات</button>`);
+    openModal(`${modalHeader('ارسال فایل به تلگرام')}<div class="warning-box">کاربر گرامی، برای دریافت فایل حتما فیلترشکن یا پروکسی تلگرام خود را روشن کنید</div><p style="color:#a1a1aa;font-size:11px;line-height:1.9;margin:13px 4px">سامانه ابتدا نسخه اصلی را بررسی می‌کند و اگر حذف شده باشد، بدون وقفه نسخه پشتیبان را جایگزین خواهد کرد.</p><div id="download-banner-slot"></div><button class="primary-button" id="confirm-delivery" data-media-id="${escapeHtml(mediaId)}" type="button" style="width:100%">تأیید و ارسال در ربات</button>`);
+    loadDownloadBanner($('#download-banner-slot'));
   }
 
   async function invokeDelivery(mediaId) {
@@ -1096,6 +1542,21 @@
     } catch (error) { toast(apiErrorMessage(error), 'error'); }
   }
 
+  async function redeemAdvertiserCoupon(form) {
+    const button = $('button[type="submit"]', form);
+    button.disabled = true;
+    try {
+      const result = await api('/advertiser/coupons/redeem', {
+        method: 'POST', body: JSON.stringify({ code: new FormData(form).get('code') }),
+      });
+      toast(`کد پذیرفته شد؛ ${formatMoney(result.wallet.added, result.wallet.currency)} به کیف پول اضافه شد.`);
+      await route();
+    } catch (error) {
+      toast(error.message || 'اعمال کد ناموفق بود.');
+      button.disabled = false;
+    }
+  }
+
   async function submitCampaign(form) {
     const button = $('button[type="submit"]', form);
     const values = Object.fromEntries(new FormData(form));
@@ -1115,7 +1576,8 @@
       telegramButtons: interactiveButtons,
       skipAfterSeconds: values.placement === 'pre_roll' ? 5 : 0,
     };
-    if (payload.placement === 'pre_roll') payload.assetType = 'video';
+    const group = state.config.placementPrices?.find((price) => price.placement === payload.placement)?.group || 'video';
+    payload.assetType = group === 'video' ? 'video' : 'image';
     button.disabled = true;
     button.innerHTML = '<span class="spinner"></span> در حال رزرو بودجه';
     try {
@@ -1168,7 +1630,7 @@
       const hidden = $('#campaign-form [name="placement"]');
       if (hidden) hidden.value = state.selectedPlacement;
       $$('[data-placement]').forEach((element) => element.classList.toggle('selected', element.dataset.placement === state.selectedPlacement));
-      if (state.selectedPlacement === 'pre_roll') $('#campaign-form [name="assetType"]').value = 'video';
+      setCampaignCreativeType();
       return;
     }
     const campaignScroll = event.target.closest('[data-scroll-campaign]');
@@ -1243,19 +1705,23 @@
     if (!state.player) return;
     const audioOption = event.target.closest('[data-audio-track]');
     if (audioOption) {
+      const player = state.player;
       const value = audioOption.dataset.audioTrack;
-      if (value === 'external-audio' && state.player.externalAudio) {
-        state.player.externalAudioEnabled = true;
-        state.player.video.muted = true;
-        state.player.externalAudio.currentTime = state.player.video.currentTime;
-        if (!state.player.video.paused) state.player.externalAudio.play().catch(() => {});
+      player.externalAudio?.pause();
+      if (value.startsWith('external-audio-')) {
+        const audio = player.externalAudios[Number(value.slice(15))]?.audio;
+        if (!audio) return;
+        player.externalAudio = audio;
+        player.externalAudioEnabled = true;
+        player.video.muted = true;
+        try { audio.currentTime = player.video.currentTime; } catch { /* wait for metadata */ }
+        if (!player.video.paused) audio.play().catch(() => toast('پخش صدای خارجی ممکن نشد.', 'error'));
       } else {
-        state.player.externalAudioEnabled = false;
-        state.player.externalAudio?.pause();
-        state.player.video.muted = false;
-        if (state.player.video.audioTracks) {
-          const selected = value.startsWith('audio-') ? Number(value.slice(6)) : -1;
-          for (let index = 0; index < state.player.video.audioTracks.length; index += 1) state.player.video.audioTracks[index].enabled = selected < 0 ? index === 0 : index === selected;
+        player.externalAudioEnabled = false;
+        player.video.muted = false;
+        if (player.video.audioTracks) {
+          const selected = value.startsWith('audio-') ? Number(value.slice(6)) : 0;
+          for (let index = 0; index < player.video.audioTracks.length; index += 1) player.video.audioTracks[index].enabled = index === selected;
         }
       }
       $('#settings-button')?.click(); $('#settings-button')?.click();
@@ -1263,10 +1729,12 @@
     }
     const subtitleOption = event.target.closest('[data-subtitle-track]');
     if (subtitleOption) {
+      const player = state.player;
       const value = subtitleOption.dataset.subtitleTrack;
-      state.player.externalSubtitlesEnabled = value === 'external';
-      for (let index = 0; index < state.player.video.textTracks.length; index += 1) state.player.video.textTracks[index].mode = value === `text-${index}` ? 'showing' : 'disabled';
-      if (!state.player.externalSubtitlesEnabled) { const overlay = $('#external-subtitle'); overlay.style.display = 'none'; overlay.textContent = ''; }
+      player.selectedSubtitle = value;
+      for (let index = 0; index < player.video.textTracks.length; index += 1) player.video.textTracks[index].mode = value === `text-${index}` ? 'hidden' : 'disabled';
+      $('#external-subtitle').textContent = '';
+      $('#external-subtitle').style.display = 'none';
       $('#settings-button')?.click(); $('#settings-button')?.click();
       return;
     }
@@ -1281,6 +1749,12 @@
     if (event.target.id === 'auth-form') { event.preventDefault(); verifyLogin(event.target); }
     if (event.target.id === 'comment-form') { event.preventDefault(); submitComment(event.target); }
     if (event.target.id === 'campaign-form') { event.preventDefault(); submitCampaign(event.target); }
+    if (event.target.id === 'coupon-redemption-form') { event.preventDefault(); redeemAdvertiserCoupon(event.target); }
+    if (event.target.id === 'home-search') {
+      event.preventDefault();
+      const term = String(new FormData(event.target).get('q') || '').trim();
+      navigate(term ? `/search?q=${encodeURIComponent(term)}` : '/search');
+    }
   });
 
   window.addEventListener('hashchange', route);
@@ -1292,6 +1766,13 @@
       if (state.token) tasks.push(api('/me').catch(() => null));
       const [config, me] = await Promise.all(tasks);
       state.config = config;
+      const siteName = 'Vizosten';
+      document.title = 'Vizosten | ویزوستن';
+      const brand = $('.header-brand-center strong');
+      if (brand) brand.textContent = siteName;
+      const brandButton = $('.header-brand-center');
+      if (brandButton) brandButton.setAttribute('aria-label', `${siteName}، صفحه نخست`);
+      if (config.site?.tagline) $('meta[name="description"]')?.setAttribute('content', config.site.tagline);
       if (me?.user) state.user = me.user;
     } catch (error) {
       console.warn('Initial configuration could not be loaded:', error);

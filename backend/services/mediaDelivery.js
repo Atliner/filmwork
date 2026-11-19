@@ -7,7 +7,7 @@ const {
   telegramErrorDescription,
   probeTelegramLink,
 } = require('../lib/telegram');
-const { authBotService } = require('../bots/authBot');
+const { downloadBotService } = require('../bots/downloadBot');
 
 async function getMedia(publicId) {
   const rows = await query(
@@ -95,7 +95,7 @@ async function deliverSubtitleBestEffort(user, media) {
   ].filter((pair) => pair[0] && pair[1]);
   for (const [chatId, messageId] of attempts) {
     try {
-      await authBotService.sendSubtitle(user.tg_chat_id, chatId, messageId);
+      await downloadBotService.sendSubtitle(user.tg_chat_id, chatId, messageId);
       return true;
     } catch (error) {
       console.warn('Subtitle copy failed; trying next replica:', telegramErrorDescription(error));
@@ -109,16 +109,17 @@ async function deliverSubtitleBestEffort(user, media) {
  * copy is the authoritative check for private channel messages; public links also
  * receive a lightweight HTTP deletion-marker probe before copying.
  */
-async function deliverMedia(publicId, user) {
+function buildCaption(template, media) {
+  return String(template || '')
+    .replaceAll('{title}', String(media.title || ''))
+    .replaceAll('{version}', String(media.version_label || ''));
+}
+
+async function deliverMedia(publicId, user, settings = {}) {
   try {
-    await authBotService.sendDownloadNotice(user.tg_chat_id);
-  } catch (error) {
-    console.error('Could not open the user delivery chat:', telegramErrorDescription(error));
-    throw new AppError(
-      503,
-      'DELIVERY_BOT_UNAVAILABLE',
-      'ربات تحویل در دسترس نیست؛ ابتدا گفت‌وگوی ربات را باز کنید و /start را بزنید.',
-    );
+    downloadBotService.ensureReady();
+  } catch {
+    throw new AppError(503, 'DELIVERY_BOT_UNAVAILABLE', 'ربات دریافت فایل روی هاست هنوز پیکربندی نشده است.');
   }
   const timeout = Math.max(1000, Math.min(15_000, Number(process.env.TELEGRAM_LINK_CHECK_TIMEOUT_MS || 5000)));
 
@@ -139,10 +140,18 @@ async function deliverMedia(publicId, user) {
       continue;
     }
 
+    const caption = buildCaption(settings['download.caption'], media).slice(0, 900);
     // Older/manual rows can contain only a link. Deliver that link without pretending
     // that Bot API copying was possible.
     if (!media.primary_chat_id || !media.primary_message_id) {
-      await authBotService.sendFallbackLink(user.tg_chat_id, media.tg_link_primary);
+      try {
+        await downloadBotService.sendFallbackLink(user.tg_chat_id, media.tg_link_primary, caption);
+      } catch (error) {
+        if (error.code === 'BOT_UNAVAILABLE' || /bot was blocked by the user|chat not found|bot can't initiate conversation/i.test(telegramErrorDescription(error))) {
+          throw new AppError(503, 'DELIVERY_BOT_START_REQUIRED', `برای دریافت فایل، ابتدا ربات دریافت را باز کنید و /start بزنید${process.env.DOWNLOAD_BOT_USERNAME ? `: @${String(process.env.DOWNLOAD_BOT_USERNAME).replace(/^@/, '')}` : ''}.`);
+        }
+        throw error;
+      }
       await markHealthy(media.id);
       return {
         delivered: true,
@@ -153,7 +162,7 @@ async function deliverMedia(publicId, user) {
     }
 
     try {
-      await authBotService.copyMedia(user.tg_chat_id, media.primary_chat_id, media.primary_message_id);
+      await downloadBotService.copyMedia(user.tg_chat_id, media.primary_chat_id, media.primary_message_id, caption);
       const subtitleDelivered = await deliverSubtitleBestEffort(user, media);
       await markHealthy(media.id);
       return {
@@ -163,6 +172,9 @@ async function deliverMedia(publicId, user) {
         subtitleDelivered,
       };
     } catch (error) {
+      if (error.code === 'BOT_UNAVAILABLE' || /bot was blocked by the user|chat not found|bot can't initiate conversation/i.test(telegramErrorDescription(error))) {
+        throw new AppError(503, 'DELIVERY_BOT_START_REQUIRED', `برای دریافت فایل، ابتدا ربات دریافت را باز کنید و /start بزنید${process.env.DOWNLOAD_BOT_USERNAME ? `: @${String(process.env.DOWNLOAD_BOT_USERNAME).replace(/^@/, '')}` : ''}.`);
+      }
       if (!isTelegramDeletionError(error)) {
         console.error('Telegram delivery failed without a deletion signal:', error);
         throw new AppError(
