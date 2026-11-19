@@ -172,6 +172,14 @@ public final class NativePlaybackTest {
             ((Runnable) field(activity, "hideControls")).run();
             assertEquals(View.INVISIBLE, ((View) field(activity, "topControls")).getVisibility());
           }
+          String variants = "[{\"label\":\"720p WEB-DL\",\"streamUrl\":\"https://example.com/one.mkv\",\"season\":1,\"episode\":1,\"subtitleUrls\":[],\"audioUrls\":[]}," +
+              "{\"label\":\"1080p Blu-ray\",\"streamUrl\":\"https://example.com/two.mkv\",\"season\":1,\"episode\":1,\"subtitleUrls\":[\"https://example.com/two.srt\"],\"audioUrls\":[]}]";
+          Method loadVersions = activity.getClass().getDeclaredMethod("loadVersions", String.class); loadVersions.setAccessible(true); loadVersions.invoke(activity, variants);
+          long positionBeforeSwitch = Math.max(0, ((MediaPlayer) originalPlayer).getTime());
+          Method switchVersion = activity.getClass().getDeclaredMethod("switchVersion", int.class); switchVersion.setAccessible(true); switchVersion.invoke(activity, 1);
+          assertEquals("https://example.com/two.mkv", field(activity, "source").toString());
+          assertEquals("switching quality preserves position", positionBeforeSwitch, ((Long) field(activity, "pendingSeek")).longValue());
+          assertEquals("selected version's subtitle is used", 1, ((java.util.List<?>) field(activity, "subtitles")).size());
         } catch (Exception e) { throw new AssertionError(e); }
       });
     }
