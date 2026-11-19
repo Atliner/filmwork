@@ -46,10 +46,13 @@ public class NativeEntryTest {
 
   @Test public void siteMessageOpensNativePlayerWithoutCrash() {
     Intent launch = new Intent(InstrumentationRegistry.getInstrumentation().getTargetContext(), MainActivity.class);
+    InstrumentationRegistry.getInstrumentation().getTargetContext()
+        .getSharedPreferences("player-diagnostics", 0).edit().clear().commit();
     try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(launch)) {
       scenario.onActivity(activity -> {
         WebView webView = findWebView(activity.getWindow().getDecorView());
         assertNotNull("WebView is present", webView);
+        webView.stopLoading(); // Prevent the initial site navigation from replacing the test page.
         String html = "<!doctype html><meta charset='utf-8'><script>" +
             "window.addEventListener('load',function(){if(window.VizostenNative){" +
             "VizostenNative.postMessage(JSON.stringify({action:'openPlayer'," +
@@ -69,7 +72,9 @@ public class NativeEntryTest {
         });
         if (!opened.get()) SystemClock.sleep(250);
       }
-      assertTrue("native player opened through the site's WebMessage bridge", opened.get());
+      String steps = InstrumentationRegistry.getInstrumentation().getTargetContext()
+          .getSharedPreferences("player-diagnostics", 0).getString("steps", "none");
+      assertTrue("native player opened through the site's WebMessage bridge; stages=" + steps.replace('\n', '|'), opened.get());
       // Give the asynchronous ad response / native video initialisation time to run.
       SystemClock.sleep(16000);
       InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
