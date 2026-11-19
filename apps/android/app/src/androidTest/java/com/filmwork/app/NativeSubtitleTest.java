@@ -87,6 +87,7 @@ public class NativeSubtitleTest {
         } catch (Exception e) { throw new AssertionError(e); }
       });
       AtomicInteger first = new AtomicInteger(-1), second = new AtomicInteger(-1), count = new AtomicInteger();
+      int[] trackIds = new int[6];
       long deadline = SystemClock.elapsedRealtime() + 15000;
       while (count.get() < 6 && SystemClock.elapsedRealtime() < deadline) {
         scenario.onActivity(activity -> {
@@ -95,7 +96,11 @@ public class NativeSubtitleTest {
             MediaPlayer.TrackDescription[] tracks = player.getSpuTracks();
             ArrayList<Integer> ids = new ArrayList<>();
             if (tracks != null) for (MediaPlayer.TrackDescription track : tracks) if (track.id >= 0) ids.add(track.id);
-            count.set(ids.size()); if (ids.size() >= 2) { first.set(ids.get(0)); second.set(ids.get(1)); }
+            count.set(ids.size());
+            if (ids.size() >= 6) {
+              first.set(ids.get(0)); second.set(ids.get(1));
+              for (int i = 0; i < 6; i++) trackIds[i] = ids.get(i);
+            }
           } catch (Exception e) { throw new AssertionError(e); }
         });
         if (count.get() < 6) SystemClock.sleep(200);
@@ -115,6 +120,19 @@ public class NativeSubtitleTest {
         } catch (Exception e) { throw new AssertionError(e); }
       });
       int shortPixels = maxPixels(scenario);
+      int previous = shortPixels;
+      for (int i = 2; i < 6; i++) {
+        final int track = trackIds[i];
+        scenario.onActivity(activity -> {
+          try {
+            select(activity, track);
+            assertEquals("chosen subtitle ID", track, ((MediaPlayer) field(activity, "player")).getSpuTrack());
+          } catch (Exception e) { throw new AssertionError(e); }
+        });
+        int pixels = maxPixels(scenario);
+        assertTrue("subtitle " + (i + 1) + " rendered a different cue: previous=" + previous + " current=" + pixels, pixels > previous * 1.1);
+        previous = pixels;
+      }
       scenario.onActivity(activity -> {
         try { select(activity, -1); } catch (Exception e) { throw new AssertionError(e); }
       });
