@@ -87,3 +87,13 @@ test('native controls are dismissible and subtitle styling never restarts the ac
   assert.match(code, /saveDeferredSubtitleStyle/);
   assert.doesNotMatch(code, /recreateEngine|promptTrackUrl|افزودن لینک/);
 });
+
+
+test('landscape uses immersive bars while video and controls have separate inset layouts', () => {
+  const code = read('apps/android/app/src/experimentalNative/java/com/filmwork/app/NativePlayerActivity.java');
+  assert.match(code, /controller\.hide\(WindowInsets\.Type\.systemBars\(\)\)/);
+  assert.match(code, /controller\.show\(WindowInsets\.Type\.systemBars\(\)\)/);
+  assert.match(code, /videoHost\.addView\(videoLayout/);
+  assert.match(code, /content\.setPadding\(left, top, right, bottom\)/);
+  assert.match(code, /pendingSubtitleId = null/);
+});

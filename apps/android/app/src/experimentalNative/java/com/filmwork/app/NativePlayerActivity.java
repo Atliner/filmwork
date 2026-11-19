@@ -176,6 +176,13 @@ public final class NativePlayerActivity extends Activity {
     getWindow().setStatusBarColor(Color.BLACK);
     getWindow().setNavigationBarColor(Color.BLACK);
     getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    if (Build.VERSION.SDK_INT >= 28) {
+      WindowManager.LayoutParams params = getWindow().getAttributes();
+      params.layoutInDisplayCutoutMode = Build.VERSION.SDK_INT >= 30
+          ? WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+          : WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+      getWindow().setAttributes(params);
+    }
     if (Build.VERSION.SDK_INT >= 30) getWindow().setDecorFitsSystemWindows(false);
     else getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE
         | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
@@ -302,6 +309,10 @@ public final class NativePlayerActivity extends Activity {
   private void buildUi() {
     FrameLayout root = new FrameLayout(this);
     root.setBackgroundColor(Color.BLACK);
+    // Render edge-to-edge underneath the notch; controls separately respect the
+    // safe insets so buttons never sit under a cutout or system bar.
+    FrameLayout videoHost = new FrameLayout(this);
+    root.addView(videoHost, new FrameLayout.LayoutParams(-1, -1));
     FrameLayout content = new FrameLayout(this);
     root.addView(content, new FrameLayout.LayoutParams(-1, -1));
     root.setOnApplyWindowInsetsListener((view, insets) -> {
@@ -326,7 +337,7 @@ public final class NativePlayerActivity extends Activity {
     // resizing. Reattaching a bare SurfaceView before it is ready can flash
     // black or leave video invisible on some devices.
     videoLayout = new VLCVideoLayout(this);
-    content.addView(videoLayout, new FrameLayout.LayoutParams(-1, -1));
+    videoHost.addView(videoLayout, new FrameLayout.LayoutParams(-1, -1));
     View tapSurface = new View(this);
     tapSurface.setContentDescription("نمایش یا پنهان کردن کنترل‌های پخش");
     tapSurface.setOnClickListener(v -> setControlsVisible(!controlsVisible));
