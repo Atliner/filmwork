@@ -59,6 +59,10 @@
   };
   const listFrom = (value) => String(value || '')
     .split(/[,،؛;|\n]+/u).map((item) => item.trim()).filter(Boolean);
+  // Each semicolon-separated entry identifies one person. The vertical bar
+  // explicitly associates aliases; legacy comma-separated lists stay separate.
+  const crewFrom = (value) => String(value || '').split(/[,،؛;\n]+/u)
+    .map((entry) => entry.split('|').map((part) => part.trim()).filter(Boolean).join(' | ')).filter(Boolean);
   const debounce = (fn, wait = 320) => {
     let timer;
     return (...args) => {
@@ -696,8 +700,8 @@
       seasonCount: content.seasons ?? '',
       episodeCount: content.episodes ?? '',
       genres: (content.genres || []).join('، '),
-      directors: (content.directors || []).join('، '),
-      cast: (content.cast || []).join('، '),
+      directors: (content.directors || []).join('؛ '),
+      cast: (content.cast || []).join('؛ '),
       countries: (content.countries || []).join('، '),
       network: content.network || '',
       ageRating: content.ageRating || '',
@@ -956,11 +960,11 @@
           <label class="field"><span>ژانرها (با ویرگول)</span>
             <input class="input" data-field="genres" value="${esc(draft.genres)}" placeholder="درام، معمایی، علمی تخیلی"></label>
           <label class="field"><span>کارگردان(ها)</span>
-            <input class="input" data-field="directors" value="${esc(draft.directors)}" placeholder="دامین مارکانو، جان ولز | Damian Marcano, John Wells">
-            <small>فارسی و انگلیسی، با ویرگول و یک <code dir="ltr">|</code> بین دو زبان. هر دو در سایت نمایش داده و جستجو می‌شوند.</small></label>
+            <input class="input" data-field="directors" value="${esc(draft.directors)}" placeholder="دامین مارکانو | Damian Marcano؛ جان ولز | John Wells">
+            <small>برای هر شخص نام فارسی و انگلیسی را با <code dir="ltr">|</code> و افراد را با «؛» جدا کنید.</small></label>
           <label class="field span-2"><span>بازیگران</span>
-            <input class="input" data-field="cast" value="${esc(draft.cast)}" placeholder="نوآ وایلی، پاتریک بال | Noah Wyle, Patrick Ball">
-            <small>همان قاعده: نام‌های فارسی، سپس <code dir="ltr">|</code> و نام‌های انگلیسی.</small></label>
+            <input class="input" data-field="cast" value="${esc(draft.cast)}" placeholder="نوآ وایلی | Noah Wyle؛ پاتریک بال | Patrick Ball">
+            <small>برای هر شخص: فارسی | انگلیسی؛ سپس شخص بعدی.</small></label>
           <label class="field"><span>کشور(ها)</span>
             <input class="input" data-field="countries" value="${esc(draft.countries)}" placeholder="آمریکا"></label>
           <label class="field"><span>رده سنی</span>
@@ -1139,8 +1143,8 @@
       seasonCount: draft.seasonCount === '' ? null : Number(draft.seasonCount),
       episodeCount: draft.episodeCount === '' ? null : Number(draft.episodeCount),
       genres: listFrom(draft.genres),
-      directors: listFrom(draft.directors),
-      cast: listFrom(draft.cast),
+      directors: crewFrom(draft.directors),
+      cast: crewFrom(draft.cast),
       countries: listFrom(draft.countries),
       network: String(draft.network || '').trim(),
       ageRating: String(draft.ageRating || '').trim(),
@@ -1239,8 +1243,8 @@
         seasonCount: fields.seasonCount ?? '',
         episodeCount: fields.episodeCount ?? '',
         genres: (fields.genres || []).join('، '),
-        directors: (fields.directors || []).join('، '),
-        cast: (fields.cast || []).join('، '),
+        directors: (fields.directors || []).join('؛ '),
+        cast: (fields.cast || []).join('؛ '),
         countries: (fields.countries || []).join('، '),
         network: fields.network || '',
         ageRating: fields.ageRating || '',

@@ -464,3 +464,21 @@ test('deleting removes the content and its detail page', async () => {
   const missing = await call(`/api/admin/contents/${createdId}`);
   assert.equal(missing.status, 404);
 });
+
+test('explicit bilingual aliases survive admin round trips and either name finds the person', async () => {
+  const created = await call('/api/admin/contents', { method: 'POST', body: {
+    titleFa: 'جفت عوامل', titleEn: 'Paired Credits', contentType: 'movie', status: 'published',
+    directors: ['نام نمونه | Example Person', 'کارگردان دیگر | Another Person'], cast: [],
+  } });
+  assert.equal(created.status, 201);
+  const id = created.data.content.id;
+  const detail = await call(`/api/admin/contents/${id}`);
+  assert.deepEqual(detail.data.content.directors, ['نام نمونه | Example Person', 'کارگردان دیگر | Another Person']);
+  for (const name of ['نام نمونه', 'Example Person']) {
+    const result = await call(`/api/contents?person=${encodeURIComponent(name)}`);
+    assert.ok(result.data.items.some((i) => i.id === id));
+  }
+  const noSubstring = await call('/api/contents?person=Example');
+  assert.ok(!noSubstring.data.items.some((i) => i.id === id));
+  await call(`/api/admin/contents/${id}`, { method: 'DELETE' });
+});

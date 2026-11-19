@@ -265,6 +265,7 @@ function summary(item) {
     qualities: item.qualities,
     directors: item.directors,
     cast: item.cast,
+    genres: item.genres, countries: item.countries, network: item.network, ageRating: item.ageRating,
     hasDub: item.hasDub,
     hasSub: item.hasSub,
     mediaCount: item.mediaCount,
@@ -356,6 +357,11 @@ const store = {
     });
   },
 
+  async getCatalogFacets() {
+    const { catalogFacets } = require('../lib/catalogFilters');
+    return catalogFacets(ensureState().contents.filter((item) => item.status === 'published'));
+  },
+
   async listContents(filters = {}) {
     const data = ensureState();
     const page = Math.max(1, Number.parseInt(filters.page, 10) || 1);
@@ -368,7 +374,7 @@ const store = {
       rows = rows.filter((item) => item.status === filters.status);
     }
     if (filters.hero === '1') rows = rows.filter((item) => item.featuredHero);
-    if (filters.running === '1') rows = rows.filter((item) => item.seriesRunning);
+    if (filters.running === '1') rows = rows.filter((item) => item.type === 'series' && item.seriesRunning);
     if (filters.q) {
       // Same contract as the SQL search: titles in both scripts, crew, genres,
       // country and network all answer the one box.
@@ -381,8 +387,21 @@ const store = {
     if (filters.genre) rows = rows.filter((item) => (item.genres || []).includes(filters.genre));
     if (filters.yearFrom) rows = rows.filter((item) => (item.releaseYear || 0) >= Number(filters.yearFrom));
     if (filters.yearTo) rows = rows.filter((item) => (item.releaseYear || 9999) <= Number(filters.yearTo));
-    if (filters.minRating) rows = rows.filter((item) => (item.imdbScore || 0) >= Number(filters.minRating));
-    if (filters.sort === 'views') rows.sort((a, b) => b.views - a.views);
+    if (filters.minRating !== null && filters.minRating !== undefined && filters.minRating !== '') rows = rows.filter((item) => item.imdbScore !== null && item.imdbScore !== undefined && Number(item.imdbScore) >= Number(filters.minRating));
+    if (filters.maxRating !== null && filters.maxRating !== undefined && filters.maxRating !== '') rows = rows.filter((item) => item.imdbScore !== null && item.imdbScore !== undefined && Number(item.imdbScore) <= Number(filters.maxRating));
+    if (filters.countries?.length) rows = rows.filter((item) => item.countries?.some((v) => filters.countries.includes(v)));
+    if (filters.ages?.length) rows = rows.filter((item) => filters.ages.includes(item.ageRating));
+    if (filters.networks?.length) rows = rows.filter((item) => filters.networks.includes(item.network));
+    if (filters.audio === 'dub' || filters.audio === 'both') rows = rows.filter((item) => item.hasDub);
+    if (filters.audio === 'sub' || filters.audio === 'both') rows = rows.filter((item) => item.hasSub);
+    if (filters.aliases?.length) rows = rows.filter((item) => {
+      const credits = filters.role === 'director' ? item.directors : filters.role === 'cast' ? item.cast : [...(item.directors || []), ...(item.cast || [])];
+      const names = (credits || []).flatMap((name) => String(name).split(/\s*\|\s*/u)).map((name) => name.trim().toLocaleLowerCase());
+      return filters.aliases.some((name) => names.includes(name.toLocaleLowerCase()));
+    });
+    if (filters.sort === 'rating') rows.sort((a, b) => (b.imdbScore ?? -1) - (a.imdbScore ?? -1) || b.createdAt.localeCompare(a.createdAt));
+    else if (filters.sort === 'year') rows.sort((a, b) => (b.releaseYear ?? 0) - (a.releaseYear ?? 0) || b.createdAt.localeCompare(a.createdAt));
+    else if (filters.sort === 'views') rows.sort((a, b) => b.views - a.views);
     else if (filters.sort === 'title') rows.sort((a, b) => a.title.localeCompare(b.title, 'fa'));
     else rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     const total = rows.length;

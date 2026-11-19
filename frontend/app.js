@@ -42,9 +42,7 @@
 
   const PERSIAN = /[\u0600-\u06FF]/;
   const LATIN = /[A-Za-z]/;
-  const byScript = (value, wanted) => String(value || '').split(/[,،؛;|/]+/u)
-    .map((part) => part.trim())
-    .filter((part) => part && (wanted === 'fa' ? PERSIAN.test(part) : LATIN.test(part)));
+
 
   function titleFa(content) {
     const title = String(content?.title || '').trim();
@@ -71,39 +69,18 @@
       : main;
   }
 
-  /**
-   * Crew names arrive as `Persian | English` for the same person. Rendering both
-   * scripts side by side keeps the site consistent with the channel post and makes
-   * either spelling findable.
-   */
-  function bilingualNames(values) {
-    const list = Array.isArray(values) ? values.flatMap((value) => String(value || '').split(/\s*\|\s*/u)) : [];
-    const seen = new Set();
-    const fa = [];
-    const en = [];
-    for (const raw of list) {
-      const name = String(raw || '').trim();
-      const key = name.toLowerCase();
-      if (!name || seen.has(key)) continue;
-      seen.add(key);
-      if (PERSIAN.test(name) && !LATIN.test(name)) fa.push(name);
-      else if (LATIN.test(name)) en.push(name);
-      else if (name) fa.push(name);
-    }
-    return { fa, en };
-  }
-
-  function namesMarkup(values, { limit = 6 } = {}) {
-    const { fa, en } = bilingualNames(values);
-    if (!fa.length && !en.length) return 'ثبت نشده';
-    const faPart = fa.slice(0, limit).map(escapeHtml).join('، ');
-    const enPart = en.slice(0, limit).map(escapeHtml).join('، ');
-    if (faPart && enPart) {
-      return `<span class="name-pair"><span class="name-fa">${faPart}</span><span class="name-en" dir="ltr" lang="en">${enPart}</span></span>`;
-    }
-    return faPart
-      ? `<span class="name-fa">${faPart}</span>`
-      : `<span class="name-en" dir="ltr" lang="en">${enPart}</span>`;
+  // Only explicitly paired names are treated as aliases. Older records contain
+  // flat lists; their correspondence cannot safely be inferred by position.
+  function namesMarkup(values) {
+    const entries = (Array.isArray(values) ? values : []).filter(Boolean);
+    if (!entries.length) return 'ثبت نشده';
+    return `<span class="name-list">${entries.map((entry) => {
+      const aliases = String(entry).split(/\s*\|\s*/u).map((x) => x.trim()).filter(Boolean);
+      const params = new URLSearchParams();
+      aliases.forEach((name) => params.append('person', name));
+      const href = `#/person?${params}`;
+      return `<span class="name-pair">${aliases.map((name) => `<a href="${escapeHtml(href)}" ${LATIN.test(name) ? 'dir="ltr" lang="en"' : ''}>${escapeHtml(name)}</a>`).join(' / ')}</span>`;
+    }).join('، ')}</span>`;
   }
 
   function escapeHtml(value) {
@@ -312,9 +289,10 @@
   async function renderHome(version) {
     setActiveNav('home');
     setHeaderLabel('خانه');
-    const [data, progressData] = await Promise.all([
+    const [data, progressData, facets] = await Promise.all([
       api('/contents?limit=30'),
       state.user ? api('/progress').catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
+      api('/contents-facets'),
     ]);
     if (version !== state.routeVersion) return;
     const items = data.items || [];
@@ -337,10 +315,7 @@
       </div>
       <div class="page-shell home-category-strip" aria-label="دسته‌بندی‌ها">
         <button class="chip active" data-route="/home">منتخب</button>
-        <button class="chip" data-route="/search?genre=درام">درام</button>
-        <button class="chip" data-route="/search?genre=علمی تخیلی">علمی‌تخیلی</button>
-        <button class="chip" data-route="/search?genre=اکشن">اکشن</button>
-        <button class="chip" data-route="/search?genre=کمدی">کمدی</button>
+        ${facets.genres.slice(0, 6).map(({name}) => `<button class="chip" data-route="/search?genre=${encodeURIComponent(name)}">${escapeHtml(name)}</button>`).join('')}
       </div>
       ${heroMarkup(hero)}
       <div class="page-shell">
@@ -353,57 +328,63 @@
       </div>`;
   }
 
-  async function renderSearch(version, initialQuery = '', initialGenre = '') {
+  let searchSequence = 0;
+  let personFilters = null;
+  async function renderSearch(version, initialQuery = '', initialGenre = '', person = null) {
     setActiveNav('search');
-    setHeaderLabel('جستجو');
-    const genres = ['اکشن', 'درام', 'کمدی', 'جنایی', 'علمی تخیلی', 'انیمیشن'];
+    setHeaderLabel(person ? 'آثار عوامل' : 'جستجو');
+    personFilters = person;
+    const facets = await api('/contents-facets');
+    if (version !== state.routeVersion) return;
+    const range = (label, prefix, bounds, step) => bounds ? `<fieldset class="filter-range"><legend>${label} (${escapeHtml(bounds.min)} تا ${escapeHtml(bounds.max)})</legend><label>از <input type="number" data-catalog-filter id="${prefix}-from" min="${bounds.min}" max="${bounds.max}" step="${step}" placeholder="${bounds.min}"></label><label>تا <input type="number" data-catalog-filter id="${prefix}-to" min="${bounds.min}" max="${bounds.max}" step="${step}" placeholder="${bounds.max}"></label></fieldset>` : '';
+    const multi = (label, key, values) => values.length ? `<details class="filter-dropdown"><summary>${label}</summary><div>${values.map((value) => `<label><input type="checkbox" data-catalog-filter name="${key}" value="${escapeHtml(value)}"> ${escapeHtml(value)}</label>`).join('')}</div></details>` : '';
     app.innerHTML = `<div class="page-shell page-top search-page">
-      <div class="section-head search-title"><div><h1 class="page-title">جستجو</h1><p>در میان فیلم‌ها و سریال‌های ویزوستن</p></div></div>
-      <label class="search-box">${icons.search}<input id="search-input" type="search" maxlength="100" autocomplete="off" placeholder="نام فارسی یا انگلیسی فیلم، سریال، بازیگر یا کارگردان…" value="${escapeHtml(initialQuery)}"><span class="sr-only">جستجو</span></label>
-      <p class="search-hint">هر دو زبان جستجو می‌شود: «پیت» و «The Pitt» هر دو همین اثر را پیدا می‌کنند؛ نام بازیگران و کارگردانان هم در فهرست نتایج می‌آید.</p>
-      <section class="search-discovery"><h2>ژانرهای محبوب</h2><div class="genre-chip-row">
+      <div class="section-head search-title"><div><h1 class="page-title">${person ? `آثار ${person.names.map(escapeHtml).join(' / ')}` : 'جستجو'}</h1><p>در میان فیلم‌ها و سریال‌های ویزوستن</p></div></div>
+      <label class="search-box">${icons.search}<input id="search-input" type="search" maxlength="100" autocomplete="off" placeholder="نام فیلم، سریال، بازیگر یا کارگردان…" value="${escapeHtml(initialQuery)}"><span class="sr-only">جستجو</span></label>
+      <section class="search-discovery"><h2>ژانرها</h2><div class="genre-chip-row">
         <button class="genre-chip ${initialGenre ? '' : 'active'}" data-search-genre="">همه</button>
-        ${genres.map((genre) => `<button class="genre-chip ${initialGenre === genre ? 'active' : ''}" data-search-genre="${escapeHtml(genre)}">${escapeHtml(genre)}</button>`).join('')}
+        ${facets.genres.map(({name, count}) => `<button class="genre-chip ${initialGenre === name ? 'active' : ''}" data-search-genre="${escapeHtml(name)}">${escapeHtml(name)} <small>${formatNumber(count)}</small></button>`).join('')}
       </div></section>
-      <div class="search-toolbar">
-        <div class="chip-row" aria-label="فیلتر نوع"><button class="chip active" data-search-type="">همه آثار</button><button class="chip" data-search-type="movie">فیلم</button><button class="chip" data-search-type="series">سریال</button></div>
-        <div class="search-selects">
-          <label><span>سال</span><select id="search-year"><option value="">همه</option><option value="2020">۲۰۲۰ به بعد</option><option value="2010">۲۰۱۰ به بعد</option><option value="2000">۲۰۰۰ به بعد</option></select></label>
-          <label><span>امتیاز</span><select id="search-rating"><option value="">همه</option><option value="8">۸ به بالا</option><option value="7">۷ به بالا</option><option value="6">۶ به بالا</option></select></label>
-        </div>
+      <div class="search-toolbar"><div class="chip-row" aria-label="فیلتر نوع"><button class="chip active" data-search-type="">همه آثار</button><button class="chip" data-search-type="movie">فیلم</button><button class="chip" data-search-type="series">سریال</button></div></div>
+      <div class="catalog-filters">
+        ${range('سال ساخت', 'search-year', facets.years, 1)}${range('امتیاز IMDb', 'search-rating', facets.ratings, 0.1)}
+        ${multi('کشور سازنده', 'country', facets.countries)}${multi('رده سنی', 'age', facets.ages)}${multi('شبکه پخش', 'network', facets.networks)}
+        <label class="filter-select">زبان نسخه <select id="search-audio" data-catalog-filter><option value="">همه</option><option value="sub">زیرنویس</option><option value="dub">دوبله</option><option value="both">هر دو</option></select></label>
+        <label class="filter-select">ترتیب <select id="search-sort" data-catalog-filter><option value="recent">تازه اضافه‌شده</option><option value="title">الفبایی</option><option value="year">سال ساخت</option><option value="rating">امتیاز IMDb</option></select></label>
+        <label class="filter-running"><input type="checkbox" id="search-running" data-catalog-filter> سریال‌های در حال پخش</label>
       </div>
-      <div class="search-status" id="search-status">در حال دریافت کتابخانه…</div>
-      <div class="media-grid" id="search-results"></div>
+      <div class="search-status" id="search-status" aria-live="polite">در حال دریافت کتابخانه…</div><div class="media-grid" id="search-results"></div><div id="search-more"></div>
     </div>`;
-    const input = $('#search-input');
-    input?.focus({ preventScroll: true });
     await runSearch('', initialQuery, version, initialGenre);
   }
 
-  async function runSearch(type = '', queryText = '', version = state.routeVersion, genre = null) {
-    const status = $('#search-status');
-    const results = $('#search-results');
+  async function runSearch(type = '', queryText = '', version = state.routeVersion, genre = null, page = 1) {
+    const status = $('#search-status'); const results = $('#search-results');
     if (!status || !results) return;
+    const sequence = ++searchSequence;
     status.textContent = 'در حال جستجو…';
     try {
-      const params = new URLSearchParams({ limit: '48' });
+      const params = new URLSearchParams({ limit: '48', page: String(page) });
       const selectedGenre = genre === null ? ($('[data-search-genre].active')?.dataset.searchGenre || '') : genre;
-      const yearFrom = $('#search-year')?.value || '';
-      const minRating = $('#search-rating')?.value || '';
       if (type) params.set('type', type);
       if (queryText.trim()) params.set('q', queryText.trim());
       if (selectedGenre) params.set('genre', selectedGenre);
-      if (yearFrom) params.set('yearFrom', yearFrom);
-      if (minRating) params.set('minRating', minRating);
+      for (const [id, key] of [['search-year-from','yearFrom'], ['search-year-to','yearTo'], ['search-rating-from','minRating'], ['search-rating-to','maxRating'], ['search-audio','audio'], ['search-sort','sort']]) {
+        const value = document.getElementById(id)?.value;
+        if (value !== undefined && value !== '') params.set(key, value);
+      }
+      $$('input[data-catalog-filter][name]:checked').forEach((input) => params.append(input.name, input.value));
+      if ($('#search-running')?.checked) params.set('running', '1');
+      if (personFilters) { personFilters.names.forEach((name) => params.append('person', name)); if (personFilters.role) params.set('role', personFilters.role); }
       const data = await api(`/contents?${params}`);
-      if (version !== state.routeVersion || !$('#search-results')) return;
+      if (version !== state.routeVersion || sequence !== searchSequence || !$('#search-results')) return;
       status.textContent = `${formatNumber(data.pagination.total)} نتیجه`;
-      results.innerHTML = data.items.length
-        ? data.items.map(mediaCard).join('')
-        : `<div style="grid-column:1/-1">${emptyState('نتیجه‌ای پیدا نشد', 'عبارت دیگری را امتحان کنید؛ جستجو عنوان فارسی، عنوان انگلیسی، بازیگران، کارگردانان و ژانرها را هم می‌گردد.')}</div>`;
+      const html = data.items.length ? data.items.map(mediaCard).join('') : `<div style="grid-column:1/-1">${emptyState('نتیجه‌ای پیدا نشد', 'فیلترها یا عبارت جستجو را تغییر دهید.')}</div>`;
+      if (page === 1) results.innerHTML = html; else results.insertAdjacentHTML('beforeend', html);
+      $('#search-more').innerHTML = page < data.pagination.pages ? `<button class="secondary-button" data-search-more="${page + 1}">نمایش بیشتر</button>` : '';
     } catch (error) {
-      status.textContent = apiErrorMessage(error);
-      results.innerHTML = '';
+      if (version !== state.routeVersion || sequence !== searchSequence) return;
+      status.textContent = apiErrorMessage(error); if (page === 1) results.innerHTML = ''; $('#search-more').innerHTML = '';
     }
   }
 
@@ -466,14 +447,14 @@
     const poster = safeUrl(content.posterUrl || content.backdropUrl);
     const facts = [
       ['نوع', content.type === 'series' ? 'سریال' : 'فیلم سینمایی'],
-      ['سال انتشار', content.releaseYear ? `${content.releaseYear}${content.lastAirYear ? ` – ${content.lastAirYear}` : ''}` : 'نامشخص'],
+      ['سال انتشار', content.releaseYear ? `${content.releaseYear}${content.type === 'series' ? ` – ${content.lastAirYear || 'نامشخص'}` : ''}` : 'نامشخص'],
       ['امتیاز IMDb', content.imdbScore ?? 'ثبت نشده'],
       ['ژانر', (content.genres || []).join('، ') || 'ثبت نشده'],
-      ['کارگردان', namesMarkup(content.directors, { limit: 4 })],
-      ['بازیگران', namesMarkup(content.cast, { limit: 8 })],
-      ['کشور', (content.countries || []).map(escapeHtml).join('، ') || 'ثبت نشده'],
-      ['شبکه', content.network ? escapeHtml(content.network) : 'ثبت نشده'],
-      ['رده سنی', content.ageRating ? escapeHtml(content.ageRating) : 'ثبت نشده'],
+      ['کارگردان', namesMarkup(content.directors)],
+      ['بازیگران', namesMarkup(content.cast)],
+      ['کشور', (content.countries || []).join('، ') || 'ثبت نشده'],
+      ['شبکه', content.network || 'ثبت نشده'],
+      ['رده سنی', content.ageRating || 'ثبت نشده'],
       ['تعداد نسخه‌ها', formatNumber(media.length)],
     ];
     app.innerHTML = `<section class="detail-hero">
@@ -482,20 +463,20 @@
         ${poster ? `<img class="detail-poster" src="${poster}" alt="پوستر ${escapeHtml(titleFa(content) || titleEn(content))}">` : `<div class="detail-poster poster-frame"><span class="poster-letter">${escapeHtml(firstLetter(titleFa(content) || titleEn(content)))}</span></div>`}
         <div class="detail-copy"><div class="eyebrow">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</div><h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>
           ${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="detail-en-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}
-          <div class="meta-row">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}${content.lastAirYear ? `–${escapeHtml(content.lastAirYear)}` : ''}</span>` : ''}${content.runtimeMinutes ? `<span class="meta-dot">${formatNumber(content.runtimeMinutes)} دقیقه</span>` : ''}${content.seriesRunning && content.currentSeason ? `<span class="meta-dot status-live">فصل ${formatNumber(content.currentSeason)} در حال پخش</span>` : ''}</div>
-          ${(content.directors?.length || content.cast?.length) ? `<div class="credit-line"><span>کارگردان</span> ${namesMarkup(content.directors, { limit: 3 })}</div>` : ''}
-          ${content.cast?.length ? `<div class="credit-line"><span>بازیگران</span> ${namesMarkup(content.cast, { limit: 5 })}</div>` : ''}
+          <div class="meta-row">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}${content.type === 'series' ? `–${escapeHtml(content.lastAirYear || 'نامشخص')}` : ''}</span>` : ''}${content.runtimeMinutes ? `<span class="meta-dot">${formatNumber(content.runtimeMinutes)} دقیقه</span>` : ''}${content.seriesRunning && content.currentSeason ? `<span class="meta-dot status-live">فصل ${formatNumber(content.currentSeason)} در حال پخش</span>` : ''}</div>
+          ${(content.directors?.length || content.cast?.length) ? `<div class="credit-line"><span>کارگردان</span> ${namesMarkup(content.directors)}</div>` : ''}
+          ${content.cast?.length ? `<div class="credit-line"><span>بازیگران</span> ${namesMarkup(content.cast)}</div>` : ''}
           ${content.description ? `<p class="description">${escapeHtml(content.description)}</p>` : ''}
           <div class="action-row">${onlinePlaybackVisible() ? `<button class="primary-button" data-route="/player/${encodeURIComponent(content.id)}">${icons.play} پخش آنلاین</button>` : ''}<button class="secondary-button" data-open-download="${escapeHtml(content.id)}">${icons.download} انتخاب نسخه</button><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="علاقه‌مندی">${icons.heart}</button></div>
         </div>
       </div>
     </section>
     <div class="page-shell detail-layout">
+      <aside class="surface-panel"><h2>اطلاعات اثر</h2><div class="fact-list">${facts.map(([label, value]) => `<div class="fact"><span>${escapeHtml(label)}</span><div class="fact-value">${String(value).startsWith('<span') ? value : escapeHtml(value)}</div></div>`).join('')}</div></aside>
       <section class="surface-panel"><h2>دیدگاه تماشاگران</h2>
         ${state.user ? '<form class="comment-form" id="comment-form"><input name="body" maxlength="1200" required placeholder="دیدگاه خود را بنویسید…"><button class="primary-button" type="submit">ارسال</button></form>' : '<button class="secondary-button" data-login style="margin-bottom:16px">برای ثبت دیدگاه وارد شوید</button>'}
         <div class="comments" id="comments-list">${commentsMarkup(comments)}</div>
       </section>
-      <aside class="surface-panel"><h2>اطلاعات اثر</h2><div class="fact-list">${facts.map(([label, value]) => `<div class="fact"><span>${escapeHtml(label)}</span><div class="fact-value">${String(value).startsWith('<span') ? value : escapeHtml(value)}</div></div>`).join('')}</div></aside>
     </div>`;
   }
 
@@ -1331,6 +1312,11 @@
     try {
       if (parts[0] === 'home' || !parts[0]) await renderHome(version);
       else if (parts[0] === 'search') await renderSearch(version, hashQuery.get('q') || '', hashQuery.get('genre') || '');
+      else if (parts[0] === 'person') {
+        const names = hashQuery.getAll('person').map((name) => name.trim()).filter(Boolean).slice(0, 4);
+        if (!names.length) throw new Error('نام عوامل مشخص نشده است.');
+        await renderSearch(version, '', '', { names, role: hashQuery.get('role') || '' });
+      }
       else if (parts[0] === 'favorites') await renderFavorites(version);
       else if (parts[0] === 'downloads') await renderDownloads(version);
       else if (parts[0] === 'content' && parts[1]) await renderDetail(parts[1], version);
@@ -1342,6 +1328,7 @@
         setHeaderLabel('صفحه نامعتبر', true);
         app.innerHTML = `<div class="page-shell page-top">${emptyState('صفحه پیدا نشد', 'نشانی واردشده معتبر نیست.', '<button class="primary-button" style="margin-top:18px" data-route="/home">بازگشت به خانه</button>')}</div>`;
       }
+      if (version === state.routeVersion) await refreshFavoriteButtons(version);
     } catch (error) {
       if (version !== state.routeVersion) return;
       setActiveNav('');
@@ -1564,12 +1551,36 @@
     finally { button.disabled = false; }
   }
 
+  async function refreshFavoriteButtons(version = state.routeVersion) {
+    const buttons = $$('[data-favorite]');
+    if (!buttons.length) return;
+    buttons.forEach((button) => { button.disabled = true; });
+    if (!state.user) { buttons.forEach((button) => { button.disabled = false; }); return; }
+    try {
+      const data = await api('/favorites');
+      if (version !== state.routeVersion) return;
+      const ids = new Set(data.items.map((item) => item.id));
+      buttons.forEach((button) => {
+        const active = ids.has(button.dataset.favorite);
+        button.classList.toggle('is-favorite', active);
+        button.setAttribute('aria-pressed', String(active));
+        button.setAttribute('aria-label', active ? 'حذف از نشان‌شده‌ها' : 'افزودن به نشان‌شده‌ها');
+        button.disabled = false;
+      });
+    } catch (error) { if (version === state.routeVersion) toast('دریافت وضعیت نشان‌شده‌ها ناموفق بود: ' + apiErrorMessage(error), 'error'); }
+  }
+
   async function toggleFavorite(assetId) {
     if (!state.user) return openAuth(() => toggleFavorite(assetId));
+    const buttons = $$('[data-favorite]').filter((button) => button.dataset.favorite === assetId);
+    buttons.forEach((button) => { button.disabled = true; });
     try {
-      await api(`/contents/${encodeURIComponent(assetId)}/favorite`, { method: 'POST' });
-      toast('به علاقه‌مندی‌ها افزوده شد.', 'success');
-    } catch (error) { toast(apiErrorMessage(error), 'error'); }
+      const data = await api('/favorites');
+      const active = data.items.some((item) => item.id === assetId);
+      await api(`/contents/${encodeURIComponent(assetId)}/favorite`, { method: active ? 'DELETE' : 'POST' });
+      toast(active ? 'از نشان‌شده‌ها حذف شد.' : 'به نشان‌شده‌ها افزوده شد.', 'success');
+      if (routeParts()[0] === 'favorites') await route(); else await refreshFavoriteButtons();
+    } catch (error) { toast(apiErrorMessage(error), 'error'); buttons.forEach((button) => { button.disabled = false; }); }
   }
 
   async function redeemAdvertiserCoupon(form) {
@@ -1709,6 +1720,8 @@
   });
 
   document.addEventListener('click', (event) => {
+    const more = event.target.closest('[data-search-more]');
+    if (more) { runSearch($('[data-search-type].active')?.dataset.searchType || '', $('#search-input')?.value || '', state.routeVersion, null, Number(more.dataset.searchMore)); return; }
     const filter = event.target.closest('[data-search-type]');
     if (filter) {
       $$('[data-search-type]').forEach((chip) => chip.classList.toggle('active', chip === filter));
@@ -1724,7 +1737,7 @@
   });
 
   document.addEventListener('change', (event) => {
-    if (!['search-year', 'search-rating'].includes(event.target.id)) return;
+    if (!event.target.matches('[data-catalog-filter]')) return;
     const type = $('[data-search-type].active')?.dataset.searchType || '';
     runSearch(type, $('#search-input')?.value || '');
   });

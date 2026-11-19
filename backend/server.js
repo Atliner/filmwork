@@ -24,6 +24,7 @@ const multer = require('multer');
 
 const { query, withTransaction, healthCheck, closePool } = require('./config/db');
 const { AppError, assert, asyncRoute } = require('./lib/errors');
+const { parseCatalogFilters, catalogFacets } = require('./lib/catalogFilters');
 const {
   hmacHex,
   generateOpaqueToken,
@@ -608,6 +609,7 @@ app.get('/api/downloads', requireUser, asyncRoute(async (req, res) => {
  */
 async function publicContentList(queryParams) {
   const store = contentStore();
+  const extra = parseCatalogFilters(queryParams);
   const { page, limit } = parsePage(queryParams);
   const result = await store.listContents({
     page,
@@ -615,11 +617,12 @@ async function publicContentList(queryParams) {
     q: typeof queryParams.q === 'string' ? queryParams.q.slice(0, 100) : '',
     type: queryParams.type,
     status: 'published',
-    sort: queryParams.sort === 'rating' ? 'views' : queryParams.sort === 'year' ? 'recent' : queryParams.sort,
+    sort: queryParams.sort,
     genre: queryParams.genre,
     yearFrom: queryParams.yearFrom,
     yearTo: queryParams.yearTo,
-    minRating: queryParams.minRating,
+    ...extra,
+    running: extra.running ? '1' : '',
   });
   return {
     items: result.items.filter((item) => item.status === 'published').map(contentFromStoreItem),
@@ -665,6 +668,7 @@ app.get('/api/contents', asyncRoute(async (req, res) => {
     return;
   }
   const { page, limit, offset } = parsePage(req.query);
+  const selected = parseCatalogFilters(req.query);
   const filters = ["c.status = 'published'"];
   const params = { limit, offset };
   if (req.query.type && ['movie', 'series'].includes(req.query.type)) {
@@ -694,20 +698,38 @@ app.get('/api/contents', asyncRoute(async (req, res) => {
     filters.push('JSON_CONTAINS(c.genres, JSON_QUOTE(:genre))');
     params.genre = genre;
   }
-  if (req.query.yearFrom) {
-    params.yearFrom = Math.round(asPositiveNumber(req.query.yearFrom, 'سال شروع', { min: 1888, max: 2200 }));
-    filters.push('c.release_year >= :yearFrom');
+  if (selected.yearFrom !== null) { params.yearFrom = selected.yearFrom; filters.push('c.release_year >= :yearFrom'); }
+  if (selected.yearTo !== null) { params.yearTo = selected.yearTo; filters.push('c.release_year <= :yearTo'); }
+  if (selected.minRating !== null) { params.minRating = selected.minRating; filters.push('c.imdb_score >= :minRating'); }
+  if (selected.maxRating !== null) { params.maxRating = selected.maxRating; filters.push('c.imdb_score <= :maxRating'); }
+  function group(values, prefix, expression) {
+    if (!values.length) return;
+    filters.push('(' + values.map((value, index) => {
+      const key = prefix + index; params[key] = value; return expression(key);
+    }).join(' OR ') + ')');
   }
-  if (req.query.yearTo) {
-    params.yearTo = Math.round(asPositiveNumber(req.query.yearTo, 'سال پایان', { min: 1888, max: 2200 }));
-    filters.push('c.release_year <= :yearTo');
-  }
-  if (req.query.minRating) {
-    params.minRating = asPositiveNumber(req.query.minRating, 'حداقل امتیاز', { min: 0, max: 10 });
-    filters.push('c.imdb_score >= :minRating');
+  group(selected.countries, 'country', (key) => `FIND_IN_SET(REPLACE(:${key}, ' ', ''), REPLACE(REPLACE(c.country, '،', ','), ' ', '')) > 0`);
+  group(selected.ages, 'age', (key) => `c.age_rating = :${key}`);
+  group(selected.networks, 'network', (key) => `c.network = :${key}`);
+  if (selected.running) filters.push("c.content_type = 'series' AND c.series_running = TRUE");
+  if (selected.audio === 'dub' || selected.audio === 'both') filters.push('c.has_dub = TRUE');
+  if (selected.audio === 'sub' || selected.audio === 'both') filters.push('c.has_sub = TRUE');
+  if (selected.aliases.length) {
+    const columns = selected.role === 'director' ? ['c.directors'] : selected.role === 'cast' ? ['c.cast_members'] : ['c.directors', 'c.cast_members'];
+    const matches = [];
+    selected.aliases.forEach((name, index) => {
+      const escaped = name.replace(/[!%_]/g, (ch) => '!' + ch);
+      for (const [suffix, value] of [['exact', escaped], ['left', escaped + ' | %'], ['right', '% | ' + escaped]]) {
+        const key = `person${index}${suffix}`; params[key] = value;
+        for (const column of columns) matches.push(`JSON_SEARCH(${column}, 'one', :${key}, '!') IS NOT NULL`);
+      }
+    });
+    filters.push('(' + matches.join(' OR ') + ')');
   }
   const where = filters.join(' AND ');
-  const order = req.query.sort === 'rating'
+  const order = req.query.sort === 'title'
+    ? 'c.title ASC, c.id ASC'
+    : req.query.sort === 'rating'
     ? 'c.imdb_score DESC, c.created_at DESC'
     : req.query.sort === 'year'
       ? 'c.release_year DESC, c.created_at DESC'
@@ -728,6 +750,15 @@ app.get('/api/contents', asyncRoute(async (req, res) => {
     items: rows.map(contentDto),
     pagination: { page, limit, total: Number(counts[0].total), pages: Math.ceil(Number(counts[0].total) / limit) },
   });
+}));
+
+app.get('/api/contents-facets', asyncRoute(async (req, res) => {
+  const store = contentStore();
+  const facets = store.kind === 'demo' ? await store.getCatalogFacets() : catalogFacets(await query(
+    "SELECT genres, country, network, age_rating, release_year, imdb_score FROM contents WHERE status = 'published'",
+  ));
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(facets);
 }));
 
 app.get('/api/contents/:assetId', asyncRoute(async (req, res) => {
