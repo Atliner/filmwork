@@ -39,7 +39,7 @@ jobs:
           target: default
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
-          script: cd apps/android && gradle connectedReleaseAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.filmwork.app.NativeEntryTest
+          script: cd apps/android && ./run-release-test.sh
       - name: Build APKs
         working-directory: apps/android
         env:
