@@ -32,42 +32,54 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Exercise native playback on Android emulator
+        env:
+          FILMWORK_APP_URL: ${{ inputs.public_app_url }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 29
+          # API 29's stock emulator WebView predates WEB_MESSAGE_LISTENER.
+          # Use a current WebView to exercise the actual origin-scoped bridge.
+          api-level: 35
           arch: x86_64
           target: default
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           script: cd apps/android && ./run-release-test.sh
+      # Publish diagnostic builds even if instrumentation fails; the job
+      # remains failed, and artifacts must not be presented as verified.
       - name: Build APKs
+        if: ${{ !cancelled() }}
         working-directory: apps/android
         env:
           FILMWORK_APP_URL: ${{ inputs.public_app_url }}
         run: gradle assembleRelease
       - name: Report APK sizes
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           find apps/android/app/build/outputs/apk/release -name '*.apk' -printf '%f %s bytes\n'
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: Vizosten-Android-ARM64
           path: apps/android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
           if-no-files-found: error
           retention-days: 30
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: Vizosten-Android-ARM32
           path: apps/android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk
           if-no-files-found: error
           retention-days: 30
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: Vizosten-Android-x86_64
           path: apps/android/app/build/outputs/apk/release/app-x86_64-release.apk
           if-no-files-found: error
           retention-days: 30
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: Vizosten-Android-x86
           path: apps/android/app/build/outputs/apk/release/app-x86-release.apk
