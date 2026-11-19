@@ -406,7 +406,11 @@ test('the detail endpoint returns versions, links and derived counts', async () 
 test('public player sources contain only playback URLs for published content', async () => {
   const { status, data } = await call(`/api/contents/${createdId}/player-sources`);
   assert.equal(status, 200);
-  assert.deepEqual(data.sources, [{ streamUrl: 'https://example.com/video.mp4', subtitleUrl: 'https://example.com/sub.srt', audioUrl: 'https://example.com/audio.mp3' }]);
+  assert.equal(data.sources.length, 1);
+  assert.deepEqual({ season: data.sources[0].season, episode: data.sources[0].episode,
+    resolution: data.sources[0].resolution, version: data.sources[0].version,
+    streamUrl: data.sources[0].streamUrl, subtitleUrl: data.sources[0].subtitleUrl, audioUrl: data.sources[0].audioUrl },
+    { season: 1, episode: 1, resolution: '1080p', version: '1080p', streamUrl: 'https://example.com/video.mp4', subtitleUrl: 'https://example.com/sub.srt', audioUrl: 'https://example.com/audio.mp3' });
   assert.ok(!JSON.stringify(data).includes('t.me'));
 });
 

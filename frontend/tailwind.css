@@ -742,3 +742,7 @@
   .setting-option.active { border-color:rgba(239,68,68,.85);background:rgba(239,68,68,.10); }
   .setting-option.active::after { color:#f87171; }
 }
+
+/* Version selector contains only display labels, never a media URL. */
+#player-version { max-width: 155px; min-width: 0; color: #fff; background: #242429; border: 1px solid #ffffff35; border-radius: 10px; padding: 7px; font-size: 11px; }
+@media (max-width: 480px) { #player-version { max-width: 86px; font-size: 10px; } }

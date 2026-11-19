@@ -28,6 +28,8 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.videolan.libvlc.LibVLC;
 import org.videolan.libvlc.Media;
 import org.videolan.libvlc.MediaPlayer;
@@ -48,12 +50,22 @@ public final class NativePlayerActivity extends Activity {
   private final ArrayList<Uri> audios = new ArrayList<>();
   private LibVLC vlc;
   private MediaPlayer player;
+  // Content stays loaded and paused while a separate player renders an ad.
+  private MediaPlayer suspendedContentPlayer;
+  private boolean adHasContent;
+  private boolean suspendedTracksAdded;
   private VLCVideoLayout videoLayout;
   private LinearLayout playbackStatus;
   private TextView playbackStatusText;
   private Button retryPlayback;
   private int mediaStartSequence;
   private Uri source;
+  private static final class PlaybackVersion {
+    Uri uri; String label; int season, episode;
+    final ArrayList<Uri> subtitles = new ArrayList<>(), audios = new ArrayList<>();
+  }
+  private final ArrayList<PlaybackVersion> versions = new ArrayList<>();
+  private int selectedVersion;
   private TextView elapsed;
   private TextView duration;
   private TextView audioCount;
@@ -167,6 +179,12 @@ public final class NativePlayerActivity extends Activity {
         | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
     appendUrls(getIntent().getStringArrayListExtra("subtitleUrls"), subtitles);
     appendUrls(getIntent().getStringArrayListExtra("audioUrls"), audios);
+    loadVersions(getIntent().getStringExtra("versions"));
+    selectedVersion = savedState != null ? savedState.getInt("selectedVersion", getIntent().getIntExtra("selectedVersion", 0)) : getIntent().getIntExtra("selectedVersion", 0);
+    if (!versions.isEmpty() && selectedVersion >= 0 && selectedVersion < versions.size()) {
+      PlaybackVersion selected = versions.get(selectedVersion);
+      source = selected.uri; subtitles.clear(); subtitles.addAll(selected.subtitles); audios.clear(); audios.addAll(selected.audios);
+    } else selectedVersion = 0;
     pendingSeek = Math.max(0, getIntent().getLongExtra("resumeMillis", 0));
     if (savedState != null) {
       pendingSeek = Math.max(0, savedState.getLong("position", pendingSeek));
@@ -174,8 +192,10 @@ public final class NativePlayerActivity extends Activity {
       subtitleScale = savedState.getInt("subtitleScale", 16);
       subtitleColor = savedState.getInt("subtitleColor", 0xffffff);
       subtitleFontIndex = Math.max(0, Math.min(fontPaths.length - 1, savedState.getInt("subtitleFont", 0)));
-      appendUrls(savedState.getStringArrayList("subtitleUrls"), subtitles);
-      appendUrls(savedState.getStringArrayList("audioUrls"), audios);
+      if (versions.isEmpty()) {
+        appendUrls(savedState.getStringArrayList("subtitleUrls"), subtitles);
+        appendUrls(savedState.getStringArrayList("audioUrls"), audios);
+      }
       resumeAfterRebuild = savedState.getBoolean("wasPlaying", true);
       if (savedState.containsKey("audioTrack")) pendingAudioId = savedState.getInt("audioTrack");
       if (savedState.containsKey("subtitleTrack")) pendingSubtitleId = savedState.getInt("subtitleTrack");
@@ -229,6 +249,54 @@ public final class NativePlayerActivity extends Activity {
     }
   }
 
+  private void loadVersions(String json) {
+    if (json == null) return;
+    try {
+      JSONArray items = new JSONArray(json);
+      for (int i = 0; i < items.length() && i < 100; i++) {
+        JSONObject item = items.getJSONObject(i);
+        Uri uri = safeHttps(item.optString("streamUrl"));
+        if (uri == null) { versions.clear(); return; }
+        PlaybackVersion version = new PlaybackVersion();
+        version.uri = uri; version.label = item.optString("label", "نسخه پخش");
+        version.season = item.optInt("season", 0); version.episode = item.optInt("episode", 0);
+        JSONArray sub = item.optJSONArray("subtitleUrls"), audio = item.optJSONArray("audioUrls");
+        if (sub != null) for (int j = 0; j < sub.length() && j < 30; j++) {
+          Uri track = safeHttps(sub.optString(j)); if (track != null) version.subtitles.add(track);
+        }
+        if (audio != null) for (int j = 0; j < audio.length() && j < 30; j++) {
+          Uri track = safeHttps(audio.optString(j)); if (track != null) version.audios.add(track);
+        }
+        versions.add(version);
+      }
+    } catch (org.json.JSONException ignored) { versions.clear(); }
+  }
+
+  private void showVersions() {
+    if (phase != Phase.CONTENT || player == null || versions.isEmpty()) return;
+    String[] labels = new String[versions.size()];
+    for (int i = 0; i < versions.size(); i++) labels[i] = versions.get(i).label;
+    new AlertDialog.Builder(this, R.style.PlayerDialog).setTitle("انتخاب نسخه پخش")
+        .setSingleChoiceItems(labels, selectedVersion, (dialog, index) -> {
+          dialog.dismiss(); switchVersion(index);
+        }).setNegativeButton("بستن", null).show();
+  }
+
+  private void switchVersion(int index) {
+    if (phase != Phase.CONTENT || player == null || index < 0 || index >= versions.size() || index == selectedVersion) return;
+    PlaybackVersion previous = versions.get(selectedVersion), next = versions.get(index);
+    boolean sameEpisode = previous.season == next.season && previous.episode == next.episode;
+    saveContentProgress(true);
+    pendingSeek = sameEpisode ? Math.max(0, player.getTime()) : 0;
+    resumeAfterRebuild = player.isPlaying();
+    pendingAudioId = null; pendingSubtitleId = null; restoreAttempts = 0;
+    if (!sameEpisode) { midRollDone = false; postRollDone = false; }
+    selectedVersion = index; source = next.uri;
+    subtitles.clear(); subtitles.addAll(next.subtitles); audios.clear(); audios.addAll(next.audios);
+    clearBanner();
+    startContent();
+  }
+
   private void buildUi() {
     FrameLayout root = new FrameLayout(this);
     root.setBackgroundColor(Color.BLACK);
@@ -276,6 +344,10 @@ public final class NativePlayerActivity extends Activity {
     title.setPadding(dp(10), 0, dp(10), 0);
     title.setTypeface(null, android.graphics.Typeface.BOLD);
     top.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+    if (versions.size() > 1) {
+      Button quality = button("نسخه ▾", this::showVersions);
+      quality.setContentDescription("انتخاب نسخه پخش"); top.addView(quality, new LinearLayout.LayoutParams(dp(72), dp(48)));
+    }
     Button info = button("ⓘ", () -> PlayerDiagnostics.show(this, false));
     info.setContentDescription("گزارش عیب‌یابی"); top.addView(info, new LinearLayout.LayoutParams(dp(48), dp(48)));
 
@@ -428,7 +500,7 @@ public final class NativePlayerActivity extends Activity {
     if (phase == Phase.CONTENT) {
       showPlaybackStatus("در حال بارگیری ویدیو…", false);
       handler.postDelayed(() -> {
-        if (phase == Phase.CONTENT && mediaStartSequence == sequence && player != null && !player.isPlaying())
+        if (phase == Phase.CONTENT && mediaStartSequence == sequence && player != null && !tracksAdded && !player.isPlaying())
           showPlaybackStatus("ویدیو هنوز آماده نشده؛ اتصال و دسترسی فایل را بررسی کنید.", true);
       }, 25000);
     } else playbackStatus.setVisibility(View.GONE);
@@ -475,6 +547,7 @@ public final class NativePlayerActivity extends Activity {
   /** The original file is always paused while the ad occupies the renderer. */
   private void requestInterstitial(String placement, boolean resume, boolean finishAfter) {
     if (player == null || phase == Phase.AD || phase == Phase.AD_LOADING || isFinishing()) return;
+    adHasContent = phase == Phase.CONTENT;
     if (phase == Phase.CONTENT) {
       pendingSeek = Math.max(0, player.getTime());
       pendingAudioId = player.getAudioTrack();
@@ -505,6 +578,15 @@ public final class NativePlayerActivity extends Activity {
     adClient.requestAd(placement, ad -> {
       if (phase != Phase.AD_LOADING || adRequestSequence != requestId || isFinishing()) return;
       if (ad == null || !"video".equals(ad.assetType)) { PlayerDiagnostics.mark(this, "AD_UNAVAILABLE"); finishAd(null); return; }
+      Uri adUri = safeHttps(ad.creativeUrl);
+      if (adUri == null) { finishAd(null); return; }
+      if (adHasContent) {
+        // Preserve the opened media and its network buffers, position and tracks.
+        suspendedTracksAdded = tracksAdded;
+        player.detachViews();
+        suspendedContentPlayer = player;
+        player = null;
+      }
       activeAd = ad;
       adImpression = false;
       phase = Phase.AD;
@@ -512,7 +594,7 @@ public final class NativePlayerActivity extends Activity {
       adStartedAt = SystemClock.elapsedRealtime();
       adLastAdvanceAt = adStartedAt;
       adLastPosition = 0;
-      playStream(safeHttps(ad.creativeUrl));
+      playStream(adUri);
     });
   }
 
@@ -555,9 +637,39 @@ public final class NativePlayerActivity extends Activity {
     pendingPlacement = null;
     if (finishAfterAd) {
       if (player != null) player.stop();
+      if (suspendedContentPlayer != null) {
+        suspendedContentPlayer.setEventListener(null);
+        suspendedContentPlayer.stop(); suspendedContentPlayer.release(); suspendedContentPlayer = null;
+      }
+      adHasContent = false;
       phase = Phase.FINISHED;
       play.setText("▶");
       setControlsVisible(true);
+      return;
+    }
+    if (adHasContent) {
+      if (suspendedContentPlayer != null) {
+        releasePlayer();
+        player = suspendedContentPlayer;
+        suspendedContentPlayer = null;
+        tracksAdded = suspendedTracksAdded;
+        player.attachViews(videoLayout, null, true, true);
+      }
+      phase = Phase.CONTENT;
+      adHasContent = false;
+      pendingSeek = 0;
+      pendingAudioId = null;
+      pendingSubtitleId = null;
+      playbackStatus.setVisibility(View.GONE);
+      if (resumeAfterAd && visible && player != null) player.play();
+      else {
+        if (resumeAfterAd && !visible) pausedForBackground = true;
+        setControlsVisible(true);
+      }
+      if (waitingPauseBanner) {
+        waitingPauseBanner = false;
+        handler.postDelayed(() -> showBanner("banner_pause"), 300);
+      }
       return;
     }
     resumeAfterRebuild = resumeAfterAd;
@@ -803,6 +915,10 @@ public final class NativePlayerActivity extends Activity {
   }
   private void releaseEngine() {
     releasePlayer();
+    if (suspendedContentPlayer != null) {
+      suspendedContentPlayer.setEventListener(null);
+      suspendedContentPlayer.stop(); suspendedContentPlayer.release(); suspendedContentPlayer = null;
+    }
     if (vlc != null) { vlc.release(); vlc = null; }
   }
   private int dp(int value) { return (int) (value * getResources().getDisplayMetrics().density + 0.5f); }
@@ -862,6 +978,7 @@ public final class NativePlayerActivity extends Activity {
     ArrayList<String> audioStrings = new ArrayList<>();
     for (Uri uri : audios) audioStrings.add(uri.toString());
     out.putStringArrayList("subtitleUrls", subtitleStrings); out.putStringArrayList("audioUrls", audioStrings);
+    out.putInt("selectedVersion", selectedVersion);
     out.putBoolean("finished", phase == Phase.FINISHED);
     out.putBoolean("preRollDone", preRollDone); out.putBoolean("midRollDone", midRollDone); out.putBoolean("postRollDone", postRollDone);
     if ((phase == Phase.AD || phase == Phase.AD_LOADING) && pendingPlacement != null) {

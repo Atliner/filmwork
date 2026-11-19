@@ -499,8 +499,35 @@
     </div>`;
   }
 
-  function playerControlMarkup(title) {
-    return `<div class="player-topbar"><button type="button" class="player-back" data-go-back aria-label="بازگشت">‹</button><strong class="player-top-title">${escapeHtml(title)}</strong><div class="player-top-actions"><button type="button" id="player-audio-menu">صدا</button><button type="button" id="player-subtitle-menu">زیرنویس</button></div></div>
+  // A version is an administrator-provided stream, not a user-supplied URL.
+  function playbackVersions(content, mediaItems, sources) {
+    const versions = [];
+    const valid = (raw) => {
+      try { const url = new URL(raw); return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password; } catch { return false; }
+    };
+    const sameEpisode = (a, b) => String(a.season ?? '') === String(b.season ?? '') && String(a.episode ?? '') === String(b.episode ?? '');
+    const append = (item) => {
+      if (!valid(item.streamUrl)) return;
+      const linked = sources.filter((source) => source.streamUrl === item.streamUrl &&
+        (source.season == null && source.episode == null || sameEpisode(source, item)));
+      const bits = [item.season ? `فصل ${item.season}` : '', item.episode ? `قسمت ${item.episode}` : '',
+        item.resolution, item.version, item.quality, item.encoder, item.audioLabel, item.episodeTitle]
+        .filter(Boolean).map(String).filter((value, index, all) => all.indexOf(value) === index);
+      // Do not render an accidental URL that was saved as a human-readable label.
+      const label = bits.join(' · ').replace(/https?:\/\/\S+/gi, '').trim() || 'نسخه پخش';
+      versions.push({ label, streamUrl: item.streamUrl, season: item.season ?? null, episode: item.episode ?? null,
+        subtitleUrls: [...new Set(linked.map((source) => source.subtitleUrl).filter(Boolean))],
+        audioUrls: [...new Set(linked.map((source) => source.audioUrl).filter(Boolean))] });
+    };
+    mediaItems.filter((item) => valid(item.streamUrl)).forEach(append);
+    sources.filter((item) => valid(item.streamUrl) && !versions.some((version) => version.streamUrl === item.streamUrl && sameEpisode(version, item))).forEach(append);
+    if (valid(content.streamUrl) && !versions.some((item) => item.streamUrl === content.streamUrl))
+      append({ streamUrl: content.streamUrl, version: 'نسخه پیش‌فرض' });
+    return versions;
+  }
+
+  function playerControlMarkup(title, versions) {
+    return `<div class="player-topbar"><button type="button" class="player-back" data-go-back aria-label="بازگشت">‹</button><strong class="player-top-title">${escapeHtml(title)}</strong><div class="player-top-actions">${versions.length > 1 ? `<select id="player-version" aria-label="انتخاب نسخه پخش">${versions.map((item, i) => `<option value="${i}">${escapeHtml(item.label)}</option>`).join('')}</select>` : ''}<button type="button" id="player-audio-menu">صدا</button><button type="button" id="player-subtitle-menu">زیرنویس</button></div></div>
       <div class="player-center-controls"><button type="button" id="skip-back" aria-label="ده ثانیه عقب">↶<small>۱۰</small></button><button type="button" id="center-play" aria-label="پخش">▶</button><button type="button" id="skip-forward" aria-label="ده ثانیه جلو">↷<small>۱۰</small></button></div>
       <div class="subtitle-overlay" id="external-subtitle" aria-live="off"></div>
       <div class="player-controls">
@@ -544,20 +571,25 @@
       : { items: [] };
     if (version !== state.routeVersion) return;
     const related = (relatedData.items || []).filter((item) => item.id !== content.id).slice(0, 8);
-    const streamUrl = content.streamUrl || mediaData.items.find((item) => item.streamUrl)?.streamUrl || sourceData.sources[0]?.streamUrl || '';
-    const matchingSources = sourceData.sources.filter((source) => source.streamUrl === streamUrl);
+    const isAndroid = /\bVizostenAndroid\//.test(navigator.userAgent);
+    const versions = playbackVersions(content, mediaData.items || [], sourceData.sources || [])
+      .filter((item) => !isAndroid || new URL(item.streamUrl).protocol === 'https:');
+    const preferred = versions.findIndex((item) => item.streamUrl === content.streamUrl);
+    const initialIndex = preferred >= 0 ? preferred : 0;
+    const selected = versions[initialIndex];
+    const streamUrl = selected?.streamUrl || '';
     const safeStream = safeUrl(streamUrl);
     // Android uses the native renderer, never an HTML video fallback. The marker
     // also lets us show a useful error on old WebViews without message support.
-    if (/\bVizostenAndroid\//.test(navigator.userAgent)) {
-      renderAndroidPlayerLaunch(content, streamUrl, matchingSources, resumeEntry);
+    if (isAndroid) {
+      renderAndroidPlayerLaunch(content, versions, initialIndex, resumeEntry);
       return;
     }
     app.innerHTML = `<div class="page-shell player-page">
       <div class="player-shell controls-visible" id="player-shell">
         <video id="video" class="${safeStream ? '' : 'pixelated'}" playsinline preload="metadata" ${safeStream ? `src="${safeStream}"` : ''}></video>
         ${!safeStream ? `<div class="player-unavailable" id="unavailable-overlay">${icons.film}<strong>پخش آنلاین در دسترس نیست - دریافت از تلگرام</strong><span>در حال حاضر منبعی برای پخش این محتوا تنظیم نشده است.</span></div>` : ''}
-        ${playerControlMarkup(titleFa(content) || titleEn(content))}<div id="pause-ad-slot"></div><div id="player-ad-slot"></div>
+        ${playerControlMarkup(titleFa(content) || titleEn(content), versions)}<div id="pause-ad-slot"></div><div id="player-ad-slot"></div>
       </div>
       <div id="timed-banner-slot"></div>
       <div id="pause-banner-slot" class="banner-slot"></div>
@@ -572,13 +604,11 @@
     </div>`;
     let localResume = 0;
     try { localResume = Number(JSON.parse(localStorage.getItem(`vizosten-progress:${content.id}`) || 'null')?.position || 0); } catch { /* storage is optional */ }
-    initializePlayer(content.id, state.user ? Number(resumeEntry?.positionSeconds || 0) : localResume);
-    // Several admin rows may describe alternate tracks for the same video URL.
-    for (const url of new Set(matchingSources.map((source) => source.subtitleUrl).filter(Boolean))) bindPlayerSource('subtitle', url);
-    for (const url of new Set(matchingSources.map((source) => source.audioUrl).filter(Boolean))) bindPlayerSource('audio', url);
+    initializePlayer(content.id, state.user ? Number(resumeEntry?.positionSeconds || 0) : localResume, versions, initialIndex);
+    if (selected) bindVersionTracks(selected);
   }
 
-  function renderAndroidPlayerLaunch(content, streamUrl, matchingSources, resumeEntry) {
+  function renderAndroidPlayerLaunch(content, versions, initialIndex, resumeEntry) {
     app.innerHTML = `<div class="page-shell page-top"><section class="surface-panel">
       <h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>
       <p id="native-player-status" role="status">در حال باز کردن پلیر…</p>
@@ -598,15 +628,23 @@
     const open = () => {
       let uri;
       try {
-        uri = new URL(streamUrl);
+        uri = new URL(versions[initialIndex]?.streamUrl);
         if (uri.protocol !== 'https:' || uri.username || uri.password) throw new Error();
       } catch { status.textContent = 'منبع پخش معتبری برای این محتوا تنظیم نشده است.'; retry.hidden = true; return; }
-      const tracks = (key) => [...new Set(matchingSources.map((item) => item[key]).filter(Boolean))].slice(0, 30);
+      let nativeVersions = versions.filter((item) => {
+        try { return new URL(item.streamUrl).protocol === 'https:'; } catch { return false; }
+      });
+      // Android's bridge and Binder impose size limits; keep the selected item.
+      if (nativeVersions.length > 100) {
+        nativeVersions = [versions[initialIndex], ...nativeVersions.filter((item) => item !== versions[initialIndex])].slice(0, 100);
+      }
+      const nativeIndex = nativeVersions.indexOf(versions[initialIndex]);
       let localResume = 0;
       try { localResume = Number(JSON.parse(localStorage.getItem(`vizosten-progress:${content.id}`) || 'null')?.position || 0); } catch { /* storage is optional */ }
       const seconds = state.user ? Number(resumeEntry?.positionSeconds || 0) : localResume;
       const payload = { action: 'openPlayer', contentId: content.id, title: titleFa(content) || titleEn(content),
-        streamUrl: uri.href, subtitleUrls: tracks('subtitleUrl'), audioUrls: tracks('audioUrl'),
+        streamUrl: uri.href, subtitleUrls: versions[initialIndex].subtitleUrls.slice(0, 30), audioUrls: versions[initialIndex].audioUrls.slice(0, 30),
+        versions: nativeVersions, selectedVersion: Math.max(0, nativeIndex),
         resumeMillis: Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds * 1000)) : 0,
         sessionToken: state.user ? state.token : '' };
       status.textContent = 'در حال باز کردن پلیر…'; retry.hidden = true;
@@ -662,7 +700,7 @@
     state.player = null;
   }
 
-  function initializePlayer(assetId, resumeSeconds = 0) {
+  function initializePlayer(assetId, resumeSeconds = 0, versions = [], initialIndex = 0) {
     destroyPlayer();
     const video = $('#video');
     const shell = $('#player-shell');
@@ -670,6 +708,11 @@
     const player = {
       video,
       shell,
+      versions,
+      versionIndex: initialIndex,
+      trackGeneration: 0,
+      switchingVersion: false,
+      pendingVersionSeek: null,
       externalAudio: null,
       externalAudioEnabled: false,
       externalAudios: [],
@@ -808,6 +851,37 @@
     }
 
     player.refreshSettings = refreshSettings;
+    const versionSelector = $('#player-version');
+    if (versionSelector) {
+      versionSelector.value = String(initialIndex);
+      on(versionSelector, 'change', () => {
+        const index = Number(versionSelector.value);
+        const next = versions[index];
+        const old = versions[player.versionIndex];
+        if (!next || player.adActive) { versionSelector.value = String(player.versionIndex); return; }
+        if (index === player.versionIndex) return;
+        const wasPlaying = !video.paused;
+        const sameEpisode = String(old?.season ?? '') === String(next.season ?? '') && String(old?.episode ?? '') === String(next.episode ?? '');
+        const position = sameEpisode ? video.currentTime : 0;
+        saveProgress(true);
+        player.switchingVersion = true;
+        video.pause();
+        player.externalAudios.forEach((track) => track.audio.pause());
+        player.externalAudios = []; player.externalAudio = null; player.externalAudioEnabled = false;
+        video.muted = false; player.subtitles = []; player.selectedSubtitle = 'off';
+        subtitleOverlay.textContent = ''; subtitleOverlay.style.display = 'none';
+        player.trackGeneration += 1;
+        player.versionIndex = index;
+        player.pendingVersionSeek = position;
+        player.hasAppliedResume = true;
+        if (!sameEpisode) { player.midRollChecked = false; player.postRollShown = false; }
+        video.src = next.streamUrl;
+        video.load();
+        bindVersionTracks(next);
+        refreshSettings();
+        if (wasPlaying) video.play().catch(() => toast('برای ادامه دکمه پخش را بزنید.', 'error'));
+      });
+    }
     on(playButton, 'click', togglePlay);
     on($('#center-play'), 'click', togglePlay);
     on($('#skip-back'), 'click', () => { if (!player.adActive) video.currentTime = Math.max(0, video.currentTime - 10); });
@@ -831,8 +905,10 @@
       clearAdSlot($('#pause-banner-slot'));
     });
     on(video, 'pause', () => {
-      syncPlayIcon(); showControls(); player.externalAudio?.pause(); saveProgress(true);
-      if (video.currentTime > 1 && !video.ended && !player.adActive) { loadPlayerAd('pause_overlay', '#pause-ad-slot', player); loadPlayerAd('banner_pause', '#pause-banner-slot', player); }
+      syncPlayIcon(); showControls(); player.externalAudio?.pause();
+      if (player.switchingVersion) return;
+      saveProgress(true);
+      if (video.currentTime > 1 && !video.ended && !player.adActive && !player.switchingVersion) { loadPlayerAd('pause_overlay', '#pause-ad-slot', player); loadPlayerAd('banner_pause', '#pause-banner-slot', player); }
     });
     on(video, 'waiting', () => { if (player.externalAudioEnabled) player.externalAudio?.pause(); });
     on(video, 'playing', () => {
@@ -842,6 +918,11 @@
     });
     on(video, 'timeupdate', updateProgress);
     on(video, 'loadedmetadata', () => {
+      if (player.pendingVersionSeek !== null) {
+        video.currentTime = Math.max(0, Math.min(player.pendingVersionSeek, Math.max(0, video.duration - 1)));
+        player.pendingVersionSeek = null;
+      }
+      player.switchingVersion = false;
       if (!player.hasAppliedResume && resumeSeconds > 3 && resumeSeconds < video.duration * 0.92) {
         video.currentTime = Math.min(resumeSeconds, Math.max(0, video.duration - 2));
         toast(`پخش از ${formatTime(resumeSeconds)} ادامه پیدا می‌کند.`, 'success');
@@ -907,7 +988,7 @@
     on(shell, 'pointermove', showControls);
     on(shell, 'pointerleave', () => { if (!video.paused) shell.classList.remove('controls-visible'); });
     on(shell, 'keydown', (event) => {
-      if (['INPUT', 'BUTTON'].includes(event.target.tagName)) return;
+      if (['INPUT', 'BUTTON', 'SELECT'].includes(event.target.tagName)) return;
       if (event.code === 'Space') { event.preventDefault(); togglePlay(); }
       if (event.code === 'ArrowRight') video.currentTime = Math.min(video.duration || Infinity, video.currentTime + 5);
       if (event.code === 'ArrowLeft') video.currentTime = Math.max(0, video.currentTime - 5);
@@ -922,10 +1003,16 @@
 
   }
 
+  function bindVersionTracks(version) {
+    for (const url of version.subtitleUrls) bindPlayerSource('subtitle', url);
+    for (const url of version.audioUrls) bindPlayerSource('audio', url);
+  }
+
   // Only tracks associated with the selected administrator-configured source.
   async function bindPlayerSource(type, sourceUrl) {
     const player = state.player;
     if (!player || !['subtitle', 'audio'].includes(type)) return;
+    const generation = player.trackGeneration;
     let url;
     try {
       const parsed = new URL(sourceUrl, window.location.origin);
@@ -944,7 +1031,7 @@
       const response = await fetch(url, { mode: 'cors' });
       if (!response.ok) return;
       const cues = parseSrt(await response.text());
-      if (!cues.length || state.player !== player) return;
+      if (!cues.length || state.player !== player || generation !== player.trackGeneration) return;
       player.subtitles.push({ cues, label: `زیرنویس خارجی ${player.subtitles.length + 1}` });
       player.refreshSettings?.();
     } catch { /* A track host may not allow CORS. Other tracks remain usable. */ }

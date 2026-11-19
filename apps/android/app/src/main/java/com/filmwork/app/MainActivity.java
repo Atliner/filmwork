@@ -149,7 +149,7 @@ public final class MainActivity extends Activity {
           PlayerDiagnostics.mark(MainActivity.this, "BRIDGE_MESSAGE");
           String raw = message.getData();
           if (!isMainFrame || sourceOrigin == null || !origin.equalsIgnoreCase(sourceOrigin.toString())
-              || raw == null || raw.length() > 65536) { reply.postMessage("invalid-request"); return; }
+              || raw == null || raw.length() > 262144) { reply.postMessage("invalid-request"); return; }
           try {
             if (playerOpen) { reply.postMessage("already-open"); return; }
             JSONObject data = new JSONObject(raw);
@@ -173,12 +173,44 @@ public final class MainActivity extends Activity {
             intent.putExtra("resumeMillis", resume);
             intent.putStringArrayListExtra("subtitleUrls", safeTrackUrls(data.optJSONArray("subtitleUrls")));
             intent.putStringArrayListExtra("audioUrls", safeTrackUrls(data.optJSONArray("audioUrls")));
+            JSONArray variants = safeVersions(data.optJSONArray("versions"));
+            if (variants != null && variants.length() > 0) {
+              int selected = data.optInt("selectedVersion", 0);
+              if (selected < 0 || selected >= variants.length()
+                  || !stream.toString().equals(variants.getJSONObject(selected).optString("streamUrl"))) {
+                reply.postMessage("invalid-request"); return;
+              }
+              intent.putExtra("versions", variants.toString());
+              intent.putExtra("selectedVersion", selected);
+            }
             playerOpen = true;
             PlayerDiagnostics.mark(MainActivity.this, "PLAYER_LAUNCH_REQUESTED");
             try { startActivity(intent); } catch (Exception error) { playerOpen = false; throw error; }
             reply.postMessage("ok");
           } catch (Exception ignored) { reply.postMessage("invalid-request"); }
         });
+  }
+
+  private JSONArray safeVersions(JSONArray input) throws org.json.JSONException {
+    if (input == null) return null; // Backward-compatible single-source bridge.
+    if (input.length() > 100) throw new org.json.JSONException("too many versions");
+    JSONArray result = new JSONArray();
+    for (int i = 0; i < input.length(); i++) {
+      JSONObject item = input.getJSONObject(i);
+      Uri uri = NativePlayerActivity.safeHttps(item.optString("streamUrl"));
+      if (uri == null) throw new org.json.JSONException("invalid stream");
+      String label = item.optString("label", "نسخه پخش").replaceAll("(?i)https?://\\S+", "").trim();
+      if (label.length() > 160) label = label.substring(0, 160);
+      if (label.isEmpty()) label = "نسخه پخش";
+      JSONObject clean = new JSONObject();
+      clean.put("label", label); clean.put("streamUrl", uri.toString());
+      clean.put("season", Math.max(0, Math.min(10000, item.optInt("season", 0))));
+      clean.put("episode", Math.max(0, Math.min(10000, item.optInt("episode", 0))));
+      clean.put("subtitleUrls", new JSONArray(safeTrackUrls(item.optJSONArray("subtitleUrls"))));
+      clean.put("audioUrls", new JSONArray(safeTrackUrls(item.optJSONArray("audioUrls"))));
+      result.put(clean);
+    }
+    return result;
   }
 
   private ArrayList<String> safeTrackUrls(JSONArray array) {

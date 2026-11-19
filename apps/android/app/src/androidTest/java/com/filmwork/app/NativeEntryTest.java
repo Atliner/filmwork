@@ -58,7 +58,9 @@ public class NativeEntryTest {
             "VizostenNative.postMessage(JSON.stringify({action:'openPlayer'," +
             "contentId:'34a3f2c2-6edb-4132-a4da-0f14e660bdcc'," +
             "title:'Bridge playback test',streamUrl:'https://example.com/test.mkv'," +
-            "subtitleUrls:[],audioUrls:[],resumeMillis:0,sessionToken:''}));}});" +
+            "subtitleUrls:[],audioUrls:[],resumeMillis:0,sessionToken:'',selectedVersion:0," +
+            "versions:[{label:'720p WEB-DL Kingmovie',streamUrl:'https://example.com/test.mkv',season:1,episode:1,subtitleUrls:[],audioUrls:[]}," +
+            "{label:'1080p Blu-ray Valamovie',streamUrl:'https://example.com/alternate.mkv',season:1,episode:1,subtitleUrls:[],audioUrls:[]}]}));}});" +
             "</script>";
         webView.loadDataWithBaseURL("https://namdarcompost.ir/", html, "text/html", "UTF-8", null);
       });
@@ -67,7 +69,8 @@ public class NativeEntryTest {
       while (!opened.get() && SystemClock.elapsedRealtime() < until) {
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
           for (Activity activity : ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED)) {
-            if (activity instanceof NativePlayerActivity && hasText(activity.getWindow().getDecorView(), "Bridge playback test")) opened.set(true);
+            if (activity instanceof NativePlayerActivity && hasText(activity.getWindow().getDecorView(), "Bridge playback test")
+                && hasText(activity.getWindow().getDecorView(), "نسخه")) opened.set(true);
           }
         });
         if (!opened.get()) SystemClock.sleep(250);

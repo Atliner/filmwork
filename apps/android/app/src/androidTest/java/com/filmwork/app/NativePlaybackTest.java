@@ -135,6 +135,29 @@ public final class NativePlaybackTest {
         try {
           Object originalPlayer = field(activity, "player");
           int sequence = (Integer) field(activity, "mediaStartSequence");
+          ((MediaPlayer) originalPlayer).pause();
+          Field phase = activity.getClass().getDeclaredField("phase"); phase.setAccessible(true);
+          @SuppressWarnings({"rawtypes", "unchecked"}) Object loading = Enum.valueOf((Class) phase.getType(), "AD_LOADING");
+          @SuppressWarnings({"rawtypes", "unchecked"}) Object ad = Enum.valueOf((Class) phase.getType(), "AD");
+          Field hasContent = activity.getClass().getDeclaredField("adHasContent"); hasContent.setAccessible(true); hasContent.setBoolean(activity, true);
+          Field placement = activity.getClass().getDeclaredField("pendingPlacement"); placement.setAccessible(true); placement.set(activity, "pause_overlay");
+          Field resume = activity.getClass().getDeclaredField("resumeAfterAd"); resume.setAccessible(true); resume.setBoolean(activity, false);
+          Method finishAd = activity.getClass().getDeclaredMethod("finishAd", String.class); finishAd.setAccessible(true);
+          phase.set(activity, loading); finishAd.invoke(activity, (Object) null);
+          assertSame("no-ad pause preserves loaded content", originalPlayer, field(activity, "player"));
+          assertEquals("no-ad pause does not reopen stream", sequence, ((Integer) field(activity, "mediaStartSequence")).intValue());
+          // Exercise restoration after a separate ad player uses the same rendering view.
+          ((MediaPlayer) originalPlayer).detachViews();
+          Field suspended = activity.getClass().getDeclaredField("suspendedContentPlayer"); suspended.setAccessible(true); suspended.set(activity, originalPlayer);
+          Field trackFlag = activity.getClass().getDeclaredField("suspendedTracksAdded"); trackFlag.setAccessible(true); trackFlag.setBoolean(activity, true);
+          Field active = activity.getClass().getDeclaredField("player"); active.setAccessible(true); active.set(activity, null);
+          hasContent.setBoolean(activity, true); placement.set(activity, "pause_overlay"); phase.set(activity, ad);
+          Method playAd = activity.getClass().getDeclaredMethod("playStream", Uri.class); playAd.setAccessible(true); playAd.invoke(activity, Uri.fromFile(video));
+          int afterAdStart = (Integer) field(activity, "mediaStartSequence");
+          finishAd.invoke(activity, (Object) null);
+          assertSame("returning from a video ad restores content player", originalPlayer, field(activity, "player"));
+          assertEquals("returning from ad does not reopen content", afterAdStart, ((Integer) field(activity, "mediaStartSequence")).intValue());
+          sequence = afterAdStart;
           Field scale = activity.getClass().getDeclaredField("subtitleScale"); scale.setAccessible(true); scale.setInt(activity, 12);
           Method save = activity.getClass().getDeclaredMethod("saveDeferredSubtitleStyle"); save.setAccessible(true); save.invoke(activity);
           assertSame("subtitle appearance does not recreate player", originalPlayer, field(activity, "player"));

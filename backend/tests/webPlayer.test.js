@@ -307,3 +307,50 @@ test('missing administrator source does not offer a manual URL field', async () 
     } finally { dom.window.close(); }
   }
 });
+
+
+test('web version picker exposes labels only and switches between admin sources without losing same-episode progress', async () => {
+  const mediaItems = [
+    { id: 'a', streamUrl: 'https://media.example/a.mp4', resolution: '720p', version: 'WEB-DL', encoder: 'Kingmovie', season: 1, episode: 1 },
+    { id: 'b', streamUrl: 'https://media.example/b.mp4', resolution: '720p', version: 'WEB-DL', encoder: 'Valamovie', season: 1, episode: 1 },
+    { id: 'c', streamUrl: 'https://media.example/c.mp4', resolution: '1080p', version: 'Blu-ray', encoder: 'Kingmovie', season: 1, episode: 2 },
+    { id: 'd', streamUrl: '', resolution: '4K', version: 'download only' },
+  ];
+  const sources = [
+    { streamUrl: mediaItems[0].streamUrl, season: 1, episode: 1, subtitleUrl: 'https://media.example/subtitle1.srt' },
+    { streamUrl: mediaItems[1].streamUrl, season: 1, episode: 1, subtitleUrl: 'https://media.example/subtitle2.srt' },
+  ];
+  const { dom, w, d } = await setup({ mediaItems, sources, streamUrl: '' });
+  try {
+    const select = d.querySelector('#player-version'), video = d.querySelector('#video');
+    assert.equal(select.options.length, 3);
+    assert.match(select.options[0].textContent, /720p.*WEB-DL.*Kingmovie/);
+    assert.match(select.options[1].textContent, /Valamovie/);
+    assert.ok(!select.outerHTML.includes('https://'));
+    video.currentTime = 35; await video.play();
+    select.value = '1'; select.dispatchEvent(new w.Event('change', { bubbles: true }));
+    assert.equal(video.src, 'https://media.example/b.mp4');
+    video.dispatchEvent(new w.Event('loadedmetadata'));
+    assert.equal(video.currentTime, 35); assert.equal(video.paused, false);
+    await delay(); d.querySelector('#settings-button').click();
+    assert.equal(d.querySelectorAll('[data-subtitle-track^="external-"]').length, 1);
+    select.value = '2'; select.dispatchEvent(new w.Event('change', { bubbles: true }));
+    video.dispatchEvent(new w.Event('loadedmetadata'));
+    assert.equal(video.currentTime, 0);
+  } finally { dom.window.close(); }
+});
+
+test('Android bridge receives named admin versions with associated tracks, not download-only versions', async () => {
+  const sources = [
+    { streamUrl: 'https://media.example/a.mp4', version: 'WEB-DL', resolution: '720p', quality: 'Kingmovie', season: 1, episode: 1, subtitleUrl: 'https://media.example/subtitle1.srt' },
+    { streamUrl: 'https://media.example/b.mp4', version: 'WEB-DL', resolution: '720p', quality: 'Valamovie', season: 1, episode: 1, audioUrl: 'https://media.example/audio2.mp3' },
+  ];
+  const { dom, d, nativeMessages } = await setup({ native: true, streamUrl: '', sources });
+  try {
+    assert.equal(nativeMessages.length, 1);
+    assert.equal(nativeMessages[0].versions.length, 2);
+    assert.match(nativeMessages[0].versions[1].label, /Valamovie/);
+    assert.deepEqual(nativeMessages[0].versions[1].audioUrls, ['https://media.example/audio2.mp3']);
+    assert.ok(!d.querySelector('#native-player-status').textContent.includes('https://'));
+  } finally { dom.window.close(); }
+});

@@ -757,7 +757,13 @@ app.get('/api/contents/:assetId/player-sources', asyncRoute(async (req, res) => 
   if (detail.content.status !== 'published') throw new AppError(404, 'CONTENT_NOT_FOUND', 'اثر پیدا نشد.');
   const sources = (detail.versions || []).flatMap((version) => (version.links || [])
     .filter((link) => link.streamUrl)
-    .map((link) => ({ streamUrl: link.streamUrl, subtitleUrl: link.subtitleUrl || null, audioUrl: link.dubUrl || null })));
+    .map((link) => ({
+      id: link.id, season: link.season ?? null, episode: link.episode ?? null,
+      episodeTitle: link.title || null, version: version.title || null,
+      resolution: version.resolution || null, quality: link.label || null,
+      audioLabel: version.kind === 'dub' ? 'دوبله' : 'سافت‌ساب',
+      streamUrl: link.streamUrl, subtitleUrl: link.subtitleUrl || null, audioUrl: link.dubUrl || null,
+    })));
   res.setHeader('Cache-Control', 'no-store');
   res.json({ sources });
 }));
