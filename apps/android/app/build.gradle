@@ -27,6 +27,7 @@ android {
         minSdk 23
         targetSdk 35
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        testProguardFiles 'test-proguard-rules.pro'
         versionCode 7
         versionName '1.6.0'
         buildConfigField 'String', 'APP_URL', '"' + appUrl.replace('\\', '\\\\').replace('"', '\\"') + '"'
