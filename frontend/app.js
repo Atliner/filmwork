@@ -556,18 +556,9 @@
     app.innerHTML = `<div class="page-shell player-page">
       <div class="player-shell controls-visible" id="player-shell">
         <video id="video" class="${safeStream ? '' : 'pixelated'}" playsinline preload="metadata" ${safeStream ? `src="${safeStream}"` : ''}></video>
-        ${!safeStream ? `<div class="player-unavailable" id="unavailable-overlay">${icons.film}<strong>پخش آنلاین در دسترس نیست - دریافت از تلگرام</strong><span>می‌توانید نشانی مستقیم را وارد کنید یا یکی از نسخه‌ها را دریافت کنید.</span></div>` : ''}
+        ${!safeStream ? `<div class="player-unavailable" id="unavailable-overlay">${icons.film}<strong>پخش آنلاین در دسترس نیست - دریافت از تلگرام</strong><span>در حال حاضر منبعی برای پخش این محتوا تنظیم نشده است.</span></div>` : ''}
         ${playerControlMarkup(titleFa(content) || titleEn(content))}<div id="pause-ad-slot"></div><div id="player-ad-slot"></div>
       </div>
-      <details class="source-tools">
-        <summary>اتصال منبع شخصی، زیرنویس یا صدای دوبله <span>اختیاری</span></summary>
-        <div class="player-fields">
-          <div class="bind-card"><label><i></i>نشانی مستقیم ویدیو</label><div class="input-bind"><input id="video-url" type="url" inputmode="url" placeholder="https://…/video.mp4" value="${safeStream}"><button type="button" data-bind="video">اتصال</button></div></div>
-          <div class="bind-card"><label><i></i>افزودن زیرنویس خارجی SRT / VTT</label><div class="input-bind"><input id="subtitle-url" type="url" inputmode="url" placeholder="https://…/subtitle.srt"><button type="button" data-bind="subtitle">اتصال</button></div></div>
-          <div class="bind-card"><label><i></i>افزودن صدای خارجی</label><div class="input-bind"><input id="audio-url" type="url" inputmode="url" placeholder="https://…/dubbed.m4a"><button type="button" data-bind="audio">اتصال</button></div></div>
-        </div>
-        <p class="player-help">هر نشانی را جداگانه اضافه کنید؛ سپس از تنظیمات پلیر انتخاب کنید. زیرنویس خارجی به CORS نیاز دارد. پشتیبانی از فایل و ترک داخلی به مرورگر بستگی دارد.</p>
-      </details>
       <div id="timed-banner-slot"></div>
       <div id="pause-banner-slot" class="banner-slot"></div>
       <section class="player-info">
@@ -583,35 +574,34 @@
     try { localResume = Number(JSON.parse(localStorage.getItem(`vizosten-progress:${content.id}`) || 'null')?.position || 0); } catch { /* storage is optional */ }
     initializePlayer(content.id, state.user ? Number(resumeEntry?.positionSeconds || 0) : localResume);
     // Several admin rows may describe alternate tracks for the same video URL.
-    for (const url of new Set(matchingSources.map((source) => source.subtitleUrl).filter(Boolean))) bindPlayerSource('subtitle', url, false);
-    for (const url of new Set(matchingSources.map((source) => source.audioUrl).filter(Boolean))) bindPlayerSource('audio', url, false);
+    for (const url of new Set(matchingSources.map((source) => source.subtitleUrl).filter(Boolean))) bindPlayerSource('subtitle', url);
+    for (const url of new Set(matchingSources.map((source) => source.audioUrl).filter(Boolean))) bindPlayerSource('audio', url);
   }
 
   function renderAndroidPlayerLaunch(content, streamUrl, matchingSources, resumeEntry) {
     app.innerHTML = `<div class="page-shell page-top"><section class="surface-panel">
       <h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>
-      <p>پخش در پلیر اختصاصی اندروید انجام می‌شود.</p>
-      <label for="native-video-url">نشانی مستقیم ویدیو (HTTPS)</label>
-      <div class="input-bind"><input id="native-video-url" type="url" value="${safeUrl(streamUrl)}" placeholder="https://…/video.mkv"><button class="primary-button" id="native-player-open" type="button">باز کردن پلیر</button></div>
-      <p id="native-player-status" role="status"></p></section></div>`;
+      <p id="native-player-status" role="status">در حال باز کردن پلیر…</p>
+      <button class="primary-button" id="native-player-open" type="button" hidden>تلاش دوباره</button></section></div>`;
     const bridge = window.VizostenNative;
     const status = $('#native-player-status');
+    const retry = $('#native-player-open');
     if (!bridge || typeof bridge.postMessage !== 'function') {
       status.textContent = 'پلیر بومی در این نسخه از برنامه در دسترس نیست؛ WebView اندروید را به‌روزرسانی کنید.';
       return;
     }
     bridge.onmessage = (event) => {
-      if (event.data !== 'ok' && status.isConnected) status.textContent = 'باز کردن پلیر ممکن نشد؛ نشانی و دسترسی فایل را بررسی کنید.';
+      if (!status.isConnected) return;
+      status.textContent = event.data === 'ok' ? 'پلیر باز شد.' : 'باز کردن پلیر ممکن نشد؛ دوباره تلاش کنید.';
+      retry.hidden = false;
     };
     const open = () => {
       let uri;
       try {
-        uri = new URL($('#native-video-url').value.trim());
+        uri = new URL(streamUrl);
         if (uri.protocol !== 'https:' || uri.username || uri.password) throw new Error();
-      } catch { status.textContent = 'نشانی مستقیم HTTPS معتبر وارد کنید.'; return; }
-      let sourceMatches = false;
-      try { sourceMatches = uri.href === new URL(streamUrl).href; } catch { /* no configured source */ }
-      const tracks = (key) => sourceMatches ? [...new Set(matchingSources.map((item) => item[key]).filter(Boolean))].slice(0, 30) : [];
+      } catch { status.textContent = 'منبع پخش معتبری برای این محتوا تنظیم نشده است.'; retry.hidden = true; return; }
+      const tracks = (key) => [...new Set(matchingSources.map((item) => item[key]).filter(Boolean))].slice(0, 30);
       let localResume = 0;
       try { localResume = Number(JSON.parse(localStorage.getItem(`vizosten-progress:${content.id}`) || 'null')?.position || 0); } catch { /* storage is optional */ }
       const seconds = state.user ? Number(resumeEntry?.positionSeconds || 0) : localResume;
@@ -619,12 +609,12 @@
         streamUrl: uri.href, subtitleUrls: tracks('subtitleUrl'), audioUrls: tracks('audioUrl'),
         resumeMillis: Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds * 1000)) : 0,
         sessionToken: state.user ? state.token : '' };
-      status.textContent = '';
+      status.textContent = 'در حال باز کردن پلیر…'; retry.hidden = true;
       try { bridge.postMessage(JSON.stringify(payload)); }
-      catch { status.textContent = 'باز کردن پلیر بومی ممکن نشد.'; }
+      catch { status.textContent = 'باز کردن پلیر بومی ممکن نشد.'; retry.hidden = false; }
     };
-    $('#native-player-open').addEventListener('click', open);
-    if (streamUrl) open();
+    retry.addEventListener('click', open);
+    open();
   }
 
   function formatTime(seconds) {
@@ -932,79 +922,32 @@
 
   }
 
-  async function bindPlayerSource(type, sourceUrl = '', activate = true) {
+  // Only tracks associated with the selected administrator-configured source.
+  async function bindPlayerSource(type, sourceUrl) {
     const player = state.player;
-    if (!player) return;
-    const input = $(`#${type}-url`);
+    if (!player || !['subtitle', 'audio'].includes(type)) return;
     let url;
     try {
-      const rawUrl = (sourceUrl || input.value).trim();
-      if (!rawUrl) throw new Error();
-      const parsed = new URL(rawUrl, window.location.origin);
-      if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error();
+      const parsed = new URL(sourceUrl, window.location.origin);
+      if (!['http:', 'https:'].includes(parsed.protocol)) return;
       url = parsed.toString();
-    } catch {
-      toast('یک نشانی HTTP یا HTTPS معتبر وارد کنید.', 'error');
-      return;
-    }
-    if (type === 'video') {
-      player.video.pause();
-      player.externalAudios.forEach((track) => track.audio.pause());
-      player.externalAudios = [];
-      player.externalAudio = null;
-      player.externalAudioEnabled = false;
-      player.video.muted = false;
-      player.subtitles = [];
-      player.selectedSubtitle = 'off';
-      $('#external-subtitle').textContent = '';
-      $('#external-subtitle').style.display = 'none';
-      player.hasAppliedResume = true;
-      player.preRollChecked = false;
-      player.midRollChecked = false;
-      player.postRollShown = false;
-      player.video.src = url;
-      player.video.classList.remove('pixelated');
-      $('#unavailable-overlay')?.remove();
-      player.video.load();
-      toast('نشانی ویدیو متصل شد.', 'success');
-      return;
-    }
+    } catch { return; }
     if (type === 'audio') {
       const audio = new Audio(url);
       audio.preload = 'metadata';
       audio.volume = Number($('#volume')?.value ?? 1);
-      const index = player.externalAudios.push({ audio, label: `صدای خارجی ${player.externalAudios.length + 1}` }) - 1;
-      if (!activate) { player.refreshSettings?.(); return; }
-      player.externalAudio?.pause();
-      player.externalAudio = audio;
-      player.externalAudioEnabled = true;
-      player.video.muted = true;
-      try { audio.currentTime = player.video.currentTime; } catch { /* metadata may not yet be available */ }
-      if (!player.video.paused) audio.play().catch(() => toast('پخش صدای خارجی ممکن نشد.', 'error'));
-      input.value = '';
-      $('#settings-button')?.click();
-      toast(`صدای خارجی ${formatNumber(index + 1)} اضافه شد.`, 'success');
+      player.externalAudios.push({ audio, label: `صدای خارجی ${player.externalAudios.length + 1}` });
+      player.refreshSettings?.();
       return;
     }
     try {
       const response = await fetch(url, { mode: 'cors' });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const text = await response.text();
-      const cues = parseSrt(text);
-      if (!cues.length) throw new Error('هیچ بازه زمانی معتبری پیدا نشد');
-      if (state.player !== player) return;
-      const index = player.subtitles.push({ cues, label: `زیرنویس خارجی ${player.subtitles.length + 1}` }) - 1;
+      if (!response.ok) return;
+      const cues = parseSrt(await response.text());
+      if (!cues.length || state.player !== player) return;
+      player.subtitles.push({ cues, label: `زیرنویس خارجی ${player.subtitles.length + 1}` });
       player.refreshSettings?.();
-      if (activate) {
-        player.selectedSubtitle = `external-${index}`;
-        [...player.video.textTracks].forEach((track) => { track.mode = 'disabled'; });
-        input.value = '';
-        toast(`${formatNumber(cues.length)} خط زیرنویس بارگذاری شد.`, 'success');
-        $('#settings-button')?.click();
-      }
-    } catch (error) {
-      if (activate && state.player === player) toast(`زیرنویس بارگذاری نشد؛ سرور فایل باید CORS را مجاز کند. ${error.message}`, 'error');
-    }
+    } catch { /* A track host may not allow CORS. Other tracks remain usable. */ }
   }
 
   // Count a rendered creative, not merely an ad-server response. This is an
@@ -1615,8 +1558,6 @@
     if (option) { beginDownload(option.dataset.downloadMedia); return; }
     const favorite = event.target.closest('[data-favorite]');
     if (favorite) { toggleFavorite(favorite.dataset.favorite); return; }
-    const bind = event.target.closest('[data-bind]');
-    if (bind) { bindPlayerSource(bind.dataset.bind); return; }
     const skip = event.target.closest('#skip-ad');
     if (skip && !skip.disabled) {
       recordAdEvent({ id: skip.dataset.adId, session: skip.dataset.adSession }, 'skip');

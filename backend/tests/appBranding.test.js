@@ -18,7 +18,7 @@ test('Vizosten browser and PWA branding reference shipped assets', () => {
   assert.doesNotMatch(header, /<img\b/);
   assert.doesNotMatch(html, /سینمای شخصی شما/);
   const worker = read('frontend/sw.js');
-  for (const asset of ['/styles.css?v=10', '/app.js?v=10']) {
+  for (const asset of ['/styles.css?v=11', '/app.js?v=11']) {
     assert.ok(html.includes(asset));
     assert.ok(worker.includes(asset));
   }

@@ -9,7 +9,7 @@ const script = fs.readFileSync(path.join(root, 'frontend/app.js'), 'utf8');
 const html = fs.readFileSync(path.join(root, 'frontend/index.html'), 'utf8');
 const delay = (ms = 10) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function setup({ ad = null, midAd = null, downloadAd = null, sources = [], stored = 0, signedIn = false, mediaItems = [], prices = [], native = false, noNativeBridge = false } = {}) {
+async function setup({ ad = null, midAd = null, downloadAd = null, sources = [], stored = 0, signedIn = false, mediaItems = [], prices = [], native = false, noNativeBridge = false, streamUrl = 'https://media.example/video.mp4' } = {}) {
   const dom = new JSDOM(html, { url: 'https://example.com/#/player/asset', runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
   const requests = [];
@@ -35,7 +35,7 @@ async function setup({ ad = null, midAd = null, downloadAd = null, sources = [],
     else if (url === '/api/me') data = { user: { id: '1', accountName: 'آزمایش' } };
     else if (url === '/api/progress') data = { items: [] };
     else if (url === '/api/advertiser/profile') data = { campaigns: [], wallet: { balance: 0, currency: 'IRR' }, analytics: {} };
-    else if (url === '/api/contents/asset') data = { content: { id: 'asset', title: 'فیلم', type: 'movie', genres: [], imdbScore: null, streamUrl: 'https://media.example/video.mp4' } };
+    else if (url === '/api/contents/asset') data = { content: { id: 'asset', title: 'فیلم', type: 'movie', genres: [], imdbScore: null, streamUrl } };
     else if (url === '/api/contents/asset/media-options') data = { items: mediaItems };
     else if (url === '/api/contents/asset/player-sources') data = { sources };
     else if (String(url).startsWith('/api/ads/serve')) data = { ad: String(url).includes('pre_roll') ? ad : String(url).includes('mid_roll') ? midAd : String(url).includes('banner_download') ? downloadAd : null };
@@ -52,18 +52,15 @@ async function setup({ ad = null, midAd = null, downloadAd = null, sources = [],
 }
 
 test('player adds and selects several subtitles and audio tracks, styles and resumes', async () => {
-  const { dom, w, d } = await setup({ stored: 35 });
+  const sources = [1, 2].map(n => ({ streamUrl: 'https://media.example/video.mp4', subtitleUrl: `https://media.example/subtitle${n}.srt`, audioUrl: `https://media.example/audio${n}.mp3` }));
+  const { dom, w, d } = await setup({ stored: 35, sources });
   try {
     const video = d.querySelector('#video');
     video.dispatchEvent(new w.Event('loadedmetadata'));
     assert.equal(video.currentTime, 35);
-    for (const n of [1, 2]) {
-      d.querySelector('#subtitle-url').value = `https://media.example/subtitle${n}.srt`;
-      d.querySelector('[data-bind="subtitle"]').click();
-      await delay();
-      d.querySelector('#audio-url').value = `https://media.example/audio${n}.mp3`;
-      d.querySelector('[data-bind="audio"]').click();
-    }
+    await delay();
+    assert.equal(d.querySelector('.source-tools'), null);
+    assert.equal(d.querySelector('[data-bind]'), null);
     d.querySelector('#settings-button').click();
     assert.equal(d.querySelectorAll('[data-subtitle-track^="external-"]').length, 2);
     assert.equal(d.querySelectorAll('[data-audio-track^="external-audio-"]').length, 2);
@@ -229,11 +226,12 @@ test('advertiser creative type follows the selected placement', async () => {
 
 
 test('WebVTT cue identifiers and cue settings are parsed', async () => {
-  const { dom, w, d } = await setup();
+  const { dom, w, d } = await setup({ sources: [{ streamUrl: 'https://media.example/video.mp4', subtitleUrl: 'https://media.example/subtitle-named.vtt' }] });
   try {
     const video = d.querySelector('#video');
-    d.querySelector('#subtitle-url').value = 'https://media.example/subtitle-named.vtt';
-    d.querySelector('[data-bind="subtitle"]').click(); await delay();
+    await delay();
+    d.querySelector('#settings-button').click();
+    d.querySelector('[data-subtitle-track="external-0"]').click();
     video.currentTime = 2; video.dispatchEvent(new w.Event('timeupdate'));
     assert.equal(d.querySelector('#external-subtitle').textContent, 'متن وب');
   } finally { dom.window.close(); }
@@ -277,15 +275,13 @@ test('Android sends selected source, tracks and account session to native player
     assert.equal(message.sessionToken, 'test-token');
     assert.deepEqual(message.subtitleUrls, ['https://media.example/a.srt', 'https://media.example/b.vtt']);
     assert.deepEqual(message.audioUrls, ['https://media.example/a.mp3', 'https://media.example/b.mp3']);
-    d.querySelector('#native-video-url').value = 'http://insecure.example/video.mp4';
-    d.querySelector('#native-player-open').click();
-    assert.equal(nativeMessages.length, 1);
-    assert.match(d.querySelector('#native-player-status').textContent, /HTTPS/);
-    d.querySelector('#native-video-url').value = 'https://another.example/video.mp4';
+    assert.equal(d.querySelector('#native-video-url'), null);
+    assert.equal(d.querySelector('input[type="url"]'), null);
+    assert.equal(d.querySelector('#native-player-status').textContent.includes('media.example'), false);
     d.querySelector('#native-player-open').click();
     assert.equal(nativeMessages.length, 2);
-    assert.equal(nativeMessages[1].subtitleUrls.length, 0);
-    assert.equal(nativeMessages[1].audioUrls.length, 0);
+    assert.equal(nativeMessages[1].streamUrl, message.streamUrl);
+    assert.deepEqual(nativeMessages[1].subtitleUrls, message.subtitleUrls);
   } finally { dom.window.close(); }
 });
 
@@ -295,4 +291,19 @@ test('Android without a supported native bridge reports an error and does not fa
     assert.equal(d.querySelector('#video'), null);
     assert.match(d.querySelector('#native-player-status').textContent, /WebView/);
   } finally { dom.window.close(); }
+});
+
+
+test('missing administrator source does not offer a manual URL field', async () => {
+  for (const native of [false, true]) {
+    const { dom, d, nativeMessages } = await setup({ native, streamUrl: '' });
+    try {
+      assert.equal(d.querySelector('input[type="url"]'), null);
+      assert.equal(d.querySelector('[data-bind]'), null);
+      if (native) {
+        assert.equal(nativeMessages.length, 0);
+        assert.match(d.querySelector('#native-player-status').textContent, /منبع پخش/);
+      } else assert.ok(d.querySelector('#unavailable-overlay'));
+    } finally { dom.window.close(); }
+  }
 });

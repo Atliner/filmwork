@@ -78,3 +78,12 @@ test('diagnostics are local, privacy-preserving, and available from both screens
   assert.match(player, /VLC_INITIALIZING/);
   assert.match(player, /catch \(RuntimeException \| LinkageError error\)/);
 });
+
+
+test('native controls are dismissible and subtitle styling never restarts the active stream', () => {
+  const code = read('apps/android/app/src/experimentalNative/java/com/filmwork/app/NativePlayerActivity.java');
+  assert.match(code, /setControlsVisible\(!controlsVisible\)/);
+  assert.match(code, /postDelayed\(hideControls, 4000\)/);
+  assert.match(code, /saveDeferredSubtitleStyle/);
+  assert.doesNotMatch(code, /recreateEngine|promptTrackUrl|افزودن لینک/);
+});

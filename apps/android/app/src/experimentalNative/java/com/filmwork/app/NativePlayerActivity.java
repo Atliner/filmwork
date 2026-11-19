@@ -20,7 +20,6 @@ import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ImageView;
@@ -61,6 +60,11 @@ public final class NativePlayerActivity extends Activity {
   private TextView subtitleCount;
   private Button play;
   private SeekBar seek;
+  private View topControls, centerControls, bottomControls;
+  private boolean controlsVisible = true;
+  private final Runnable hideControls = () -> {
+    if (!this.userSeeking && this.phase == Phase.CONTENT && this.player != null && this.player.isPlaying()) setControlsVisible(false);
+  };
   private enum Phase { LOADING, CONTENT, AD_LOADING, AD, FINISHED }
   private Phase phase = Phase.LOADING;
   private NativeAdClient adClient;
@@ -253,31 +257,37 @@ public final class NativePlayerActivity extends Activity {
     // black or leave video invisible on some devices.
     videoLayout = new VLCVideoLayout(this);
     content.addView(videoLayout, new FrameLayout.LayoutParams(-1, -1));
+    View tapSurface = new View(this);
+    tapSurface.setContentDescription("نمایش یا پنهان کردن کنترل‌های پخش");
+    tapSurface.setOnClickListener(v -> setControlsVisible(!controlsVisible));
+    content.addView(tapSurface, new FrameLayout.LayoutParams(-1, -1));
 
     LinearLayout top = new LinearLayout(this);
+    topControls = top;
     top.setGravity(Gravity.CENTER_VERTICAL);
-    top.setPadding(dp(8), dp(4), dp(8), dp(4));
-    top.setBackgroundColor(0xc9000000);
+    top.setPadding(dp(12), dp(8), dp(12), dp(16));
+    top.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xdd08090d, 0x0008090d}));
     FrameLayout.LayoutParams topParams = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
     content.addView(top, topParams);
-    top.addView(button("‹", this::finish));
-    TextView title = label(getIntent().getStringExtra("title") == null ? "ویزوستن" : getIntent().getStringExtra("title"), 14);
-    title.setMaxLines(2);
+    Button back = button("‹", this::finish); back.setContentDescription("بازگشت");
+    back.setTextSize(24); top.addView(back, new LinearLayout.LayoutParams(dp(48), dp(48)));
+    TextView title = label(getIntent().getStringExtra("title") == null ? "ویزوستن" : getIntent().getStringExtra("title"), 16);
+    title.setSingleLine(true); title.setEllipsize(android.text.TextUtils.TruncateAt.END);
+    title.setPadding(dp(10), 0, dp(10), 0);
+    title.setTypeface(null, android.graphics.Typeface.BOLD);
     top.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-    audioCount = label("صدا", 12); audioCount.setOnClickListener(v -> showTracks(false));
-    subtitleCount = label("زیرنویس", 12); subtitleCount.setOnClickListener(v -> showTracks(true));
-    audioCount.setPadding(dp(8), dp(12), dp(8), dp(12));
-    subtitleCount.setPadding(dp(8), dp(12), dp(8), dp(12));
-    top.addView(audioCount); top.addView(subtitleCount);
-    top.addView(button("⚙", this::showSubtitleSettings));
-    top.addView(button("ⓘ", () -> PlayerDiagnostics.show(this, false)));
+    Button info = button("ⓘ", () -> PlayerDiagnostics.show(this, false));
+    info.setContentDescription("گزارش عیب‌یابی"); top.addView(info, new LinearLayout.LayoutParams(dp(48), dp(48)));
 
     LinearLayout center = new LinearLayout(this);
+    centerControls = center;
     center.setGravity(Gravity.CENTER);
     center.setOrientation(LinearLayout.HORIZONTAL);
     FrameLayout.LayoutParams centerParams = new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER);
     content.addView(center, centerParams);
-    center.addView(button("↶ ۱۰", () -> seekRelative(-10000)));
+    Button backTen = button("↶ ۱۰", () -> seekRelative(-10000));
+    backTen.setContentDescription("۱۰ ثانیه عقب");
+    center.addView(backTen, new LinearLayout.LayoutParams(dp(64), dp(56)));
     play = button("▶", () -> {
       if (player == null) return;
       if (phase == Phase.FINISHED) {
@@ -292,17 +302,24 @@ public final class NativePlayerActivity extends Activity {
         if (player.getTime() > 1000) requestInterstitial("pause_overlay", false, false);
       } else { clearBanner(); player.play(); }
     });
-    center.addView(play);
-    center.addView(button("۱۰ ↷", () -> seekRelative(10000)));
+    play.setTextSize(23); play.setContentDescription("پخش یا مکث");
+    LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(dp(68), dp(68));
+    playParams.setMargins(dp(14), 0, dp(14), 0);
+    center.addView(play, playParams);
+    Button forwardTen = button("۱۰ ↷", () -> seekRelative(10000));
+    forwardTen.setContentDescription("۱۰ ثانیه جلو");
+    center.addView(forwardTen, new LinearLayout.LayoutParams(dp(64), dp(56)));
 
     LinearLayout timeline = new LinearLayout(this);
     timeline.setGravity(Gravity.CENTER_VERTICAL);
     timeline.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
     timeline.setPadding(dp(10), dp(6), dp(10), dp(6));
-    timeline.setBackgroundColor(0xc9000000);
+    timeline.setBackgroundColor(Color.TRANSPARENT);
     LinearLayout bottom = new LinearLayout(this);
+    bottomControls = bottom;
     bottom.setOrientation(LinearLayout.VERTICAL);
-    bottom.setBackgroundColor(0xc9000000);
+    bottom.setPadding(dp(8), dp(16), dp(8), dp(6));
+    bottom.setBackground(new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, new int[]{0xee08090d, 0x0008090d}));
     FrameLayout.LayoutParams timelineParams = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
     content.addView(bottom, timelineParams);
     bottom.addView(timeline, new LinearLayout.LayoutParams(-1, -2));
@@ -311,36 +328,30 @@ public final class NativePlayerActivity extends Activity {
     timeline.addView(elapsed); timeline.addView(seek, new LinearLayout.LayoutParams(0, -2, 1)); timeline.addView(duration);
     seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
       @Override public void onProgressChanged(SeekBar bar, int value, boolean fromUser) { }
-      @Override public void onStartTrackingTouch(SeekBar bar) { userSeeking = true; }
+      @Override public void onStartTrackingTouch(SeekBar bar) { userSeeking = true; handler.removeCallbacks(hideControls); }
       @Override public void onStopTrackingTouch(SeekBar bar) {
         if (phase == Phase.CONTENT && player != null && player.getLength() > 0) player.setTime(player.getLength() * bar.getProgress() / 1000);
         userSeeking = false;
+        scheduleControlsHide();
       }
     });
     LinearLayout options = new LinearLayout(this);
     options.setGravity(Gravity.CENTER_VERTICAL);
-    options.setPadding(dp(8), 0, dp(8), dp(4));
-    options.addView(button("سرعت", this::showSpeed));
-    options.addView(button("⛶", () -> {
+    options.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+    audioCount = button("صدا", () -> showTracks(false));
+    subtitleCount = button("زیرنویس", () -> showTracks(true));
+    addOption(options, audioCount);
+    addOption(options, subtitleCount);
+    Button settings = button("⚙", this::showSubtitleSettings);
+    settings.setContentDescription("تنظیمات زیرنویس"); addOption(options, settings);
+    addOption(options, button("سرعت", this::showSpeed));
+    Button volume = button("◖))", this::showVolume); volume.setContentDescription("تنظیم صدا"); addOption(options, volume);
+    Button fullscreen = button("⛶", () -> {
       if (getRequestedOrientation() == ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE)
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
       else setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
-    }));
-    TextView volumeLabel = label("صدا", 12);
-    volumeLabel.setPadding(dp(8), 0, dp(4), 0);
-    options.addView(volumeLabel);
-    SeekBar volumeBar = new SeekBar(this); volumeBar.setMax(100); volumeBar.setProgress(playbackVolume);
-    options.addView(volumeBar, new LinearLayout.LayoutParams(0, -2, 1));
-    volumeBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-      @Override public void onProgressChanged(SeekBar bar, int value, boolean fromUser) {
-        if (!fromUser) return;
-        playbackVolume = value;
-        if (player != null) player.setVolume(value);
-        getSharedPreferences("vizosten-player", MODE_PRIVATE).edit().putInt("playbackVolume", value).apply();
-      }
-      @Override public void onStartTrackingTouch(SeekBar bar) { }
-      @Override public void onStopTrackingTouch(SeekBar bar) { }
     });
+    fullscreen.setContentDescription("تغییر جهت صفحه"); addOption(options, fullscreen);
     bottom.addView(options, new LinearLayout.LayoutParams(-1, -2));
     bannerHost = new FrameLayout(this);
     FrameLayout.LayoutParams bannerParams = new FrameLayout.LayoutParams(-1, dp(88), Gravity.BOTTOM);
@@ -351,7 +362,9 @@ public final class NativePlayerActivity extends Activity {
     playbackStatus.setOrientation(LinearLayout.VERTICAL);
     playbackStatus.setGravity(Gravity.CENTER);
     playbackStatus.setPadding(dp(16), dp(12), dp(16), dp(12));
-    playbackStatus.setBackgroundColor(0xdd18181b);
+    GradientDrawable statusBackground = new GradientDrawable();
+    statusBackground.setColor(0xe6202129); statusBackground.setCornerRadius(dp(14));
+    playbackStatus.setBackground(statusBackground);
     playbackStatusText = label("در حال آماده‌سازی پخش…", 14);
     playbackStatusText.setGravity(Gravity.CENTER);
     playbackStatus.addView(playbackStatusText);
@@ -443,8 +456,9 @@ public final class NativePlayerActivity extends Activity {
     if (phase != Phase.CONTENT) return;
     if (!tracksAdded) PlayerDiagnostics.mark(this, "CONTENT_PLAYING");
     playbackStatus.setVisibility(View.GONE);
-    if (tracksAdded) return;
+    if (tracksAdded) { scheduleControlsHide(); return; }
     tracksAdded = true;
+    scheduleControlsHide();
     for (Uri uri : subtitles) player.addSlave(IMedia.Slave.Type.Subtitle, uri, false);
     for (Uri uri : audios) player.addSlave(IMedia.Slave.Type.Audio, uri, false);
     if (pendingSeek > 0) { player.setTime(pendingSeek); pendingSeek = 0; }
@@ -543,6 +557,7 @@ public final class NativePlayerActivity extends Activity {
       if (player != null) player.stop();
       phase = Phase.FINISHED;
       play.setText("▶");
+      setControlsVisible(true);
       return;
     }
     resumeAfterRebuild = resumeAfterAd;
@@ -689,17 +704,19 @@ public final class NativePlayerActivity extends Activity {
       if (track.id < 0) continue;
       String name = track.name == null ? "" : track.name.trim();
       name = name.replaceAll("(?i)\\s*\\(null\\)", "").trim();
+      // Some LibVLC demuxers expose an external slave URL as the track name.
+      if (name.matches("(?is).*https?://.*")) name = "ترک خارجی " + track.id;
       if (name.isEmpty() || name.equalsIgnoreCase("null")) name = "ترک " + track.id;
       final int id = track.id;
       addTrackButton(list, name, id == selected, () -> { if (isSubtitle) player.setSpuTrack(id); else player.setAudioTrack(id); });
     }
-    Button add = button(isSubtitle ? "افزودن لینک زیرنویس" : "افزودن لینک صدا", () -> {
-      if (trackDialog != null) trackDialog.dismiss();
-      promptTrackUrl(isSubtitle);
-    });
-    list.addView(add, new LinearLayout.LayoutParams(-1, -2));
+    if (trackCount(tracks) == 0) {
+      TextView empty = label("ترکی یافت نشد؛ اگر ویدیو در حال بارگیری است کمی صبر کنید.", 14);
+      empty.setPadding(dp(12), dp(14), dp(12), dp(14));
+      list.addView(empty);
+    }
     ScrollView scroller = new ScrollView(this); scroller.addView(list);
-    trackDialog = new AlertDialog.Builder(this).setTitle(isSubtitle ? "انتخاب زیرنویس" : "انتخاب صدا")
+    trackDialog = new AlertDialog.Builder(this, R.style.PlayerDialog).setTitle(isSubtitle ? "انتخاب زیرنویس" : "انتخاب صدا")
         .setView(scroller).setNegativeButton("بستن", null).create();
     trackDialog.show();
   }
@@ -711,31 +728,15 @@ public final class NativePlayerActivity extends Activity {
     });
     item.setAllCaps(false); item.setSingleLine(false); item.setMaxLines(5);
     item.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
-    item.setTextColor(selected ? 0xffef4444 : Color.WHITE);
+    item.setTextColor(selected ? 0xffffc451 : Color.WHITE);
     list.addView(item, new LinearLayout.LayoutParams(-1, -2));
-  }
-
-  private void promptTrackUrl(boolean subtitle) {
-    EditText field = new EditText(this);
-    field.setSingleLine(true);
-    field.setHint("https://…");
-    field.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
-    new AlertDialog.Builder(this).setTitle(subtitle ? "لینک زیرنویس" : "لینک صدا")
-        .setView(field).setNegativeButton("انصراف", null).setPositiveButton("افزودن", (dialog, which) -> {
-          Uri uri = safeHttps(field.getText().toString().trim());
-          if (uri == null || player == null) { Toast.makeText(this, "نشانی HTTPS معتبر وارد کنید.", Toast.LENGTH_SHORT).show(); return; }
-          ArrayList<Uri> list = subtitle ? subtitles : audios;
-          if (!list.contains(uri) && list.size() < 30) list.add(uri);
-          boolean ok = player.addSlave(subtitle ? IMedia.Slave.Type.Subtitle : IMedia.Slave.Type.Audio, uri, true);
-          Toast.makeText(this, ok ? "ترک اضافه شد." : "افزودن ترک ممکن نشد.", Toast.LENGTH_SHORT).show();
-        }).show();
   }
 
   private void showSpeed() {
     if (phase != Phase.CONTENT || player == null) return;
     String[] labels = {"۰٫۵×", "۰٫۷۵×", "عادی", "۱٫۲۵×", "۱٫۵×", "۲×"};
     float[] rates = {0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f};
-    new AlertDialog.Builder(this).setTitle("سرعت پخش").setItems(labels, (dialog, which) -> {
+    new AlertDialog.Builder(this, R.style.PlayerDialog).setTitle("سرعت پخش").setItems(labels, (dialog, which) -> {
       if (player == null || phase != Phase.CONTENT) return;
       playbackRate = rates[which];
       player.setRate(playbackRate);
@@ -744,8 +745,8 @@ public final class NativePlayerActivity extends Activity {
   }
 
   private void showSubtitleSettings() {
-    String[] choices = {"تأخیر: " + (subtitleDelayUs / 1000000f) + " ثانیه", "اندازه زیرنویس", "رنگ زیرنویس", "فونت زیرنویس"};
-    new AlertDialog.Builder(this).setTitle("تنظیمات زیرنویس").setItems(choices, (dialog, which) -> {
+    String[] choices = {"تأخیر: " + (subtitleDelayUs / 1000000f) + " ثانیه", "اندازه (برای پخش بعدی)", "رنگ (برای پخش بعدی)", "فونت (برای پخش بعدی)"};
+    new AlertDialog.Builder(this, R.style.PlayerDialog).setTitle("تنظیمات زیرنویس").setItems(choices, (dialog, which) -> {
       if (which == 0) showDelay();
       else if (which == 1) chooseSize();
       else if (which == 2) chooseColor();
@@ -755,7 +756,7 @@ public final class NativePlayerActivity extends Activity {
 
   private void showDelay() {
     String[] choices = {"نیم ثانیه زودتر", "بازنشانی", "نیم ثانیه دیرتر"};
-    new AlertDialog.Builder(this).setTitle("تأخیر زیرنویس").setItems(choices, (dialog, which) -> {
+    new AlertDialog.Builder(this, R.style.PlayerDialog).setTitle("تأخیر زیرنویس").setItems(choices, (dialog, which) -> {
       subtitleDelayUs = which == 1 ? 0 : Math.max(-60000000L, Math.min(60000000L, subtitleDelayUs + (which == 0 ? -500000 : 500000)));
       if (player != null) player.setSpuDelay(subtitleDelayUs);
       saveSubtitlePreferences();
@@ -766,35 +767,27 @@ public final class NativePlayerActivity extends Activity {
   private void chooseSize() {
     String[] labels = {"کوچک", "معمولی", "بزرگ", "خیلی بزرگ"};
     int[] scales = {20, 16, 12, 6};
-    new AlertDialog.Builder(this).setTitle("اندازه زیرنویس").setItems(labels, (dialog, which) -> { subtitleScale = scales[which]; recreateEngine(); }).setNegativeButton("بستن", null).show();
+    new AlertDialog.Builder(this, R.style.PlayerDialog).setTitle("اندازه زیرنویس").setItems(labels, (dialog, which) -> { subtitleScale = scales[which]; saveDeferredSubtitleStyle(); }).setNegativeButton("بستن", null).show();
   }
 
   private void chooseColor() {
     String[] labels = {"سفید", "زرد", "سبز"};
     int[] colors = {0xffffff, 0xffff00, 0x00ff00};
-    new AlertDialog.Builder(this).setTitle("رنگ زیرنویس").setItems(labels, (dialog, which) -> { subtitleColor = colors[which]; recreateEngine(); }).setNegativeButton("بستن", null).show();
+    new AlertDialog.Builder(this, R.style.PlayerDialog).setTitle("رنگ زیرنویس").setItems(labels, (dialog, which) -> { subtitleColor = colors[which]; saveDeferredSubtitleStyle(); }).setNegativeButton("بستن", null).show();
   }
 
   private void chooseFont() {
-    new AlertDialog.Builder(this).setTitle("فونت زیرنویس").setItems(fontLabels, (dialog, which) -> {
+    new AlertDialog.Builder(this, R.style.PlayerDialog).setTitle("فونت زیرنویس").setItems(fontLabels, (dialog, which) -> {
       if (which > 0 && !new java.io.File(fontPaths[which]).isFile()) { Toast.makeText(this, "این فونت روی دستگاه موجود نیست.", Toast.LENGTH_SHORT).show(); return; }
-      subtitleFontIndex = which; recreateEngine();
+      subtitleFontIndex = which; saveDeferredSubtitleStyle();
     }).setNegativeButton("بستن", null).show();
   }
 
-  private void recreateEngine() {
-    if (phase != Phase.CONTENT) return;
+  // LibVLC 3 configures text rendering when its engine is created. Do not
+  // tear down an active network stream just to change appearance.
+  private void saveDeferredSubtitleStyle() {
     saveSubtitlePreferences();
-    if (player != null && phase == Phase.CONTENT) {
-      pendingSeek = Math.max(0, player.getTime());
-      resumeAfterRebuild = player.isPlaying();
-      pendingAudioId = player.getAudioTrack();
-      pendingSubtitleId = player.getSpuTrack();
-      restoreAttempts = 0;
-    }
-    releaseEngine();
-    createEngine();
-    startContent();
+    Toast.makeText(this, "ظاهر زیرنویس در باز کردن بعدی پلیر اعمال می‌شود؛ تأخیر فوراً تغییر می‌کند.", Toast.LENGTH_LONG).show();
   }
   private void saveSubtitlePreferences() {
     getSharedPreferences("vizosten-player", MODE_PRIVATE).edit()
@@ -814,12 +807,45 @@ public final class NativePlayerActivity extends Activity {
   }
   private int dp(int value) { return (int) (value * getResources().getDisplayMetrics().density + 0.5f); }
   private TextView label(String text, int size) { TextView v = new TextView(this); v.setText(text); v.setTextColor(Color.WHITE); v.setTextSize(size); return v; }
+  private void addOption(LinearLayout row, View view) {
+    LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(44), 1);
+    params.setMargins(dp(2), 0, dp(2), 0); row.addView(view, params);
+  }
+  private void showVolume() {
+    SeekBar slider = new SeekBar(this); slider.setMax(100); slider.setProgress(playbackVolume);
+    LinearLayout panel = new LinearLayout(this); panel.setPadding(dp(24), dp(12), dp(24), dp(12)); panel.addView(slider, new LinearLayout.LayoutParams(-1, -2));
+    slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+      @Override public void onProgressChanged(SeekBar bar, int value, boolean fromUser) {
+        if (!fromUser) return;
+        playbackVolume = value; if (player != null) player.setVolume(value);
+        getSharedPreferences("vizosten-player", MODE_PRIVATE).edit().putInt("playbackVolume", value).apply();
+      }
+      @Override public void onStartTrackingTouch(SeekBar bar) { }
+      @Override public void onStopTrackingTouch(SeekBar bar) { }
+    });
+    new AlertDialog.Builder(this, R.style.PlayerDialog).setTitle("صدای پخش").setView(panel).setPositiveButton("انجام", null).show();
+  }
+  private void setControlsVisible(boolean show) {
+    controlsVisible = show;
+    int visibility = show ? View.VISIBLE : View.INVISIBLE;
+    if (topControls != null) topControls.setVisibility(visibility);
+    if (centerControls != null) centerControls.setVisibility(visibility);
+    if (bottomControls != null) bottomControls.setVisibility(visibility);
+    handler.removeCallbacks(hideControls);
+    if (show) scheduleControlsHide();
+  }
+  private void scheduleControlsHide() {
+    handler.removeCallbacks(hideControls);
+    if (controlsVisible && !userSeeking && phase == Phase.CONTENT && player != null && player.isPlaying())
+      handler.postDelayed(hideControls, 4000);
+  }
   private Button button(String text, Runnable action) {
     Button b = new Button(this); b.setText(text); b.setTextColor(Color.WHITE); b.setAllCaps(false); b.setTextSize(13);
-    b.setMinWidth(0); b.setMinimumWidth(0);
-    GradientDrawable background = new GradientDrawable(); background.setColor(0x9918181b); background.setCornerRadius(dp(8));
-    background.setStroke(dp(1), 0x99ffffff); b.setBackground(background);
-    b.setPadding(dp(10), dp(8), dp(10), dp(8)); b.setOnClickListener(v -> action.run()); return b;
+    b.setMinWidth(0); b.setMinimumWidth(0); b.setMinHeight(0); b.setMinimumHeight(0);
+    GradientDrawable background = new GradientDrawable(); background.setColor(0x9924262f); background.setCornerRadius(dp(14));
+    b.setBackground(background);
+    b.setPadding(dp(3), dp(4), dp(3), dp(4));
+    b.setOnClickListener(v -> { action.run(); scheduleControlsHide(); }); return b;
   }
   private static String formatTime(long ms) {
     long value = Math.max(0, ms / 1000);

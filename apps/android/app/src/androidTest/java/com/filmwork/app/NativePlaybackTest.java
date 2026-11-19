@@ -55,6 +55,17 @@ public final class NativePlaybackTest {
     }
     return null;
   }
+  private static View findByDescription(View view, String description) {
+    if (description.contentEquals(view.getContentDescription() == null ? "" : view.getContentDescription())) return view;
+    if (view instanceof ViewGroup) {
+      ViewGroup group = (ViewGroup) view;
+      for (int i = 0; i < group.getChildCount(); i++) {
+        View result = findByDescription(group.getChildAt(i), description);
+        if (result != null) return result;
+      }
+    }
+    return null;
+  }
   private static boolean coloredFrame(TextureView view) {
     if (view == null || !view.isAvailable() || view.getWidth() < 10 || view.getHeight() < 10) return false;
     Bitmap bitmap = view.getBitmap(100, 56);
@@ -120,6 +131,26 @@ public final class NativePlaybackTest {
       assertTrue("two embedded audio tracks", audioTracks.get() >= 2);
       assertTrue("embedded subtitle track", subtitles.get() >= 1);
       assertTrue("external subtitle accepted by LibVLC", externalAdded.get());
+      scenario.onActivity(activity -> {
+        try {
+          Object originalPlayer = field(activity, "player");
+          int sequence = (Integer) field(activity, "mediaStartSequence");
+          Field scale = activity.getClass().getDeclaredField("subtitleScale"); scale.setAccessible(true); scale.setInt(activity, 12);
+          Method save = activity.getClass().getDeclaredMethod("saveDeferredSubtitleStyle"); save.setAccessible(true); save.invoke(activity);
+          assertSame("subtitle appearance does not recreate player", originalPlayer, field(activity, "player"));
+          assertEquals("subtitle appearance does not start a new stream", sequence, ((Integer) field(activity, "mediaStartSequence")).intValue());
+          Method visibility = activity.getClass().getDeclaredMethod("setControlsVisible", boolean.class);
+          visibility.setAccessible(true); visibility.invoke(activity, false);
+          assertEquals(View.INVISIBLE, ((View) field(activity, "bottomControls")).getVisibility());
+          View surface = findByDescription(activity.getWindow().getDecorView(), "نمایش یا پنهان کردن کنترل‌های پخش");
+          assertNotNull(surface); surface.performClick();
+          assertEquals(View.VISIBLE, ((View) field(activity, "bottomControls")).getVisibility());
+          if (((MediaPlayer) originalPlayer).isPlaying()) {
+            ((Runnable) field(activity, "hideControls")).run();
+            assertEquals(View.INVISIBLE, ((View) field(activity, "topControls")).getVisibility());
+          }
+        } catch (Exception e) { throw new AssertionError(e); }
+      });
     }
   }
 }
