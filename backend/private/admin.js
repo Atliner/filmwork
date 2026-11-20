@@ -1003,13 +1003,13 @@
 
         <div class="field-grid field-grid--wide">
           <label class="field"><span>لینک پوستر</span>
-            <input class="input" type="url" dir="ltr" data-field="posterUrl" data-poster-input value="${esc(draft.posterUrl)}" placeholder="https://example.com/poster.jpg">
-            <small>لینک تصویر عمودی پوستر که در سایت نمایش داده می‌شود.</small></label>
+            <div class="poster-import-row"><input class="input" type="url" dir="ltr" data-field="posterUrl" data-poster-input value="${esc(draft.posterUrl)}" placeholder="https://example.com/poster.jpg"><button class="button button--ghost button--sm" type="button" data-import-main-poster>دریافت از IMPAwards</button></div>
+            <small>لینک تصویر یا صفحهٔ پوستر IMPAwards را وارد کنید. در زمان ذخیره، تصویر از آن صفحه دریافت می‌شود.</small></label>
           <label class="field"><span>لینک پس‌زمینه (هیرو)</span>
             <input class="input" type="url" dir="ltr" data-field="backdropUrl" value="${esc(draft.backdropUrl)}" placeholder="https://example.com/backdrop.jpg"></label>
           <label class="field span-full"><span>گالری پوسترها (IMPAwards)</span>
             <div style="display:flex;gap:8px">
-              <input class="input" type="url" dir="ltr" data-gallery-input placeholder="https://.../poster.jpg">
+              <input class="input" type="url" dir="ltr" data-gallery-input placeholder="لینک تصویر یا صفحهٔ IMPAwards">
               <button class="button button--ghost button--sm" type="button" data-add-gallery>${ICONS.plus} افزودن</button>
             </div>
             <small>اولین تصویر گالری به‌عنوان پوستر اصلی پیشنهاد می‌شود؛ با ستاره می‌توانید هر تصویر را اصلی کنید.</small>
@@ -1186,10 +1186,20 @@
     };
   }
 
+  function isImpAwards(value) {
+    try { return ['impawards.com', 'www.impawards.com'].includes(new URL(value).hostname.toLowerCase()); } catch { return false; }
+  }
+  async function resolvePoster(value) {
+    if (!isImpAwards(value)) return value;
+    const imported = await api('/api/admin/import-poster', { method: 'POST', body: { url: value } });
+    if (!/^\/uploads\/posters\/[0-9a-f]{64}\.(?:jpg|png|webp)$/.test(imported.path || '')) throw new Error('نشانی تصویر دریافت‌شده معتبر نیست.');
+    return new URL(imported.path, window.location.origin).toString();
+  }
+
   async function saveEditor() {
     const editor = state.editor;
     if (!editor || state.busy) return;
-    const payload = readEditorDraft();
+    let payload = readEditorDraft();
     if (!payload.titleFa && !payload.titleEn) {
       toast('عنوان فارسی یا انگلیسی را وارد کنید.', 'error');
       editor.step = 2;
@@ -1199,6 +1209,18 @@
     state.busy = true;
     paintEditor();
     try {
+      // Also convert legacy links at save time, so a page URL is never stored as
+      // an image. Keep imported URLs in the draft if a later save fails.
+      const resolved = new Map();
+      const convert = async (url) => {
+        if (!isImpAwards(url)) return url;
+        if (!resolved.has(url)) resolved.set(url, resolvePoster(url));
+        return resolved.get(url);
+      };
+      editor.draft.posterUrl = await convert(editor.draft.posterUrl);
+      editor.draft.posterGallery = await Promise.all((editor.draft.posterGallery || []).map(convert));
+      payload = readEditorDraft();
+      if (!payload || state.editor !== editor) return;
       if (editor.mode === 'create') {
         const created = await api('/api/admin/contents', { method: 'POST', body: payload });
         toast('محتوا ثبت شد.');
@@ -1240,7 +1262,7 @@
         titleEn: fields.titleEn || editor.draft.titleEn,
         description: fields.description || editor.draft.description,
         releaseYear: fields.releaseYear ?? editor.draft.releaseYear,
-        lastAirYear: fields.lastAirYear ?? '',
+        lastAirYear: fields.lastAirYear ?? editor.draft.lastAirYear ?? '',
         seriesRunning: Boolean(fields.seriesRunning),
         currentSeason: fields.currentSeason ?? '',
         broadcastNote: fields.broadcastNote || '',
@@ -1265,7 +1287,7 @@
       }
       editor.qualities = (fields.qualities?.length ? fields.qualities : ['1080p', '720p']).join('، ');
       editor.meta = draft.meta;
-      editor.sourceKind = 'telegram_link';
+      editor.sourceKind = draft.source?.label || (link ? 'telegram_link' : 'text');
       if (draft.versions?.length) {
         editor.versions = draft.versions.map((version) => ({
           kind: version.kind,
@@ -2600,13 +2622,32 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
         paintEditor();
         return;
       }
+      if (button.matches('[data-import-main-poster]')) {
+        const editor = state.editor; const value = editor?.draft.posterUrl?.trim();
+        if (!value || !isImpAwards(value)) { toast('لینک صفحه یا تصویر IMPAwards را در کادر پوستر وارد کنید.', 'error'); return; }
+        button.disabled = true;
+        try {
+          const result = await resolvePoster(value);
+          if (state.editor !== editor) return;
+          editor.draft.posterUrl = result;
+          if (!editor.draft.posterGallery.includes(result)) editor.draft.posterGallery.push(result);
+          paintEditor(); toast('پوستر دریافت شد؛ برای ثبت نهایی، اثر را ذخیره کنید.');
+        } catch (error) { toast(error.message, 'error'); button.disabled = false; }
+        return;
+      }
       if (button.matches('[data-add-gallery]')) {
+        const editor = state.editor;
         const input = $('[data-gallery-input]');
         const url = safeUrl(input?.value?.trim());
-        if (!url) { toast('لینک تصویر معتبر نیست.', 'error'); return; }
-        if (!state.editor.draft.posterGallery.includes(url)) state.editor.draft.posterGallery.push(url);
-        if (!state.editor.draft.posterUrl) state.editor.draft.posterUrl = url;
-        paintEditor();
+        if (!editor || !url) { toast('لینک تصویر معتبر نیست.', 'error'); return; }
+        button.disabled = true;
+        try {
+          const image = await resolvePoster(url);
+          if (state.editor !== editor) return;
+          if (!editor.draft.posterGallery.includes(image)) editor.draft.posterGallery.push(image);
+          if (!editor.draft.posterUrl) editor.draft.posterUrl = image;
+          paintEditor();
+        } catch (error) { toast(error.message, 'error'); button.disabled = false; }
         return;
       }
       if (button.matches('[data-remove-gallery]')) {

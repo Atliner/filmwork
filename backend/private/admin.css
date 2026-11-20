@@ -748,3 +748,6 @@ table.data .muted { color: var(--muted); font-size: 10.5px; }
 .crew-associate small { display:block; color:var(--muted); margin-bottom:8px; line-height:1.7; }
 .crew-associate > div { display:flex; gap:8px; flex-wrap:wrap; }
 .crew-associate .input { flex:1 1 170px; min-width:0; }
+
+.poster-import-row { display:flex; gap:8px; flex-wrap:wrap; }
+.poster-import-row .input { flex:1 1 200px; min-width:0; }

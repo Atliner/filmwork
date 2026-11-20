@@ -11,6 +11,7 @@ const {
   telegramErrorDescription,
 } = require('../lib/telegram');
 const { ownerIds } = require('../middleware/auth');
+const { AppError } = require('../lib/errors');
 
 const {
   normalizeDigits,
@@ -103,43 +104,48 @@ function parseDirectives(rawText) {
   };
 }
 
+// Telegram's widget contains HTML entities; this decoder deliberately handles
+// only text (not markup) and rejects invalid Unicode rather than throwing.
+function decodeHtmlEntities(value) {
+  const named = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', zwnj: '\u200c', zwj: '\u200d', hellip: '…' };
+  return String(value).replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, code) => {
+    if (code[0] !== '#') return named[code.toLowerCase()] ?? entity;
+    const numeric = code[1].toLowerCase() === 'x' ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
+    return Number.isInteger(numeric) && numeric > 0 && numeric <= 0x10ffff && !(numeric >= 0xd800 && numeric <= 0xdfff) ? String.fromCodePoint(numeric) : entity;
+  });
+}
+
 async function fetchPublicTelegramPost(rawUrl) {
   let url;
-  try {
-    url = new URL(rawUrl);
-  } catch {
-    throw new Error('لینک پست تلگرام معتبر نیست.');
-  }
-  if (!['t.me', 'telegram.me'].includes(url.hostname.toLowerCase())) {
-    throw new Error('فقط لینک عمومی t.me پذیرفته می‌شود.');
+  try { url = new URL(rawUrl); } catch { throw new AppError(422, 'TELEGRAM_LINK_INVALID', 'لینک پست تلگرام معتبر نیست.'); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.port || !['t.me', 'telegram.me'].includes(url.hostname.toLowerCase())) {
+    throw new AppError(422, 'TELEGRAM_LINK_INVALID', 'فقط لینک عمومی t.me پذیرفته می‌شود.');
   }
   const parts = url.pathname.split('/').filter(Boolean);
-  if (parts.length < 2 || ['c', 's', 'joinchat', '+'].includes(parts[0].toLowerCase()) || !/^\d+$/.test(parts[1])) {
-    throw new Error('لینک باید به یک پیام کانال عمومی مانند t.me/channel/123 اشاره کند.');
+  if (parts.length !== 2 || ['c', 's', 'joinchat', '+'].includes(parts[0].toLowerCase()) || !/^\d+$/.test(parts[1])) {
+    throw new AppError(422, 'TELEGRAM_LINK_INVALID', 'لینک باید به یک پیام کانال عمومی مانند t.me/channel/123 اشاره کند.');
   }
   const username = parts[0].replace(/^@/, '');
-  if (!/^[A-Za-z0-9_]{5,32}$/.test(username)) throw new Error('نام کانال عمومی معتبر نیست.');
+  if (!/^[A-Za-z0-9_]{5,32}$/.test(username)) throw new AppError(422, 'TELEGRAM_LINK_INVALID', 'نام کانال عمومی معتبر نیست.');
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
+  const timer = setTimeout(() => controller.abort(), 10000);
   try {
     const response = await fetch(`https://t.me/${username}/${parts[1]}?embed=1&mode=tme`, {
-      redirect: 'follow',
-      signal: controller.signal,
-      headers: { 'user-agent': 'Filmwork-AdminParser/1.0' },
+      redirect: 'error', signal: controller.signal,
+      headers: { 'user-agent': 'Mozilla/5.0 (compatible; Filmwork/1.0)', accept: 'text/html' },
     });
-    if (!response.ok) throw new Error(`تلگرام پاسخ HTTP ${response.status} داد.`);
+    if (!response.ok) throw new AppError(502, 'TELEGRAM_HTTP_ERROR', `تلگرام پاسخ HTTP ${response.status} داد؛ عمومی بودن پست را بررسی کنید.`);
     const html = await response.text();
-    const match = html.match(/<div[^>]+class="[^"]*tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-    if (!match) throw new Error('متن عمومی این پیام قابل دریافت نیست.');
-    return decodeHtmlEntities(
-      match[1]
-        .replace(/<br\s*\/?>/gi, '\n')
-        .replace(/<\/p\s*>/gi, '\n')
-        .replace(/<[^>]+>/g, ''),
-    ).trim();
-  } finally {
-    clearTimeout(timer);
-  }
+    if (html.length > 2_000_000) throw new AppError(502, 'TELEGRAM_RESPONSE_LARGE', 'پاسخ تلگرام بیش از اندازه بزرگ است.');
+    const match = html.match(/<div\b[^>]*\bclass\s*=\s*["'][^"']*\btgme_widget_message_text\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+    if (!match) throw new AppError(422, 'TELEGRAM_POST_UNAVAILABLE', 'متن این پست عمومی قابل دریافت نیست؛ متن را مستقیماً در کادر بچسبانید.');
+    const text = decodeHtmlEntities(match[1].replace(/<br\s*\/?>/gi, '\n').replace(/<\/p\s*>/gi, '\n').replace(/<[^>]+>/g, '')).trim();
+    if (!text) throw new AppError(422, 'TELEGRAM_POST_EMPTY', 'متنی در این پست پیدا نشد.');
+    return text;
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError(502, 'TELEGRAM_UNREACHABLE', 'سرور به تلگرام دسترسی ندارد یا زمان اتصال تمام شد؛ متن پست را در کادر بچسبانید یا دسترسی خروجی هاست به t.me را بررسی کنید.');
+  } finally { clearTimeout(timer); }
 }
 
 function slugify(title, suffix) {

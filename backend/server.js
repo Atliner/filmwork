@@ -26,6 +26,7 @@ const { query, withTransaction, healthCheck, closePool } = require('./config/db'
 const { AppError, assert, asyncRoute } = require('./lib/errors');
 const { parseCatalogFilters, catalogFacets } = require('./lib/catalogFilters');
 const { createAliasIndex, expandAliases, displayCredits } = require('./lib/peopleAliases');
+const { importPoster } = require('./lib/posterImport');
 const {
   hmacHex,
   generateOpaqueToken,
@@ -263,6 +264,7 @@ function contentDto(row) {
     description: row.description,
     imdbScore: row.imdb_score === null ? null : Number(row.imdb_score),
     releaseYear: row.release_year,
+    lastAirYear: row.last_air_year ?? null,
     genres: parseJsonColumn(row.genres, []),
     directors: parseJsonColumn(row.directors, []),
     cast: parseJsonColumn(row.cast_members, []),
@@ -1438,6 +1440,15 @@ app.post('/api/admin/parse', requireAdmin, requireAdminCsrf, asyncRoute(async (r
   res.json({ draft });
 }));
 
+// Import the owner-selected poster into persistent uploads, avoiding mixed
+// content and third-party hotlink restrictions. No open proxy is exposed.
+app.post('/api/admin/import-poster', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  const url = asString(req.body?.url, 'لینک پوستر', { min: 10, max: 2048 });
+  const poster = await importPoster(url, path.join(uploadDirectory, 'posters'));
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(201).json(poster);
+}));
+
 /**
  * Host self-check: tells the owner what this server actually has, so a failing
  * dashboard can be explained without shell access (wrong schema version, MariaDB
@@ -2349,4 +2360,4 @@ if (require.main === module) {
   process.once('SIGINT', () => shutdown('SIGINT').then(() => process.exit(0)));
 }
 
-module.exports = { app, start, shutdown, botStatus, numberFromEnv, hooks };
+module.exports = { app, start, shutdown, botStatus, numberFromEnv, hooks, contentDto };

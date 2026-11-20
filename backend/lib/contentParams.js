@@ -225,9 +225,12 @@ async function buildParseDraft({ text, link }) {
   if (link) {
     const { fetchPublicTelegramPost } = require('../bots/adminBot');
     resolvedLink = asHttpUrl(link, 'لینک پست تلگرام', {});
-    const fetched = await fetchPublicTelegramPost(resolvedLink);
-    if (!sourceText) sourceLabel = 'telegram_link';
-    sourceText = sourceText || fetched;
+    // Prefer the explicitly pasted text. The owner can still retain the link as
+    // provenance even when the host cannot reach Telegram.
+    if (!sourceText) {
+      sourceText = await fetchPublicTelegramPost(resolvedLink);
+      sourceLabel = 'telegram_link';
+    }
   }
   if (!sourceText) {
     throw new AppError(422, 'EMPTY_SOURCE', 'متن یا لینک پست را وارد کنید.');

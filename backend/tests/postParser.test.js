@@ -154,8 +154,8 @@ test('reads a real channel post with bullets, emoji labels and a #hashtag header
   assert.deepEqual(fields.countries, ['آمریکا']);
   assert.equal(fields.ageRating, '+18');
   assert.deepEqual(fields.genres, ['پزشکی', 'درام', 'روان‌شناختی']);
-  assert.ok(fields.directors.includes('Damian Marcano'));
-  assert.ok(fields.cast.includes('Noah Wyle'));
+  assert.ok(fields.directors.includes('دامین مارکانو | Damian Marcano'));
+  assert.ok(fields.cast.includes('نوآ وایلی | Noah Wyle'));
   assert.match(fields.description, /بازگشت دکتر لنگدن/);
   assert.ok(!/دانلود|@Vizosten/u.test(fields.description));
   assert.ok(!fields.directors.some((name) => /سریال|امتیاز/u.test(name)));
@@ -185,9 +185,20 @@ test('an empty post produces an empty report rather than throwing', () => {
   assert.equal(meta.confidence, 0);
 });
 
-test('individual bilingual credit pairs are retained while legacy two-list input stays separate', () => {
+test('individual pairs and ordered bilingual lists retain their associations', () => {
   const explicit = parseContentPost('فیلم\nکارگردان: نام فارسی | English Name؛ نفر دوم | Second Name').fields;
   assert.deepEqual(explicit.directors, ['نام فارسی | English Name', 'نفر دوم | Second Name']);
   const legacy = parseContentPost('فیلم\nکارگردان: اول، دوم | One, Two').fields;
-  assert.deepEqual(legacy.directors, ['اول', 'دوم', 'One', 'Two']);
+  assert.deepEqual(legacy.directors, ['اول | One', 'دوم | Two']);
+});
+
+
+test('pairs the exact five-name channel convention and leaves uncertain lists unpaired', () => {
+  const { fields } = parseContentPost('نام: پیت\nکارگردان: دامین مارکانو؛ آماندا مارسالیس؛ یوتا بریسویتز؛ جان کامرون؛ جان ولز؛ Damian Marcano؛ Amanda Marsalis؛ Uta Briesewitz؛ John Cameron؛ John Wells');
+  assert.deepEqual(fields.directors, ['دامین مارکانو | Damian Marcano', 'آماندا مارسالیس | Amanda Marsalis', 'یوتا بریسویتز | Uta Briesewitz', 'جان کامرون | John Cameron', 'جان ولز | John Wells']);
+  const uncertain = parseContentPost('نام: X\nکارگردان: اول؛ دوم؛ One');
+  assert.deepEqual(uncertain.fields.directors, ['اول', 'دوم', 'One']);
+  assert.ok(uncertain.meta.notes.some((note) => note.includes('جفت نشدند')));
+  const mixed = parseContentPost('نام: X\nکارگردان: اول؛ One؛ دوم؛ Two');
+  assert.deepEqual(mixed.fields.directors, ['اول', 'One', 'دوم', 'Two']);
 });

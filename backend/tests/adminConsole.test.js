@@ -503,3 +503,70 @@ test('confirmed bilingual credits connect old single-name records across the arc
   await call(`/api/admin/contents/${faOnly}`, { method: 'DELETE' });
   await call(`/api/admin/contents/${enOnly}`, { method: 'DELETE' });
 });
+
+test('public series detail preserves a saved last season year', async () => {
+  const created = await call('/api/admin/contents', { method: 'POST', body: {
+    titleFa: 'آزمون سال', titleEn: 'Year test', contentType: 'series', releaseYear: 2025, lastAirYear: 2026, status: 'published',
+  } });
+  assert.equal(created.status, 201);
+  const id = created.data.content.id;
+  const detail = await call(`/api/contents/${id}`);
+  assert.equal(detail.status, 200); assert.equal(detail.data.content.releaseYear, 2025); assert.equal(detail.data.content.lastAirYear, 2026);
+  await call(`/api/admin/contents/${id}`, { method: 'DELETE' });
+});
+
+test('the actual admin parse API accepts a public Telegram post and groups ordered credits', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url, options) => {
+      if (String(url).startsWith('https://t.me/')) return new Response('<div class="tgme_widget_message_text js-message_text">نام فارسی: پیت<br>سال: 2025 - 2026<br>کارگردان: دامین مارکانو؛ جان ولز؛ Damian Marcano؛ John Wells</div>', { status: 200 });
+      return originalFetch(url, options);
+    };
+    const result = await call('/api/admin/parse', { method:'POST', body: { link:'https://t.me/Vizosten/72' } });
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.data.draft.fields.directors, ['دامین مارکانو | Damian Marcano', 'جان ولز | John Wells']);
+    const fields = result.data.draft.fields;
+    const saved = await call('/api/admin/contents', { method:'POST', body: { ...fields, contentType:'series', titleFa:'پیت آزمون', titleEn:'The Pitt test', status:'published' } });
+    assert.equal(saved.status, 201);
+    const id = saved.data.content.id;
+    try {
+      const detail = await call(`/api/contents/${id}`);
+      assert.ok(detail.data.content.directors.includes('دامین مارکانو | Damian Marcano'));
+      for (const person of ['دامین مارکانو', 'Damian Marcano']) {
+        const resultByName = await call(`/api/contents?person=${encodeURIComponent(person)}`);
+        assert.ok(resultByName.data.items.some((item) => item.id === id));
+      }
+    } finally { await call(`/api/admin/contents/${id}`, { method:'DELETE' }); }
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('poster import is owner-only and rejects off-domain URLs without fetching', async () => {
+  const oldCookie = cookie, oldCsrf = csrf;
+  try {
+    cookie = ''; csrf = '';
+    assert.equal((await call('/api/admin/import-poster', { method:'POST', body:{ url:'http://www.impawards.com/tv/pitt.html' } })).status, 404);
+  } finally { cookie = oldCookie; csrf = oldCsrf; }
+  const bad = await call('/api/admin/import-poster', { method:'POST', body:{ url:'http://127.0.0.1/secret.html' } });
+  assert.equal(bad.status, 422); assert.equal(bad.data.error.code, 'POSTER_URL_INVALID');
+});
+
+test('owner can import an IMPAwards poster and serve the saved image locally', async () => {
+  const crypto = require('node:crypto');
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), crypto.randomBytes(32), Buffer.from([0xff,0xd9])]);
+  const name = crypto.createHash('sha256').update(jpeg).digest('hex') + '.jpg';
+  const file = path.join(__dirname, '..', 'uploads', 'posters', name);
+  assert.equal(fs.existsSync(file), false);
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url, options) => {
+      if (String(url) === 'http://www.impawards.com/tv/pitt.html') return new Response('<img src="/tv/posters/pitt.jpg">', { status:200, headers:{'Content-Type':'text/html'} });
+      if (String(url) === 'http://www.impawards.com/tv/posters/pitt.jpg') return new Response(jpeg, { status:200, headers:{'Content-Type':'image/jpeg'} });
+      return originalFetch(url, options);
+    };
+    const result = await call('/api/admin/import-poster', { method:'POST', body:{ url:'http://www.impawards.com/tv/pitt.html' } });
+    assert.equal(result.status, 201); assert.equal(result.data.path, `/uploads/posters/${name}`);
+    const image = await originalFetch(`${base}${result.data.path}`);
+    assert.equal(image.status, 200); assert.equal(image.headers.get('content-type'), 'image/jpeg');
+    assert.deepEqual(Buffer.from(await image.arrayBuffer()), jpeg);
+  } finally { globalThis.fetch = originalFetch; if (fs.existsSync(file)) fs.unlinkSync(file); }
+});

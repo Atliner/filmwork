@@ -67,3 +67,30 @@ test('does not treat arbitrary chat text as metadata', () => {
   assert.equal(parsePublicPost('سلام، این فقط یک پیام عادی است.'), null);
   assert.equal(parseDirectives('#نسخه DigiMovies'), null);
 });
+
+test('reads Telegram widget HTML including entities, avoiding the old undefined decoder', async () => {
+  const { fetchPublicTelegramPost } = require('../bots/adminBot');
+  const old = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url) => {
+      assert.equal(url, 'https://t.me/Vizosten/72?embed=1&mode=tme');
+      return new Response('<div class="tgme_widget_message_text js-message_text">نام: پیت<br>کارگردان: نام &amp; نام<br>سال: &#50;026</div>', { status: 200 });
+    };
+    const text = await fetchPublicTelegramPost('https://t.me/Vizosten/72');
+    assert.equal(text, 'نام: پیت\nکارگردان: نام & نام\nسال: 2026');
+  } finally { globalThis.fetch = old; }
+});
+
+test('Telegram link errors are actionable and pasted text never requires a network call', async () => {
+  const { fetchPublicTelegramPost } = require('../bots/adminBot');
+  const { buildParseDraft } = require('../lib/contentParams');
+  const old = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => { throw new Error('network unreachable'); };
+    await assert.rejects(fetchPublicTelegramPost('https://t.me/Vizosten/72'), (error) => error.code === 'TELEGRAM_UNREACHABLE' && error.status === 502);
+    const draft = await buildParseDraft({ text: 'نام فارسی: پیت\nسال: 2025', link: 'https://t.me/Vizosten/72' });
+    assert.equal(draft.fields.titleFa, 'پیت');
+    assert.equal(draft.source.label, 'text');
+    await assert.rejects(fetchPublicTelegramPost('https://t.me.evil.example/Vizosten/72'), (error) => error.status === 422);
+  } finally { globalThis.fetch = old; }
+});
