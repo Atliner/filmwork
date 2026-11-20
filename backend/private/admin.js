@@ -1004,14 +1004,16 @@
         <div class="field-grid field-grid--wide">
           <label class="field"><span>لینک پوستر</span>
             <div class="poster-import-row"><input class="input" type="url" dir="ltr" data-field="posterUrl" data-poster-input value="${esc(draft.posterUrl)}" placeholder="https://example.com/poster.jpg"><button class="button button--ghost button--sm" type="button" data-import-main-poster>دریافت از IMPAwards</button></div>
-            <small>لینک تصویر یا صفحهٔ پوستر IMPAwards را وارد کنید. در زمان ذخیره، تصویر از آن صفحه دریافت می‌شود.</small></label>
+            <small>لینک تصویر یا صفحهٔ پوستر IMPAwards را وارد کنید. فقط نشانی ذخیره می‌شود؛ تصویر روی دیسک هاست ذخیره نمی‌شود.</small></label>
           <label class="field"><span>لینک پس‌زمینه (هیرو)</span>
             <input class="input" type="url" dir="ltr" data-field="backdropUrl" value="${esc(draft.backdropUrl)}" placeholder="https://example.com/backdrop.jpg"></label>
-          <label class="field span-full"><span>گالری پوسترها (IMPAwards)</span>
+          <label class="field span-full"><span>گالری پوسترها</span>
             <div style="display:flex;gap:8px">
               <input class="input" type="url" dir="ltr" data-gallery-input placeholder="لینک تصویر یا صفحهٔ IMPAwards">
               <button class="button button--ghost button--sm" type="button" data-add-gallery>${ICONS.plus} افزودن</button>
             </div>
+            <div class="poster-import-row imdb-import-row"><input class="input" type="url" dir="ltr" data-imdb-url placeholder="https://www.imdb.com/title/tt31938062/"><input class="input imdb-count" type="number" data-imdb-count min="1" max="50" value="10" aria-label="تعداد پوستر"><button class="button button--ghost button--sm" type="button" data-imdb-posters>افزودن از IMDb</button></div>
+            <small>لینک صفحهٔ اثر در IMDb و تعداد دلخواه (۱ تا ۵۰) را وارد کنید. فقط لینک پوسترها ثبت می‌شود؛ اگر تعداد موجود کمتر باشد همان تعداد اضافه خواهد شد.</small>
             <small>اولین تصویر گالری به‌عنوان پوستر اصلی پیشنهاد می‌شود؛ با ستاره می‌توانید هر تصویر را اصلی کنید.</small>
           </label>
         </div>
@@ -1192,7 +1194,7 @@
   async function resolvePoster(value) {
     if (!isImpAwards(value)) return value;
     const imported = await api('/api/admin/import-poster', { method: 'POST', body: { url: value } });
-    if (!/^\/uploads\/posters\/[0-9a-f]{64}\.(?:jpg|png|webp)$/.test(imported.path || '')) throw new Error('نشانی تصویر دریافت‌شده معتبر نیست.');
+    if (!/^\/img\?url=/.test(imported.path || '')) throw new Error('نشانی تصویر دریافت‌شده معتبر نیست.');
     return new URL(imported.path, window.location.origin).toString();
   }
 
@@ -2253,7 +2255,7 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
           <div class="guide__body">
             <ul>
               <li>دکمه ستاره روی هر کارت، آن اثر را به بنر هیرو صفحه اصلی می‌برد؛ فقط یک اثر هم‌زمان در هیرو است.</li>
-              <li>گالری پوستر (IMPAwards): لینک تصاویر را در مرحله ۲ اضافه کنید و با ستاره، پوستر اصلی را انتخاب کنید.</li>
+              <li>گالری پوستر: لینک تصویر یا صفحهٔ IMPAwards و یا لینک اثر IMDb را در مرحله ۲ اضافه کنید و با ستاره، پوستر اصلی را انتخاب کنید.</li>
               <li>لینک پس‌زمینه (backdrop) برای تصویر بزرگ هیرو استفاده می‌شود.</li>
             </ul>
           </div>
@@ -2632,6 +2634,23 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
           editor.draft.posterUrl = result;
           if (!editor.draft.posterGallery.includes(result)) editor.draft.posterGallery.push(result);
           paintEditor(); toast('پوستر دریافت شد؛ برای ثبت نهایی، اثر را ذخیره کنید.');
+        } catch (error) { toast(error.message, 'error'); button.disabled = false; }
+        return;
+      }
+      if (button.matches('[data-imdb-posters]')) {
+        const editor = state.editor;
+        const url = $('[data-imdb-url]')?.value?.trim();
+        const count = Number($('[data-imdb-count]')?.value);
+        if (!editor || !url || !Number.isInteger(count) || count < 1 || count > 50) { toast('لینک IMDb و تعداد بین ۱ تا ۵۰ را وارد کنید.', 'error'); return; }
+        button.disabled = true;
+        try {
+          const result = await api('/api/admin/imdb-posters', { method:'POST', body:{ url, count } });
+          if (state.editor !== editor) return;
+          const before = editor.draft.posterGallery.length;
+          for (const image of result.posters || []) if (!editor.draft.posterGallery.includes(image)) editor.draft.posterGallery.push(image);
+          if (!editor.draft.posterUrl && editor.draft.posterGallery.length) editor.draft.posterUrl = editor.draft.posterGallery[0];
+          const added = editor.draft.posterGallery.length - before;
+          paintEditor(); toast(`${added} پوستر به گالری اضافه شد؛ برای ثبت نهایی اثر را ذخیره کنید.`);
         } catch (error) { toast(error.message, 'error'); button.disabled = false; }
         return;
       }

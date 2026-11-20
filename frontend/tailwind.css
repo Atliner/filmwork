@@ -900,3 +900,9 @@
   .credit-block { grid-template-columns:1fr; gap:5px; }
 }
 @media (max-width:340px) { .discovery-results .media-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+
+.detail-posters { margin-top: 2rem; }
+.poster-gallery { display: flex; gap: 12px; overflow-x: auto; padding: 8px 0 14px; }
+.poster-gallery a { flex: 0 0 132px; border-radius: 12px; overflow: hidden; }
+.poster-gallery img { display: block; width: 100%; aspect-ratio: 2/3; object-fit: cover; }
+.poster-gallery a:focus-visible { outline: 3px solid #a78bfa; outline-offset: 3px; }

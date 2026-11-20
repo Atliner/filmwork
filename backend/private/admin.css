@@ -751,3 +751,7 @@ table.data .muted { color: var(--muted); font-size: 10.5px; }
 
 .poster-import-row { display:flex; gap:8px; flex-wrap:wrap; }
 .poster-import-row .input { flex:1 1 200px; min-width:0; }
+
+.imdb-import-row { margin-top: 10px; }
+.imdb-import-row .imdb-count { flex: 0 0 84px; width: 84px; }
+@media (max-width: 600px) { .imdb-import-row { flex-wrap: wrap; } .imdb-import-row [data-imdb-url] { flex: 1 1 100%; min-width: 0; } }

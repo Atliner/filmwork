@@ -235,6 +235,11 @@
     </div>`;
   }
 
+  function yearLabel(content) {
+    if (!content.releaseYear) return 'سال نامشخص';
+    return `${content.releaseYear}${content.type === 'series' ? `–${content.lastAirYear || 'نامشخص'}` : ''}`;
+  }
+
   function mediaCard(content) {
     const fa = titleFa(content);
     const en = titleEn(content);
@@ -242,7 +247,7 @@
     return `<article class="media-card" tabindex="0" role="button" data-route="/content/${encodeURIComponent(content.id)}" aria-label="${escapeHtml(label)}">
       ${posterMarkup(content)}
       ${titleMarkup(content, { enClass: 'title-en title-en--card' })}
-      <p>${content.releaseYear ? escapeHtml(content.releaseYear) : 'سال نامشخص'}${content.genres?.[0] ? ` · ${escapeHtml(content.genres[0])}` : ''}</p>
+      <p>${escapeHtml(yearLabel(content))}${content.genres?.[0] ? ` · ${escapeHtml(content.genres[0])}` : ''}</p>
     </article>`;
   }
 
@@ -271,7 +276,7 @@
         ${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="hero-en-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}
         <div class="hero-meta">
           ${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}
-          ${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}</span>` : ''}
+          ${content.releaseYear ? `<span class="meta-dot">${escapeHtml(yearLabel(content))}</span>` : ''}
           <span class="meta-dot">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</span>
           ${genres ? `<span class="meta-dot">${genres}</span>` : ''}
         </div>
@@ -508,6 +513,7 @@
     </section>
     <div class="page-shell detail-layout">
       <div class="detail-story"><section class="detail-synopsis"><span class="editorial-kicker">THE STORY / داستان</span><h2>دربارهٔ این اثر</h2><p>${content.description ? escapeHtml(content.description) : 'توضیحی برای این اثر ثبت نشده است.'}</p></section>
+        ${(content.posterGallery || []).map(safeUrl).filter(Boolean).length ? `<section class="detail-posters"><div class="detail-section-heading"><div><span class="editorial-kicker">THE POSTERS</span><h2>گالری پوسترها</h2></div></div><div class="poster-gallery">${content.posterGallery.map(safeUrl).filter(Boolean).map((url, i) => `<a href="${url}" target="_blank" rel="noopener noreferrer" aria-label="نمایش پوستر ${i + 1}"><img src="${url}" loading="lazy" alt="پوستر ${i + 1}"></a>`).join('')}</div></section>` : ''}
         ${(content.directors?.length || content.cast?.length) ? `<section class="detail-credits"><div class="detail-section-heading"><div><span class="editorial-kicker">THE PEOPLE / عوامل</span><h2>جلوی دوربین و پشت صحنه</h2></div></div>${content.directors?.length ? `<div class="credit-block"><span>کارگردان</span><div>${namesMarkup(content.directors)}</div></div>` : ''}${content.cast?.length ? `<div class="credit-block"><span>بازیگران</span><div>${namesMarkup(content.cast)}</div></div>` : ''}</section>` : ''}
       </div>
       <aside class="surface-panel detail-facts"><span class="editorial-kicker">THE DETAILS</span><h2>اطلاعات اثر</h2><div class="fact-list">${facts.filter(([label]) => !['کارگردان','بازیگران'].includes(label)).map(([label, value]) => `<div class="fact"><span>${escapeHtml(label)}</span><div class="fact-value">${escapeHtml(value)}</div></div>`).join('')}</div></aside>
@@ -614,7 +620,7 @@
       <div id="pause-banner-slot" class="banner-slot"></div>
       <section class="player-info">
         <div class="player-info-main"><div class="player-title-row"><div><h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="original-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}</div><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="نشان کردن">${icons.heart}</button></div>
-          <div class="hero-meta">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}</span>` : ''}<span class="meta-dot">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</span>${content.genres?.length ? `<span class="meta-dot">${content.genres.slice(0, 3).map(escapeHtml).join('، ')}</span>` : ''}</div>
+          <div class="hero-meta">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(yearLabel(content))}</span>` : ''}<span class="meta-dot">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</span>${content.genres?.length ? `<span class="meta-dot">${content.genres.slice(0, 3).map(escapeHtml).join('، ')}</span>` : ''}</div>
           ${content.description ? `<p class="player-description">${escapeHtml(content.description)}</p>` : ''}
         </div>
         <aside class="offline-card"><div><span class="offline-icon">${icons.download}</span><div><strong>دانلود و تماشای آفلاین</strong><small>${formatNumber(mediaData.items.length)} نسخه آماده ارسال امن با تلگرام</small></div></div><button class="primary-button" data-open-download="${escapeHtml(content.id)}">انتخاب نسخه</button></aside>

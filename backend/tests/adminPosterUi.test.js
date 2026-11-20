@@ -7,7 +7,8 @@ const { JSDOM } = require('jsdom');
 const root = path.resolve(__dirname, '..');
 const html = fs.readFileSync(path.join(root, 'private/admin.html'), 'utf8');
 const script = fs.readFileSync(path.join(root, 'private/admin.js'), 'utf8');
-const importedPath = `/uploads/posters/${'a'.repeat(64)}.jpg`;
+const importedPath = '/img?url=' + encodeURIComponent('http://www.impawards.com/tv/posters/pitt.jpg');
+const imdbImages = ['https://m.media-amazon.com/images/M/MV5Babcdef.jpg','https://m.media-amazon.com/images/M/MV5Bghijkl.jpg'];
 async function setup() {
   const dom = new JSDOM(html, { url:'https://film.test/owner-console#/edit/asset', runScripts:'outside-only', pretendToBeVisual:true });
   const w = dom.window; w.scrollTo = () => {}; let saved = null; const requests = [];
@@ -18,6 +19,7 @@ async function setup() {
     else if (url === '/api/admin/contents/asset' && options.method === 'PATCH') { saved = JSON.parse(options.body); data = {}; }
     else if (url === '/api/admin/contents/asset') data = { content:{ id:'asset', type:'series', title:'پیت', originalTitle:'The Pitt', status:'published', releaseYear:2025, lastAirYear:2026, directors:[],cast:[],genres:[],countries:[],posterGallery:[] }, versions:[] };
     else if (url === '/api/admin/import-poster') data = { path:importedPath };
+    else if (url === '/api/admin/imdb-posters') data = { posters:imdbImages };
     else throw new Error(`unexpected ${url}`);
     return { ok:true, status:200, json:async () => data };
   };
@@ -26,7 +28,7 @@ async function setup() {
   await wait(() => w.document.querySelector('[data-poster-input]'));
   return { dom, w, wait, requests, getSaved:() => saved };
 }
-test('main IMPAwards page is imported to a same-origin URL before content save', async () => {
+test('main IMPAwards page resolves to a same-origin relay before content save', async () => {
   const { dom, w, wait, requests, getSaved } = await setup();
   const input = w.document.querySelector('[data-poster-input]'); input.value = 'http://www.impawards.com/tv/pitt.html';
   input.dispatchEvent(new w.Event('input', { bubbles:true }));
@@ -37,11 +39,24 @@ test('main IMPAwards page is imported to a same-origin URL before content save',
   assert.equal(JSON.parse(request.body).url, 'http://www.impawards.com/tv/pitt.html');
   await new Promise((resolve) => setTimeout(resolve, 30)); dom.window.close();
 });
-test('gallery accepts an IMPAwards page and uses imported URL for preview', async () => {
+test('gallery accepts an IMPAwards page and uses relay URL for preview', async () => {
   const { dom, w, wait } = await setup();
   const input = w.document.querySelector('[data-gallery-input]'); input.value = 'http://www.impawards.com/tv/silo_ver5.html';
   w.document.querySelector('[data-add-gallery]').click();
   const preview = await wait(() => w.document.querySelector('.gallery-tile img'));
   assert.equal(preview.src, `https://film.test${importedPath}`);
+  dom.window.close();
+});
+
+test('IMDb count adds direct image links to gallery and saves them', async () => {
+  const { dom, w, wait, requests, getSaved } = await setup();
+  w.document.querySelector('[data-imdb-url]').value = 'https://www.imdb.com/title/tt31938062/';
+  w.document.querySelector('[data-imdb-count]').value = '2';
+  w.document.querySelector('[data-imdb-posters]').click();
+  await wait(() => w.document.querySelectorAll('.gallery-tile img').length === 2);
+  const request = requests.find((r) => r.url === '/api/admin/imdb-posters');
+  assert.equal(JSON.parse(request.body).count, 2);
+  w.document.querySelector('[data-save-content]').click();
+  const saved = await wait(getSaved); assert.deepEqual(saved.posterGallery, imdbImages); assert.equal(saved.posterUrl, imdbImages[0]);
   dom.window.close();
 });

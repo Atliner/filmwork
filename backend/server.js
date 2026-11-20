@@ -26,7 +26,8 @@ const { query, withTransaction, healthCheck, closePool } = require('./config/db'
 const { AppError, assert, asyncRoute } = require('./lib/errors');
 const { parseCatalogFilters, catalogFacets } = require('./lib/catalogFilters');
 const { createAliasIndex, expandAliases, displayCredits } = require('./lib/peopleAliases');
-const { importPoster } = require('./lib/posterImport');
+const { resolvePoster, posterImage } = require('./lib/posterImport');
+const { imdbPosters } = require('./lib/imdbPosters');
 const {
   hmacHex,
   generateOpaqueToken,
@@ -1440,13 +1441,24 @@ app.post('/api/admin/parse', requireAdmin, requireAdminCsrf, asyncRoute(async (r
   res.json({ draft });
 }));
 
-// Import the owner-selected poster into persistent uploads, avoiding mixed
-// content and third-party hotlink restrictions. No open proxy is exposed.
-app.post('/api/admin/import-poster', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
-  const url = asString(req.body?.url, 'لینک پوستر', { min: 10, max: 2048 });
-  const poster = await importPoster(url, path.join(uploadDirectory, 'posters'));
+// IMPAwards uses HTTP/hotlink restrictions: relay only allowlisted image URLs
+// on demand, without writing files or caching on the server.
+app.get('/img', rateLimit({ windowMs: 60_000, max: 120, standardHeaders: true, legacyHeaders: false }), asyncRoute(async (req, res) => {
+  const image = await posterImage(asString(req.query.url, 'لینک پوستر', { min: 10, max: 2048 }));
   res.setHeader('Cache-Control', 'no-store');
-  res.status(201).json(poster);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.type({ '.jpg':'image/jpeg', '.png':'image/png', '.webp':'image/webp' }[image.extension]).send(image.data);
+}));
+app.post('/api/admin/import-poster', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  const source = await resolvePoster(asString(req.body?.url, 'لینک پوستر', { min: 10, max: 2048 }));
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ path: `/img?url=${encodeURIComponent(source)}`, source });
+}));
+app.post('/api/admin/imdb-posters', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  const url = asString(req.body?.url, 'لینک IMDb', { min: 10, max: 2048 });
+  const posters = await imdbPosters(url, Number(req.body?.count));
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ posters });
 }));
 
 /**

@@ -1,8 +1,5 @@
 'use strict';
 
-const crypto = require('crypto');
-const fs = require('fs/promises');
-const path = require('path');
 const { AppError } = require('./errors');
 
 const MAX_PAGE = 2 * 1024 * 1024;
@@ -76,21 +73,19 @@ function imageExtension(data) {
   if (data.length >= 12 && data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WEBP') return '.webp';
   throw new AppError(422, 'POSTER_NOT_IMAGE', 'فایل دریافتی تصویر JPEG، PNG یا WebP معتبر نیست.');
 }
-async function importPoster(source, directory, fetchFn = globalThis.fetch) {
+async function resolvePoster(source, fetchFn = globalThis.fetch) {
   const sourceUrl = allowedUrl(source);
-  let imageUrl = sourceUrl;
-  if (!isImageUrl(sourceUrl)) {
-    if (!/\.html$/i.test(sourceUrl.pathname)) throw new AppError(422, 'POSTER_URL_INVALID', 'لینک صفحهٔ پوستر یا تصویر مستقیم IMPAwards را وارد کنید.');
-    const page = await fetchAllowed(sourceUrl, { fetchFn, maxBytes: MAX_PAGE });
-    if (!/html/i.test(page.contentType)) throw new AppError(422, 'POSTER_NOT_PAGE', 'پاسخ سایت یک صفحهٔ HTML نیست.');
-    imageUrl = extractPosterUrl(page.data.toString('utf8'), page.url);
-  }
-  const image = await fetchAllowed(imageUrl, { fetchFn, maxBytes: MAX_IMAGE, referer: sourceUrl.toString() });
-  if (!isImageUrl(image.url)) throw new AppError(422, 'POSTER_REDIRECT', 'تصویر پوستر به مسیر غیرمجاز هدایت شد.');
-  const ext = imageExtension(image.data);
-  const filename = `${crypto.createHash('sha256').update(image.data).digest('hex')}${ext}`;
-  await fs.mkdir(directory, { recursive: true });
-  await fs.writeFile(path.join(directory, filename), image.data, { flag: 'wx' }).catch((err) => { if (err.code !== 'EEXIST') throw err; });
-  return { path: `/uploads/posters/${filename}`, source: sourceUrl.toString(), imageSource: image.url.toString() };
+  if (isImageUrl(sourceUrl)) return sourceUrl.toString();
+  if (!/\.html$/i.test(sourceUrl.pathname)) throw new AppError(422, 'POSTER_URL_INVALID', 'لینک صفحهٔ پوستر یا تصویر مستقیم IMPAwards را وارد کنید.');
+  const page = await fetchAllowed(sourceUrl, { fetchFn, maxBytes: MAX_PAGE });
+  if (!/html/i.test(page.contentType)) throw new AppError(422, 'POSTER_NOT_PAGE', 'پاسخ سایت یک صفحهٔ HTML نیست.');
+  return extractPosterUrl(page.data.toString('utf8'), page.url).toString();
 }
-module.exports = { allowedUrl, extractPosterUrl, imageExtension, fetchAllowed, importPoster };
+async function posterImage(source, fetchFn = globalThis.fetch) {
+  const url = allowedUrl(source);
+  if (!isImageUrl(url)) throw new AppError(422, 'POSTER_URL_INVALID', 'فقط تصویر مستقیم IMPAwards پذیرفته می‌شود.');
+  const image = await fetchAllowed(url, { fetchFn, maxBytes: MAX_IMAGE, referer: 'http://www.impawards.com/' });
+  if (!isImageUrl(image.url)) throw new AppError(422, 'POSTER_REDIRECT', 'تصویر پوستر به مسیر غیرمجاز هدایت شد.');
+  return { data: image.data, extension: imageExtension(image.data) };
+}
+module.exports = { allowedUrl, extractPosterUrl, imageExtension, fetchAllowed, resolvePoster, posterImage };

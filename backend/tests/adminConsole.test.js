@@ -550,23 +550,33 @@ test('poster import is owner-only and rejects off-domain URLs without fetching',
   assert.equal(bad.status, 422); assert.equal(bad.data.error.code, 'POSTER_URL_INVALID');
 });
 
-test('owner can import an IMPAwards poster and serve the saved image locally', async () => {
-  const crypto = require('node:crypto');
-  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), crypto.randomBytes(32), Buffer.from([0xff,0xd9])]);
-  const name = crypto.createHash('sha256').update(jpeg).digest('hex') + '.jpg';
-  const file = path.join(__dirname, '..', 'uploads', 'posters', name);
-  assert.equal(fs.existsSync(file), false);
+test('owner resolves IMPAwards links and relays the image without writing a file', async () => {
+  const jpeg = Buffer.from([0xff,0xd8,0xff,0xe0,0,0,0,0,0xff,0xd9]);
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = async (url, options) => {
-      if (String(url) === 'http://www.impawards.com/tv/pitt.html') return new Response('<img src="/tv/posters/pitt.jpg">', { status:200, headers:{'Content-Type':'text/html'} });
-      if (String(url) === 'http://www.impawards.com/tv/posters/pitt.jpg') return new Response(jpeg, { status:200, headers:{'Content-Type':'image/jpeg'} });
+      if (String(url) === 'http://www.impawards.com/tv/pitt.html') return new Response('<img src="/tv/posters/pitt.jpg">', { headers:{'Content-Type':'text/html'} });
+      if (String(url) === 'http://www.impawards.com/tv/posters/pitt.jpg') return new Response(jpeg, { headers:{'Content-Type':'image/jpeg'} });
       return originalFetch(url, options);
     };
     const result = await call('/api/admin/import-poster', { method:'POST', body:{ url:'http://www.impawards.com/tv/pitt.html' } });
-    assert.equal(result.status, 201); assert.equal(result.data.path, `/uploads/posters/${name}`);
+    assert.equal(result.status, 200); assert.equal(result.data.source, 'http://www.impawards.com/tv/posters/pitt.jpg');
+    assert.equal(result.data.path, '/img?url=' + encodeURIComponent(result.data.source));
     const image = await originalFetch(`${base}${result.data.path}`);
-    assert.equal(image.status, 200); assert.equal(image.headers.get('content-type'), 'image/jpeg');
+    assert.equal(image.status, 200); assert.match(image.headers.get('content-type'), /image\/jpeg/); assert.equal(image.headers.get('cache-control'), 'no-store');
     assert.deepEqual(Buffer.from(await image.arrayBuffer()), jpeg);
-  } finally { globalThis.fetch = originalFetch; if (fs.existsSync(file)) fs.unlinkSync(file); }
+    const bad = await originalFetch(`${base}/img?url=${encodeURIComponent('http://127.0.0.1/private')}`); assert.equal(bad.status, 422);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('IMDb poster collection requires owner and returns image links', async () => {
+  const oldCookie = cookie, oldCsrf = csrf;
+  try { cookie = ''; csrf = ''; assert.equal((await call('/api/admin/imdb-posters', {method:'POST',body:{url:'https://www.imdb.com/title/tt31938062/',count:2}})).status, 404); }
+  finally { cookie = oldCookie; csrf = oldCsrf; }
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url, options) => String(url).startsWith('https://www.imdb.com/') ? new Response('<a href="/title/tt31938062/mediaviewer/rm1/"><img src="https://m.media-amazon.com/images/M/MV5Babcdef._V1_QL75_UX328_.jpg"></a>', {headers:{'content-type':'text/html'}}) : originalFetch(url, options);
+    const result = await call('/api/admin/imdb-posters', {method:'POST',body:{url:'https://www.imdb.com/title/tt31938062/',count:2}});
+    assert.equal(result.status, 200); assert.equal(result.data.posters.length, 1); assert.match(result.data.posters[0], /^https:\/\/m.media-amazon.com\//);
+  } finally { globalThis.fetch = originalFetch; }
 });

@@ -8,7 +8,7 @@ const root = path.resolve(__dirname, '../..');
 const html = fs.readFileSync(path.join(root, 'frontend/index.html'), 'utf8');
 const script = fs.readFileSync(path.join(root, 'frontend/app.js'), 'utf8');
 const items = [
-  { id:'a', title:'فیلم اول', originalTitle:'First Film', type:'movie', imdbScore:9, releaseYear:2020, genres:['درام'], directors:['نام فارسی | English Name'], cast:[], description:'یک داستان', countries:['ایران'], hasDub:true, hasSub:true },
+  { id:'a', title:'فیلم اول', originalTitle:'First Film', type:'series', imdbScore:9, releaseYear:2020, lastAirYear:2026, posterGallery:['https://m.media-amazon.com/images/M/MV5Babcdef.jpg'], genres:['درام'], directors:['نام فارسی | English Name'], cast:[], description:'یک داستان', countries:['ایران'], hasDub:true, hasSub:true },
   { id:'b', title:'فیلم دوم', originalTitle:'Second Film', type:'movie', imdbScore:6, releaseYear:2022, genres:['درام'], directors:[], cast:[], countries:[] },
 ];
 const facets = { years:{min:2020,max:2022}, ratings:{min:6,max:9}, genres:[{name:'درام',count:2}], countries:['ایران'], ages:['PG'], networks:['Net'] };
@@ -64,5 +64,19 @@ test('mobile search keeps filters accessible, can select and reset', async () =>
   w.document.querySelector('[data-filter-reset]').click(); assert.equal(box.checked, false);
   assert.equal(w.document.querySelector('#search-sort').value, 'recent');
   await new Promise((resolve) => setTimeout(resolve, 20));
+  dom.window.close();
+});
+
+test('series end year appears on home hero and search card, movies stay single-year', async () => {
+  let view = await boot('#/home');
+  const hero = await view.wait('.hero-meta'); assert.match(hero.textContent, /2020–2026/);
+  view.dom.window.close();
+  view = await boot('#/search'); await view.wait('.media-card');
+  const cards = view.w.document.querySelectorAll('.media-card'); assert.match(cards[0].textContent, /2020–2026/); assert.match(cards[1].textContent, /2022/); assert.doesNotMatch(cards[1].textContent, /2022–/);
+  view.dom.window.close();
+});
+test('detail displays external poster links from the gallery', async () => {
+  const { dom, wait } = await boot('#/content/a');
+  const image = await wait('.poster-gallery img'); assert.equal(image.src, 'https://m.media-amazon.com/images/M/MV5Babcdef.jpg');
   dom.window.close();
 });
