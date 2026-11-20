@@ -69,18 +69,17 @@
       : main;
   }
 
-  // Only explicitly paired names are treated as aliases. Older records contain
-  // flat lists; their correspondence cannot safely be inferred by position.
+  // A pair is one focusable link, with isolated scripts in a predictable order.
   function namesMarkup(values) {
     const entries = (Array.isArray(values) ? values : []).filter(Boolean);
     if (!entries.length) return 'ثبت نشده';
     return `<span class="name-list">${entries.map((entry) => {
-      const aliases = String(entry).split(/\s*\|\s*/u).map((x) => x.trim()).filter(Boolean);
-      const params = new URLSearchParams();
-      aliases.forEach((name) => params.append('person', name));
-      const href = `#/person?${params}`;
-      return `<span class="name-pair">${aliases.map((name) => `<a href="${escapeHtml(href)}" ${LATIN.test(name) ? 'dir="ltr" lang="en"' : ''}>${escapeHtml(name)}</a>`).join(' / ')}</span>`;
-    }).join('، ')}</span>`;
+      const aliases = String(entry).split(/\s*\|\s*/u).map((x) => x.trim()).filter(Boolean)
+        .sort((a, b) => Number(LATIN.test(a)) - Number(LATIN.test(b)));
+      const params = new URLSearchParams(); aliases.forEach((name) => params.append('person', name));
+      const label = aliases.map((name) => `<bdi ${LATIN.test(name) ? 'dir="ltr" lang="en"' : 'dir="rtl"'}>${escapeHtml(name)}</bdi>`).join('<span class="name-divider" aria-hidden="true"> | </span>');
+      return `<a class="name-pair" href="#/person?${escapeHtml(params.toString())}">${label}</a>`;
+    }).join('<span class="name-separator">، </span>')}</span>`;
   }
 
   function escapeHtml(value) {
@@ -286,6 +285,42 @@
     </section>`;
   }
 
+  let cinemaGame = null;
+  function gameCard(items) {
+    const eligible = items.filter((item) => item.imdbScore !== null && item.imdbScore !== undefined && Number.isFinite(Number(item.imdbScore)));
+    if (new Set(eligible.map((item) => Number(item.imdbScore))).size < 2) { cinemaGame = null; return ''; }
+    cinemaGame = { items: eligible, score: 0, rounds: 0, options: [], answered: false };
+    return `<section class="cinema-game" aria-labelledby="game-title"><div class="game-copy"><span class="game-kicker">VIZOSTEN / MINI GAME</span><h2 id="game-title">یک انتخاب، یک چالش.</h2><p>فکر می‌کنی کدوم اثر امتیاز IMDb بالاتری داره؟ دو عنوان، یک حدس؛ فقط برای سرگرمی.</p><button type="button" class="game-start" data-game-start>شروع چالش <span aria-hidden="true">←</span></button></div><div class="game-screen" id="game-screen"><div class="game-art" aria-hidden="true"><span>01</span><b>VS</b><span>02</span></div><p>سینما رو چقدر می‌شناسی؟</p><small>بدون زمان‌سنج · بدون نیاز به ورود</small></div></section>`;
+  }
+  function nextGameRound() {
+    if (!cinemaGame) return;
+    const pool = cinemaGame.items;
+    const first = pool[Math.floor(Math.random() * pool.length)];
+    const different = pool.filter((item) => Number(item.imdbScore) !== Number(first.imdbScore));
+    if (!different.length) return;
+    const second = different[Math.floor(Math.random() * different.length)];
+    cinemaGame.options = Math.random() < .5 ? [first, second] : [second, first];
+    cinemaGame.answered = false;
+    const screen = $('#game-screen'); if (!screen) return;
+    screen.innerHTML = `<div class="game-round-head"><span>کدوم امتیاز بیشتری داره؟</span><small>امتیاز تو ${formatNumber(cinemaGame.score)} از ${formatNumber(cinemaGame.rounds)}</small></div><div class="game-options">${cinemaGame.options.map((item, i) => `<button type="button" class="game-option" data-game-answer="${i}"><span>0${i + 1}</span><strong>${escapeHtml(titleFa(item) || titleEn(item))}</strong>${titleEn(item) && titleEn(item) !== titleFa(item) ? `<small dir="ltr">${escapeHtml(titleEn(item))}</small>` : ''}</button>`).join('<span class="game-vs">VS</span>')}</div><div id="game-feedback" class="game-feedback" aria-live="polite"></div>`;
+    $('.game-start')?.setAttribute('hidden', '');
+  }
+  function answerGame(index) {
+    if (!cinemaGame || cinemaGame.answered || !cinemaGame.options[index]) return;
+    cinemaGame.answered = true;
+    const [a, b] = cinemaGame.options;
+    const winner = Number(a.imdbScore) > Number(b.imdbScore) ? a : b;
+    const correct = cinemaGame.options[index] === winner;
+    cinemaGame.rounds += 1; if (correct) cinemaGame.score += 1;
+    $$('.game-option').forEach((button, i) => {
+      button.disabled = true;
+      button.classList.toggle('is-correct', cinemaGame.options[i] === winner);
+      button.insertAdjacentHTML('beforeend', `<em>★ ${escapeHtml(cinemaGame.options[i].imdbScore)}</em>`);
+    });
+    const count = $('.game-round-head small'); if (count) count.textContent = `امتیاز تو ${formatNumber(cinemaGame.score)} از ${formatNumber(cinemaGame.rounds)}`;
+    $('#game-feedback').innerHTML = `<span>${correct ? 'درست حدس زدی!' : 'این بار نزدیک بود!'}</span><button type="button" data-game-next>چالش بعدی ←</button><button type="button" data-route="/content/${encodeURIComponent(winner.id)}">دیدن اثر برنده</button>`;
+  }
+
   async function renderHome(version) {
     setActiveNav('home');
     setHeaderLabel('خانه');
@@ -320,6 +355,7 @@
       ${heroMarkup(hero)}
       <div class="page-shell">
         ${continueItems.length && onlinePlaybackVisible() ? `<section class="content-section resume-section"><div class="section-head"><div><h2>ادامه تماشا</h2><p>از همان‌جایی که رها کردید</p></div></div><div class="resume-scroller">${continueItems.map(continueCard).join('')}</div></section>` : ''}
+        ${gameCard(items)}
         <section class="content-section">
           <div class="section-head"><div><h2>تازه‌های ویزوستن</h2><p>جدیدترین فیلم‌ها و سریال‌های اضافه‌شده</p></div><button class="text-button" data-route="/search">مشاهده همه</button></div>
           <div class="media-scroller">${latest.length ? latest.map(mediaCard).join('') : mediaCard(hero)}</div>
@@ -336,24 +372,26 @@
     personFilters = person;
     const facets = await api('/contents-facets');
     if (version !== state.routeVersion) return;
-    const range = (label, prefix, bounds, step) => bounds ? `<fieldset class="filter-range"><legend>${label} (${escapeHtml(bounds.min)} تا ${escapeHtml(bounds.max)})</legend><label>از <input type="number" data-catalog-filter id="${prefix}-from" min="${bounds.min}" max="${bounds.max}" step="${step}" placeholder="${bounds.min}"></label><label>تا <input type="number" data-catalog-filter id="${prefix}-to" min="${bounds.min}" max="${bounds.max}" step="${step}" placeholder="${bounds.max}"></label></fieldset>` : '';
-    const multi = (label, key, values) => values.length ? `<details class="filter-dropdown"><summary>${label}</summary><div>${values.map((value) => `<label><input type="checkbox" data-catalog-filter name="${key}" value="${escapeHtml(value)}"> ${escapeHtml(value)}</label>`).join('')}</div></details>` : '';
+    const range = (label, prefix, bounds, step) => bounds ? `<fieldset class="filter-range"><legend>${label}<small dir="ltr">${escapeHtml(bounds.min)} — ${escapeHtml(bounds.max)}</small></legend><div class="filter-range-fields"><label><span>از</span><input type="number" data-catalog-filter id="${prefix}-from" min="${bounds.min}" max="${bounds.max}" step="${step}" placeholder="${bounds.min}"></label><span class="range-dash">—</span><label><span>تا</span><input type="number" data-catalog-filter id="${prefix}-to" min="${bounds.min}" max="${bounds.max}" step="${step}" placeholder="${bounds.max}"></label></div></fieldset>` : '';
+    const multi = (label, key, values) => values.length ? `<details class="filter-dropdown"><summary>${label}<span aria-hidden="true">+</span></summary><div>${values.map((value) => `<label><input type="checkbox" data-catalog-filter name="${key}" value="${escapeHtml(value)}"><span>${escapeHtml(value)}</span></label>`).join('')}</div></details>` : '';
     app.innerHTML = `<div class="page-shell page-top search-page">
-      <div class="section-head search-title"><div><h1 class="page-title">${person ? `آثار ${person.names.map(escapeHtml).join(' / ')}` : 'جستجو'}</h1><p>در میان فیلم‌ها و سریال‌های ویزوستن</p></div></div>
-      <label class="search-box">${icons.search}<input id="search-input" type="search" maxlength="100" autocomplete="off" placeholder="نام فیلم، سریال، بازیگر یا کارگردان…" value="${escapeHtml(initialQuery)}"><span class="sr-only">جستجو</span></label>
-      <section class="search-discovery"><h2>ژانرها</h2><div class="genre-chip-row">
-        <button class="genre-chip ${initialGenre ? '' : 'active'}" data-search-genre="">همه</button>
-        ${facets.genres.map(({name, count}) => `<button class="genre-chip ${initialGenre === name ? 'active' : ''}" data-search-genre="${escapeHtml(name)}">${escapeHtml(name)} <small>${formatNumber(count)}</small></button>`).join('')}
+      <header class="discovery-heading"><div><span class="editorial-kicker">THE VIZOSTEN ARCHIVE <i></i> کشف کن</span><h1>${person ? `آثار ${person.names.map(escapeHtml).join(' | ')}` : 'قصهٔ بعدی‌ات را پیدا کن.'}</h1><p>از میان فیلم‌ها و سریال‌های آرشیو، انتخابی که به حال‌وهوایت می‌خورد.</p></div><span class="discovery-mark" aria-hidden="true">✳</span></header>
+      <label class="search-box discovery-search">${icons.search}<input id="search-input" type="search" maxlength="100" autocomplete="off" placeholder="نام فیلم، سریال، بازیگر یا کارگردان…" value="${escapeHtml(initialQuery)}"><span class="sr-only">جستجو</span><span class="search-box-end">SEARCH</span></label>
+      <section class="search-discovery"><div class="discovery-section-label"><h2>حال‌وهوای تو</h2><span>ژانرها را ورق بزن</span></div><div class="genre-chip-row">
+        <button type="button" class="genre-chip ${initialGenre ? '' : 'active'}" data-search-genre="">همه</button>
+        ${facets.genres.map(({name, count}) => `<button type="button" class="genre-chip ${initialGenre === name ? 'active' : ''}" data-search-genre="${escapeHtml(name)}">${escapeHtml(name)} <small>${formatNumber(count)}</small></button>`).join('')}
       </div></section>
-      <div class="search-toolbar"><div class="chip-row" aria-label="فیلتر نوع"><button class="chip active" data-search-type="">همه آثار</button><button class="chip" data-search-type="movie">فیلم</button><button class="chip" data-search-type="series">سریال</button></div></div>
-      <div class="catalog-filters">
+      <div class="discovery-layout"><details class="filter-panel" ${window.matchMedia('(min-width: 900px)').matches ? 'open' : ''}><summary><span><b>فیلترهای جستجو</b><small>انتخاب دقیق‌تر</small></span><i aria-hidden="true">＋</i></summary><div class="catalog-filters">
         ${range('سال ساخت', 'search-year', facets.years, 1)}${range('امتیاز IMDb', 'search-rating', facets.ratings, 0.1)}
         ${multi('کشور سازنده', 'country', facets.countries)}${multi('رده سنی', 'age', facets.ages)}${multi('شبکه پخش', 'network', facets.networks)}
-        <label class="filter-select">زبان نسخه <select id="search-audio" data-catalog-filter><option value="">همه</option><option value="sub">زیرنویس</option><option value="dub">دوبله</option><option value="both">هر دو</option></select></label>
-        <label class="filter-select">ترتیب <select id="search-sort" data-catalog-filter><option value="recent">تازه اضافه‌شده</option><option value="title">الفبایی</option><option value="year">سال ساخت</option><option value="rating">امتیاز IMDb</option></select></label>
-        <label class="filter-running"><input type="checkbox" id="search-running" data-catalog-filter> سریال‌های در حال پخش</label>
-      </div>
-      <div class="search-status" id="search-status" aria-live="polite">در حال دریافت کتابخانه…</div><div class="media-grid" id="search-results"></div><div id="search-more"></div>
+        <label class="filter-select"><span>زبان نسخه</span><select id="search-audio" data-catalog-filter><option value="">همه نسخه‌ها</option><option value="sub">زیرنویس</option><option value="dub">دوبله</option><option value="both">دوبله و زیرنویس</option></select></label>
+        <label class="filter-running"><input type="checkbox" id="search-running" data-catalog-filter><span>فقط سریال‌های در حال پخش</span></label>
+        <button type="button" class="filter-reset" data-filter-reset>پاک کردن فیلترها ↺</button>
+      </div></details><div class="discovery-results">
+        <div class="results-toolbar"><div class="chip-row" aria-label="فیلتر نوع"><button type="button" class="chip active" data-search-type="">همه آثار</button><button type="button" class="chip" data-search-type="movie">فیلم</button><button type="button" class="chip" data-search-type="series">سریال</button></div>
+          <label class="sort-control"><span>مرتب‌سازی</span><select id="search-sort" data-catalog-filter><option value="recent">تازه اضافه‌شده</option><option value="title">الفبایی</option><option value="year">سال ساخت</option><option value="rating">امتیاز IMDb</option></select></label></div>
+        <div class="search-status" id="search-status" aria-live="polite">در حال دریافت کتابخانه…</div><div class="media-grid" id="search-results"></div><div id="search-more"></div>
+      </div></div>
     </div>`;
     await runSearch('', initialQuery, version, initialGenre);
   }
@@ -464,16 +502,16 @@
         <div class="detail-copy"><div class="eyebrow">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</div><h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>
           ${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="detail-en-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}
           <div class="meta-row">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}${content.type === 'series' ? `–${escapeHtml(content.lastAirYear || 'نامشخص')}` : ''}</span>` : ''}${content.runtimeMinutes ? `<span class="meta-dot">${formatNumber(content.runtimeMinutes)} دقیقه</span>` : ''}${content.seriesRunning && content.currentSeason ? `<span class="meta-dot status-live">فصل ${formatNumber(content.currentSeason)} در حال پخش</span>` : ''}</div>
-          ${(content.directors?.length || content.cast?.length) ? `<div class="credit-line"><span>کارگردان</span> ${namesMarkup(content.directors)}</div>` : ''}
-          ${content.cast?.length ? `<div class="credit-line"><span>بازیگران</span> ${namesMarkup(content.cast)}</div>` : ''}
-          ${content.description ? `<p class="description">${escapeHtml(content.description)}</p>` : ''}
           <div class="action-row">${onlinePlaybackVisible() ? `<button class="primary-button" data-route="/player/${encodeURIComponent(content.id)}">${icons.play} پخش آنلاین</button>` : ''}<button class="secondary-button" data-open-download="${escapeHtml(content.id)}">${icons.download} انتخاب نسخه</button><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="علاقه‌مندی">${icons.heart}</button></div>
         </div>
       </div>
     </section>
     <div class="page-shell detail-layout">
-      <aside class="surface-panel"><h2>اطلاعات اثر</h2><div class="fact-list">${facts.map(([label, value]) => `<div class="fact"><span>${escapeHtml(label)}</span><div class="fact-value">${String(value).startsWith('<span') ? value : escapeHtml(value)}</div></div>`).join('')}</div></aside>
-      <section class="surface-panel"><h2>دیدگاه تماشاگران</h2>
+      <div class="detail-story"><section class="detail-synopsis"><span class="editorial-kicker">THE STORY / داستان</span><h2>دربارهٔ این اثر</h2><p>${content.description ? escapeHtml(content.description) : 'توضیحی برای این اثر ثبت نشده است.'}</p></section>
+        ${(content.directors?.length || content.cast?.length) ? `<section class="detail-credits"><div class="detail-section-heading"><div><span class="editorial-kicker">THE PEOPLE / عوامل</span><h2>جلوی دوربین و پشت صحنه</h2></div></div>${content.directors?.length ? `<div class="credit-block"><span>کارگردان</span><div>${namesMarkup(content.directors)}</div></div>` : ''}${content.cast?.length ? `<div class="credit-block"><span>بازیگران</span><div>${namesMarkup(content.cast)}</div></div>` : ''}</section>` : ''}
+      </div>
+      <aside class="surface-panel detail-facts"><span class="editorial-kicker">THE DETAILS</span><h2>اطلاعات اثر</h2><div class="fact-list">${facts.filter(([label]) => !['کارگردان','بازیگران'].includes(label)).map(([label, value]) => `<div class="fact"><span>${escapeHtml(label)}</span><div class="fact-value">${escapeHtml(value)}</div></div>`).join('')}</div></aside>
+      <section class="surface-panel detail-comments"><span class="editorial-kicker">THE CONVERSATION</span><h2>دیدگاه تماشاگران</h2>
         ${state.user ? '<form class="comment-form" id="comment-form"><input name="body" maxlength="1200" required placeholder="دیدگاه خود را بنویسید…"><button class="primary-button" type="submit">ارسال</button></form>' : '<button class="secondary-button" data-login style="margin-bottom:16px">برای ثبت دیدگاه وارد شوید</button>'}
         <div class="comments" id="comments-list">${commentsMarkup(comments)}</div>
       </section>
@@ -1720,6 +1758,15 @@
   });
 
   document.addEventListener('click', (event) => {
+    if (event.target.closest('[data-game-start], [data-game-next]')) { nextGameRound(); return; }
+    const answer = event.target.closest('[data-game-answer]');
+    if (answer) { answerGame(Number(answer.dataset.gameAnswer)); return; }
+    if (event.target.closest('[data-filter-reset]')) {
+      $$('[data-catalog-filter]').forEach((input) => { if (input.type === 'checkbox') input.checked = false; else input.value = input.id === 'search-sort' ? 'recent' : ''; });
+      $$('[data-search-type]').forEach((chip) => chip.classList.toggle('active', !chip.dataset.searchType));
+      $$('[data-search-genre]').forEach((chip) => chip.classList.toggle('active', !chip.dataset.searchGenre));
+      runSearch('', $('#search-input')?.value || ''); return;
+    }
     const more = event.target.closest('[data-search-more]');
     if (more) { runSearch($('[data-search-type].active')?.dataset.searchType || '', $('#search-input')?.value || '', state.routeVersion, null, Number(more.dataset.searchMore)); return; }
     const filter = event.target.closest('[data-search-type]');

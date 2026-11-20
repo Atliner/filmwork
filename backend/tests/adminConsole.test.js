@@ -156,7 +156,7 @@ test('bilingual crew stays separate through validation instead of being merged',
   assert.deepEqual(detail.data.content.directors, [
     'دامین مارکانو', 'جان ولز', 'Damian Marcano', 'John Wells',
   ]);
-  assert.deepEqual(detail.data.content.cast, ['نوآ وایلی', 'Noah Wyle']);
+  assert.deepEqual(detail.data.content.cast, ['نوآ وایلی | Noah Wyle']);
   await call(`/api/admin/contents/${created.data.content.id}`, { method: 'DELETE' });
 });
 
@@ -481,4 +481,25 @@ test('explicit bilingual aliases survive admin round trips and either name finds
   const noSubstring = await call('/api/contents?person=Example');
   assert.ok(!noSubstring.data.items.some((i) => i.id === id));
   await call(`/api/admin/contents/${id}`, { method: 'DELETE' });
+});
+
+test('confirmed bilingual credits connect old single-name records across the archive', async () => {
+  async function add(title, directors) {
+    const r = await call('/api/admin/contents', { method: 'POST', body: { titleFa: title, titleEn: title, contentType: 'movie', status: 'published', directors } });
+    assert.equal(r.status, 201); return r.data.content.id;
+  }
+  const canonical = await add('اثر جفت', ['شخص یکتا | Unique Actor']);
+  const faOnly = await add('اثر فارسی', ['شخص یکتا']);
+  const enOnly = await add('اثر انگلیسی', ['Unique Actor']);
+  for (const name of ['شخص یکتا', 'Unique Actor']) {
+    const found = await call(`/api/contents?person=${encodeURIComponent(name)}`);
+    for (const id of [canonical, faOnly, enOnly]) assert.ok(found.data.items.some((item) => item.id === id));
+  }
+  const detail = await call(`/api/contents/${enOnly}`);
+  assert.deepEqual(detail.data.content.directors, ['شخص یکتا | Unique Actor']);
+  await call(`/api/admin/contents/${canonical}`, { method: 'DELETE' });
+  const after = await call(`/api/contents/${enOnly}`);
+  assert.deepEqual(after.data.content.directors, ['Unique Actor']);
+  await call(`/api/admin/contents/${faOnly}`, { method: 'DELETE' });
+  await call(`/api/admin/contents/${enOnly}`, { method: 'DELETE' });
 });

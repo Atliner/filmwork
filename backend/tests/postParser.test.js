@@ -184,3 +184,10 @@ test('an empty post produces an empty report rather than throwing', () => {
   assert.deepEqual(fields, {});
   assert.equal(meta.confidence, 0);
 });
+
+test('individual bilingual credit pairs are retained while legacy two-list input stays separate', () => {
+  const explicit = parseContentPost('فیلم\nکارگردان: نام فارسی | English Name؛ نفر دوم | Second Name').fields;
+  assert.deepEqual(explicit.directors, ['نام فارسی | English Name', 'نفر دوم | Second Name']);
+  const legacy = parseContentPost('فیلم\nکارگردان: اول، دوم | One, Two').fields;
+  assert.deepEqual(legacy.directors, ['اول', 'دوم', 'One', 'Two']);
+});

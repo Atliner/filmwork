@@ -743,3 +743,8 @@ table.data .muted { color: var(--muted); font-size: 10.5px; }
 .setting-check span, .setting-check small { display: block; }
 .setting-check small { color: var(--muted); margin-top: 3px; }
 @media (max-width: 620px) { .setting-grid { grid-template-columns: 1fr; } }
+
+.crew-associate { grid-column:1/-1; padding:12px; border:1px solid var(--border); border-radius:12px; background:rgba(255,255,255,.025); }
+.crew-associate small { display:block; color:var(--muted); margin-bottom:8px; line-height:1.7; }
+.crew-associate > div { display:flex; gap:8px; flex-wrap:wrap; }
+.crew-associate .input { flex:1 1 170px; min-width:0; }

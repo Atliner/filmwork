@@ -25,6 +25,7 @@ const multer = require('multer');
 const { query, withTransaction, healthCheck, closePool } = require('./config/db');
 const { AppError, assert, asyncRoute } = require('./lib/errors');
 const { parseCatalogFilters, catalogFacets } = require('./lib/catalogFilters');
+const { createAliasIndex, expandAliases, displayCredits } = require('./lib/peopleAliases');
 const {
   hmacHex,
   generateOpaqueToken,
@@ -607,9 +608,33 @@ app.get('/api/downloads', requireUser, asyncRoute(async (req, res) => {
  * Serves the public catalog from the in-memory store when DEMO_DATA is on, so the
  * storefront and the owner console always show the same library during a preview.
  */
+// Only people/detail requests build this small in-memory index; catalog, home and
+// playback requests do not. Coalesce concurrent builds and invalidate after edits.
+let peopleCache = null;
+let peopleRevision = 0;
+function invalidatePeopleCache() { peopleRevision += 1; peopleCache = null; }
+async function peopleIndex() {
+  if (peopleCache && peopleCache.expires > Date.now()) return peopleCache.promise;
+  const revision = peopleRevision;
+  const promise = (async () => {
+    const store = contentStore();
+    const rows = store.kind === 'demo' ? await store.getPublishedCredits() : await query(
+      "SELECT directors, cast_members FROM contents WHERE status = 'published' AND (directors IS NOT NULL OR cast_members IS NOT NULL)",
+    );
+    return createAliasIndex(rows);
+  })();
+  peopleCache = { promise, expires: Date.now() + 30_000 };
+  try { return await promise; } catch (error) { if (peopleRevision === revision) peopleCache = null; throw error; }
+}
+async function enrichCredits(content) {
+  const index = await peopleIndex();
+  return { ...content, directors: displayCredits(content.directors, index), cast: displayCredits(content.cast, index) };
+}
+
 async function publicContentList(queryParams) {
   const store = contentStore();
   const extra = parseCatalogFilters(queryParams);
+  if (extra.aliases.length) extra.aliases = expandAliases(extra.aliases, await peopleIndex());
   const { page, limit } = parsePage(queryParams);
   const result = await store.listContents({
     page,
@@ -669,6 +694,7 @@ app.get('/api/contents', asyncRoute(async (req, res) => {
   }
   const { page, limit, offset } = parsePage(req.query);
   const selected = parseCatalogFilters(req.query);
+  if (selected.aliases.length) selected.aliases = expandAliases(selected.aliases, await peopleIndex());
   const filters = ["c.status = 'published'"];
   const params = { limit, offset };
   if (req.query.type && ['movie', 'series'].includes(req.query.type)) {
@@ -767,7 +793,7 @@ app.get('/api/contents/:assetId', asyncRoute(async (req, res) => {
     const detail = await contentStore().getContent(assetId);
     if (detail.content.status !== 'published') throw new AppError(404, 'CONTENT_NOT_FOUND', 'اثر پیدا نشد.');
     res.setHeader('Cache-Control', 'no-store');
-    res.json({ content: contentFromStoreItem({ ...detail.content, genres: detail.content.genres || [] }) });
+    res.json({ content: await enrichCredits(contentFromStoreItem({ ...detail.content, genres: detail.content.genres || [] })) });
     return;
   }
   const rows = await query(
@@ -778,7 +804,7 @@ app.get('/api/contents/:assetId', asyncRoute(async (req, res) => {
   );
   assert(rows[0], 404, 'CONTENT_NOT_FOUND', 'اثر پیدا نشد.');
   res.setHeader('Cache-Control', 'public, max-age=30');
-  res.json({ content: contentDto(rows[0]) });
+  res.json({ content: await enrichCredits(contentDto(rows[0])) });
 }));
 
 // Only playback URLs are public here; Telegram delivery links and owner data stay private.
@@ -1660,6 +1686,7 @@ app.get('/api/admin/contents/:assetId', requireAdmin, asyncRoute(async (req, res
 app.post('/api/admin/contents', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
   const payload = normalizeContentPayload(req.body || {}, { statuses: ['draft', 'published'] });
   const created = await contentStore().createContent(payload);
+  invalidatePeopleCache();
   res.status(201).json(created);
 }));
 
@@ -1668,11 +1695,15 @@ app.patch('/api/admin/contents/:assetId', requireAdmin, requireAdminCsrf, asyncR
   if (req.body?.status && Object.keys(req.body).length === 1) {
     const status = asEnum(req.body.status, 'وضعیت', ['draft', 'published', 'archived']);
     const payload = updateContentPayload(await contentStore().getContent(req.params.assetId), { status });
-    res.json(await contentStore().updateContent(req.params.assetId, payload));
+    const updated = await contentStore().updateContent(req.params.assetId, payload);
+    invalidatePeopleCache();
+    res.json(updated);
     return;
   }
   const payload = updateContentPayload(await contentStore().getContent(req.params.assetId), req.body || {});
-  res.json(await contentStore().updateContent(req.params.assetId, payload));
+  const updated = await contentStore().updateContent(req.params.assetId, payload);
+  invalidatePeopleCache();
+  res.json(updated);
 }));
 
 app.post('/api/admin/contents/:assetId/hero', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
@@ -1685,7 +1716,9 @@ app.post('/api/admin/contents/:assetId/sync-media', requireAdmin, requireAdminCs
 }));
 
 app.delete('/api/admin/contents/:assetId', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
-  res.json(await contentStore().deleteContent(req.params.assetId));
+  const deleted = await contentStore().deleteContent(req.params.assetId);
+  invalidatePeopleCache();
+  res.json(deleted);
 }));
 
 /**

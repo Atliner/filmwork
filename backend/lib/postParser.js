@@ -51,6 +51,18 @@ function splitList(value, limit = 24) {
     .slice(0, limit);
 }
 
+// New posts can assert individual pairs with semicolons; two legacy comma
+// lists on either side of a pipe remain separate rather than guessed.
+function splitCredits(value, limit) {
+  const result = [];
+  for (const group of clean(value).split(/[؛;]+/u)) {
+    const pair = group.split('|').map(clean).filter(Boolean);
+    if (pair.length === 2 && !/[,،/]|\s+و\s+/u.test(group) && pair.every((name) => name.length <= 58)) result.push(pair.join(' | '));
+    else result.push(...splitList(group, limit));
+  }
+  return result.slice(0, limit);
+}
+
 /** Longest-first alias matching keeps `امتیاز IMDb` from being read by `امتیاز`. */
 const FIELDS = [
   {
@@ -350,8 +362,8 @@ function parseContentPost(rawText) {
 
   // Channel posts often list every name twice (Persian | English), so the caps are
   // generous rather than tuned to one language.
-  fields.directors = splitList(values.directors, 24);
-  fields.cast = splitList(values.cast, 60);
+  fields.directors = splitCredits(values.directors, 24);
+  fields.cast = splitCredits(values.cast, 60);
   fields.countries = splitList(values.countries, 8);
   fields.ageRating = clean(values.ageRating).slice(0, 20);
   fields.network = clean(values.network).slice(0, 120);

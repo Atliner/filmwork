@@ -23,7 +23,7 @@ const SEED = [
     broadcastNote: 'فصل ۶ — هر جمعه قسمت جدید', seasonCount: 6, episodeCount: 34,
     imdbScore: 8.9, runtime: 50, network: 'HBO Max', country: 'آمریکا', age: 'TV-MA',
     genres: ['درام', 'پزشکی'], directors: ['R. Scott Gemmill'],
-    cast: ['Noah Wyle', 'Tracy Ifeachor', 'Patrick Ball'],
+    cast: ['نوآ وایلی | Noah Wyle', 'Tracy Ifeachor', 'Patrick Ball'],
     description: 'یک شیفت دوازده‌ساعته در اورژانس پیتسبورگ؛ پزشکان با کمبود نیرو، ازدحام بیمار و تصمیم‌های نفس‌گیر روبه‌رو می‌شوند.',
     poster: 'https://image.tmdb.org/t/p/w600_and_h900_bestv2/pitt.jpg',
     views: 18420, daysAgo: 2, dub: true, sub: true, qualities: ['1080p', '720p', '480p'], mediaCount: 34,
@@ -355,6 +355,10 @@ const store = {
       })),
       health: data.health.map((row) => ({ title: row.title, reason: row.reason, created_at: row.createdAt })),
     });
+  },
+
+  async getPublishedCredits() {
+    return ensureState().contents.filter((item) => item.status === 'published').map((item) => ({ directors: item.directors, cast: item.cast }));
   },
 
   async getCatalogFacets() {
