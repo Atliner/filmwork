@@ -1,0 +1,8 @@
+<resources>
+  <style name="PlayerDialog" parent="android:style/Theme.Material.Dialog.Alert">
+    <item name="android:colorAccent">#F5B83D</item>
+    <item name="android:windowBackground">@drawable/player_dialog_background</item>
+    <item name="android:windowMinWidthMinor">88%</item>
+    <item name="android:windowMinWidthMajor">55%</item>
+  </style>
+</resources>

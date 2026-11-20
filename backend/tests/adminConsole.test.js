@@ -156,7 +156,7 @@ test('bilingual crew stays separate through validation instead of being merged',
   assert.deepEqual(detail.data.content.directors, [
     'دامین مارکانو', 'جان ولز', 'Damian Marcano', 'John Wells',
   ]);
-  assert.deepEqual(detail.data.content.cast, ['نوآ وایلی', 'Noah Wyle']);
+  assert.deepEqual(detail.data.content.cast, ['نوآ وایلی | Noah Wyle']);
   await call(`/api/admin/contents/${created.data.content.id}`, { method: 'DELETE' });
 });
 
@@ -377,7 +377,7 @@ test('creating content stores metadata, versions and the hero flag', async () =>
           title: '1080p',
           resolution: '1080p',
           links: [
-            { season: 1, episode: 1, telegramUrl: 'https://t.me/c/1/1' },
+            { season: 1, episode: 1, telegramUrl: 'https://t.me/c/1/1', streamUrl: 'https://example.com/video.mp4', subtitleUrl: 'https://example.com/sub.srt', dubUrl: 'https://example.com/audio.mp3' },
             { season: 1, episode: 2, telegramUrl: 'https://t.me/c/1/2' },
           ],
         },
@@ -403,6 +403,17 @@ test('the detail endpoint returns versions, links and derived counts', async () 
   assert.equal(data.counts.mediaLinks, 3);
 });
 
+test('public player sources contain only playback URLs for published content', async () => {
+  const { status, data } = await call(`/api/contents/${createdId}/player-sources`);
+  assert.equal(status, 200);
+  assert.equal(data.sources.length, 1);
+  assert.deepEqual({ season: data.sources[0].season, episode: data.sources[0].episode,
+    resolution: data.sources[0].resolution, version: data.sources[0].version,
+    streamUrl: data.sources[0].streamUrl, subtitleUrl: data.sources[0].subtitleUrl, audioUrl: data.sources[0].audioUrl },
+    { season: 1, episode: 1, resolution: '1080p', version: '1080p', streamUrl: 'https://example.com/video.mp4', subtitleUrl: 'https://example.com/sub.srt', audioUrl: 'https://example.com/audio.mp3' });
+  assert.ok(!JSON.stringify(data).includes('t.me'));
+});
+
 test('a single promoted title owns the hero banner', async () => {
   const list = await call('/api/admin/contents?limit=50');
   const other = list.data.items.find((item) => item.id !== createdId);
@@ -423,6 +434,11 @@ test('patching only the status keeps the rest of the record', async () => {
   assert.equal(data.content.title, 'پیت');
   assert.deepEqual(data.content.genres, ['درام', 'پزشکی']);
   assert.equal(data.versions.length, 2);
+});
+
+test('unpublished content does not expose player sources', async () => {
+  const result = await call(`/api/contents/${createdId}/player-sources`);
+  assert.equal(result.status, 404);
 });
 
 test('editing the metadata updates the same record', async () => {
@@ -447,4 +463,43 @@ test('deleting removes the content and its detail page', async () => {
   assert.equal(removed.data.deleted, true);
   const missing = await call(`/api/admin/contents/${createdId}`);
   assert.equal(missing.status, 404);
+});
+
+test('explicit bilingual aliases survive admin round trips and either name finds the person', async () => {
+  const created = await call('/api/admin/contents', { method: 'POST', body: {
+    titleFa: 'جفت عوامل', titleEn: 'Paired Credits', contentType: 'movie', status: 'published',
+    directors: ['نام نمونه | Example Person', 'کارگردان دیگر | Another Person'], cast: [],
+  } });
+  assert.equal(created.status, 201);
+  const id = created.data.content.id;
+  const detail = await call(`/api/admin/contents/${id}`);
+  assert.deepEqual(detail.data.content.directors, ['نام نمونه | Example Person', 'کارگردان دیگر | Another Person']);
+  for (const name of ['نام نمونه', 'Example Person']) {
+    const result = await call(`/api/contents?person=${encodeURIComponent(name)}`);
+    assert.ok(result.data.items.some((i) => i.id === id));
+  }
+  const noSubstring = await call('/api/contents?person=Example');
+  assert.ok(!noSubstring.data.items.some((i) => i.id === id));
+  await call(`/api/admin/contents/${id}`, { method: 'DELETE' });
+});
+
+test('confirmed bilingual credits connect old single-name records across the archive', async () => {
+  async function add(title, directors) {
+    const r = await call('/api/admin/contents', { method: 'POST', body: { titleFa: title, titleEn: title, contentType: 'movie', status: 'published', directors } });
+    assert.equal(r.status, 201); return r.data.content.id;
+  }
+  const canonical = await add('اثر جفت', ['شخص یکتا | Unique Actor']);
+  const faOnly = await add('اثر فارسی', ['شخص یکتا']);
+  const enOnly = await add('اثر انگلیسی', ['Unique Actor']);
+  for (const name of ['شخص یکتا', 'Unique Actor']) {
+    const found = await call(`/api/contents?person=${encodeURIComponent(name)}`);
+    for (const id of [canonical, faOnly, enOnly]) assert.ok(found.data.items.some((item) => item.id === id));
+  }
+  const detail = await call(`/api/contents/${enOnly}`);
+  assert.deepEqual(detail.data.content.directors, ['شخص یکتا | Unique Actor']);
+  await call(`/api/admin/contents/${canonical}`, { method: 'DELETE' });
+  const after = await call(`/api/contents/${enOnly}`);
+  assert.deepEqual(after.data.content.directors, ['Unique Actor']);
+  await call(`/api/admin/contents/${faOnly}`, { method: 'DELETE' });
+  await call(`/api/admin/contents/${enOnly}`, { method: 'DELETE' });
 });

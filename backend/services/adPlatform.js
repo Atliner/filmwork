@@ -275,7 +275,8 @@ async function adDashboard() {
   const [events] = await query(
     `SELECT SUM(event_type = 'impression') AS impressions,
             SUM(event_type = 'click') AS clicks,
-            SUM(event_type = 'complete') AS completes
+            SUM(event_type = 'complete') AS completes,
+            SUM(event_type = 'skip') AS skips
      FROM ad_events WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 30 DAY)`,
   );
   const [wallets] = await query('SELECT COALESCE(SUM(balance), 0) AS balance FROM advertiser_wallets');
@@ -298,6 +299,7 @@ async function adDashboard() {
       impressions: Number(events.impressions || 0),
       clicks: Number(events.clicks || 0),
       completes: Number(events.completes || 0),
+      skips: Number(events.skips || 0),
       walletBalance: Number(wallets.balance || 0),
     },
     byGroup: GROUPS.map((group) => {

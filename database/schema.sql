@@ -217,7 +217,7 @@ CREATE TABLE IF NOT EXISTS advertiser_wallets (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS ad_placement_prices (
-  placement ENUM('pre_roll', 'mid_roll', 'post_play', 'pause_overlay',
+  placement ENUM('pre_roll', 'mid_roll', 'timed_banner', 'post_play', 'pause_overlay',
                  'banner_player', 'banner_pause', 'banner_download', 'link_file_button') NOT NULL,
   slot_group ENUM('video', 'banner', 'link') NOT NULL DEFAULT 'video',
   display_name_fa VARCHAR(80) NOT NULL,
@@ -258,7 +258,8 @@ CREATE TABLE IF NOT EXISTS ads (
   campaign_name VARCHAR(180) NOT NULL,
   headline VARCHAR(180) NOT NULL,
   body VARCHAR(1000) NULL,
-  placement ENUM('pre_roll', 'timed_banner', 'pause_overlay') NOT NULL,
+  placement ENUM('pre_roll', 'mid_roll', 'timed_banner', 'post_play', 'pause_overlay',
+                 'banner_player', 'banner_pause', 'banner_download', 'link_file_button') NOT NULL,
   asset_type ENUM('video', 'image') NOT NULL,
   creative_url VARCHAR(2048) NOT NULL,
   target_url VARCHAR(2048) NULL,
@@ -353,6 +354,7 @@ CREATE TABLE IF NOT EXISTS ad_events (
   PRIMARY KEY (id),
   UNIQUE KEY uq_ad_event_dedupe (ad_id, event_type, session_key),
   KEY idx_ad_events_reporting (ad_id, event_type, created_at),
+  KEY idx_ad_events_session (ad_id, session_key),
   CONSTRAINT fk_ad_events_ad FOREIGN KEY (ad_id) REFERENCES ads(id) ON DELETE CASCADE,
   CONSTRAINT fk_ad_events_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

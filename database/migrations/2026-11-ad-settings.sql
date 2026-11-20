@@ -1,6 +1,6 @@
 -- Filmwork: ad platform settings (owner panel)
 --
--- Adds the seven placement types (4 video, 3 banner, 1 link), the persistent
+-- Adds the eight placement types (4 video, 3 banner, 1 link), the persistent
 -- settings store the owner edits, and the columns needed for owner campaigns,
 -- manual review and a temporary local creative that is purged when rejected.
 --
@@ -11,13 +11,13 @@ SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
 SET time_zone = '+00:00';
 
 -- ---------------------------------------------------------------------------
--- 1) placements: 7 slots + serving durations
+-- 1) placements: 8 slots + serving durations
 -- ---------------------------------------------------------------------------
 -- The original three values stay valid inside the wider enum, so existing rows
 -- survive this change; the four new slots are inserted below.
 ALTER TABLE ad_placement_prices
   MODIFY COLUMN placement ENUM(
-    'pre_roll', 'mid_roll', 'post_play', 'pause_overlay',
+    'pre_roll', 'mid_roll', 'timed_banner', 'post_play', 'pause_overlay',
     'banner_player', 'banner_pause', 'banner_download', 'link_file_button'
   ) NOT NULL;
 
@@ -58,7 +58,7 @@ ON DUPLICATE KEY UPDATE
 -- ---------------------------------------------------------------------------
 ALTER TABLE ads
   MODIFY COLUMN placement ENUM(
-    'pre_roll', 'mid_roll', 'post_play', 'pause_overlay',
+    'pre_roll', 'mid_roll', 'timed_banner', 'post_play', 'pause_overlay',
     'banner_player', 'banner_pause', 'banner_download', 'link_file_button'
   ) NOT NULL,
   ADD COLUMN owner_campaign BOOLEAN NOT NULL DEFAULT FALSE AFTER advertiser_id,

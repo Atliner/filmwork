@@ -132,6 +132,12 @@ function adPolicy(settings) {
   };
 }
 
+// Keep historical database rows for audit, but never offer retired or unknown
+// placement names to advertisers. The current catalogue is authoritative.
+function publicPlacementPrices(rows) {
+  return rows.filter((row) => PLACEMENT_KEYS.includes(row.placement));
+}
+
 function placementMeta(placement) {
   return PLACEMENTS.find((item) => item.placement === placement) || null;
 }
@@ -158,6 +164,7 @@ module.exports = {
   mergeSettings,
   adPolicy,
   placementMeta,
+  publicPlacementPrices,
   placementGroup,
   buildSettingsUpdate,
   normalizeKeyValue,

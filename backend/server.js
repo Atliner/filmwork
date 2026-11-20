@@ -24,6 +24,8 @@ const multer = require('multer');
 
 const { query, withTransaction, healthCheck, closePool } = require('./config/db');
 const { AppError, assert, asyncRoute } = require('./lib/errors');
+const { parseCatalogFilters, catalogFacets } = require('./lib/catalogFilters');
+const { createAliasIndex, expandAliases, displayCredits } = require('./lib/peopleAliases');
 const {
   hmacHex,
   generateOpaqueToken,
@@ -54,6 +56,7 @@ const {
 const { deliverMedia } = require('./services/mediaDelivery');
 const { checkDownloadAllowance } = require('./services/downloadPolicy');
 const { changeCampaignStatus, settleExpiredCampaigns } = require('./services/adAccounting');
+const { eventDecision, shouldChargeImpression } = require('./services/adEventRules');
 const { buildParseDraft, normalizeContentPayload, updateContentPayload } = require('./lib/contentParams');
 const { contentStore } = require('./services/contentStoreIndex');
 const siteSettings = require('./services/siteSettings');
@@ -416,7 +419,7 @@ app.get('/api/config', asyncRoute(async (_req, res) => {
     player: { enabled: publicSettings['player.enabled'] === '1', buttonVisible: publicSettings['player.button_visible'] === '1' },
     authBotUrl: username ? `https://t.me/${encodeURIComponent(username)}` : null,
     downloadBotUrl: downloadUsername ? `https://t.me/${encodeURIComponent(downloadUsername)}` : null,
-    placementPrices: prices.map((price) => ({
+    placementPrices: adSettingsLib.publicPlacementPrices(prices).map((price) => ({
       placement: price.placement,
       group: price.slot_group || 'video',
       label: price.display_name_fa,
@@ -605,8 +608,33 @@ app.get('/api/downloads', requireUser, asyncRoute(async (req, res) => {
  * Serves the public catalog from the in-memory store when DEMO_DATA is on, so the
  * storefront and the owner console always show the same library during a preview.
  */
+// Only people/detail requests build this small in-memory index; catalog, home and
+// playback requests do not. Coalesce concurrent builds and invalidate after edits.
+let peopleCache = null;
+let peopleRevision = 0;
+function invalidatePeopleCache() { peopleRevision += 1; peopleCache = null; }
+async function peopleIndex() {
+  if (peopleCache && peopleCache.expires > Date.now()) return peopleCache.promise;
+  const revision = peopleRevision;
+  const promise = (async () => {
+    const store = contentStore();
+    const rows = store.kind === 'demo' ? await store.getPublishedCredits() : await query(
+      "SELECT directors, cast_members FROM contents WHERE status = 'published' AND (directors IS NOT NULL OR cast_members IS NOT NULL)",
+    );
+    return createAliasIndex(rows);
+  })();
+  peopleCache = { promise, expires: Date.now() + 30_000 };
+  try { return await promise; } catch (error) { if (peopleRevision === revision) peopleCache = null; throw error; }
+}
+async function enrichCredits(content) {
+  const index = await peopleIndex();
+  return { ...content, directors: displayCredits(content.directors, index), cast: displayCredits(content.cast, index) };
+}
+
 async function publicContentList(queryParams) {
   const store = contentStore();
+  const extra = parseCatalogFilters(queryParams);
+  if (extra.aliases.length) extra.aliases = expandAliases(extra.aliases, await peopleIndex());
   const { page, limit } = parsePage(queryParams);
   const result = await store.listContents({
     page,
@@ -614,11 +642,12 @@ async function publicContentList(queryParams) {
     q: typeof queryParams.q === 'string' ? queryParams.q.slice(0, 100) : '',
     type: queryParams.type,
     status: 'published',
-    sort: queryParams.sort === 'rating' ? 'views' : queryParams.sort === 'year' ? 'recent' : queryParams.sort,
+    sort: queryParams.sort,
     genre: queryParams.genre,
     yearFrom: queryParams.yearFrom,
     yearTo: queryParams.yearTo,
-    minRating: queryParams.minRating,
+    ...extra,
+    running: extra.running ? '1' : '',
   });
   return {
     items: result.items.filter((item) => item.status === 'published').map(contentFromStoreItem),
@@ -664,6 +693,8 @@ app.get('/api/contents', asyncRoute(async (req, res) => {
     return;
   }
   const { page, limit, offset } = parsePage(req.query);
+  const selected = parseCatalogFilters(req.query);
+  if (selected.aliases.length) selected.aliases = expandAliases(selected.aliases, await peopleIndex());
   const filters = ["c.status = 'published'"];
   const params = { limit, offset };
   if (req.query.type && ['movie', 'series'].includes(req.query.type)) {
@@ -693,20 +724,38 @@ app.get('/api/contents', asyncRoute(async (req, res) => {
     filters.push('JSON_CONTAINS(c.genres, JSON_QUOTE(:genre))');
     params.genre = genre;
   }
-  if (req.query.yearFrom) {
-    params.yearFrom = Math.round(asPositiveNumber(req.query.yearFrom, 'سال شروع', { min: 1888, max: 2200 }));
-    filters.push('c.release_year >= :yearFrom');
+  if (selected.yearFrom !== null) { params.yearFrom = selected.yearFrom; filters.push('c.release_year >= :yearFrom'); }
+  if (selected.yearTo !== null) { params.yearTo = selected.yearTo; filters.push('c.release_year <= :yearTo'); }
+  if (selected.minRating !== null) { params.minRating = selected.minRating; filters.push('c.imdb_score >= :minRating'); }
+  if (selected.maxRating !== null) { params.maxRating = selected.maxRating; filters.push('c.imdb_score <= :maxRating'); }
+  function group(values, prefix, expression) {
+    if (!values.length) return;
+    filters.push('(' + values.map((value, index) => {
+      const key = prefix + index; params[key] = value; return expression(key);
+    }).join(' OR ') + ')');
   }
-  if (req.query.yearTo) {
-    params.yearTo = Math.round(asPositiveNumber(req.query.yearTo, 'سال پایان', { min: 1888, max: 2200 }));
-    filters.push('c.release_year <= :yearTo');
-  }
-  if (req.query.minRating) {
-    params.minRating = asPositiveNumber(req.query.minRating, 'حداقل امتیاز', { min: 0, max: 10 });
-    filters.push('c.imdb_score >= :minRating');
+  group(selected.countries, 'country', (key) => `FIND_IN_SET(REPLACE(:${key}, ' ', ''), REPLACE(REPLACE(c.country, '،', ','), ' ', '')) > 0`);
+  group(selected.ages, 'age', (key) => `c.age_rating = :${key}`);
+  group(selected.networks, 'network', (key) => `c.network = :${key}`);
+  if (selected.running) filters.push("c.content_type = 'series' AND c.series_running = TRUE");
+  if (selected.audio === 'dub' || selected.audio === 'both') filters.push('c.has_dub = TRUE');
+  if (selected.audio === 'sub' || selected.audio === 'both') filters.push('c.has_sub = TRUE');
+  if (selected.aliases.length) {
+    const columns = selected.role === 'director' ? ['c.directors'] : selected.role === 'cast' ? ['c.cast_members'] : ['c.directors', 'c.cast_members'];
+    const matches = [];
+    selected.aliases.forEach((name, index) => {
+      const escaped = name.replace(/[!%_]/g, (ch) => '!' + ch);
+      for (const [suffix, value] of [['exact', escaped], ['left', escaped + ' | %'], ['right', '% | ' + escaped]]) {
+        const key = `person${index}${suffix}`; params[key] = value;
+        for (const column of columns) matches.push(`JSON_SEARCH(${column}, 'one', :${key}, '!') IS NOT NULL`);
+      }
+    });
+    filters.push('(' + matches.join(' OR ') + ')');
   }
   const where = filters.join(' AND ');
-  const order = req.query.sort === 'rating'
+  const order = req.query.sort === 'title'
+    ? 'c.title ASC, c.id ASC'
+    : req.query.sort === 'rating'
     ? 'c.imdb_score DESC, c.created_at DESC'
     : req.query.sort === 'year'
       ? 'c.release_year DESC, c.created_at DESC'
@@ -729,13 +778,22 @@ app.get('/api/contents', asyncRoute(async (req, res) => {
   });
 }));
 
+app.get('/api/contents-facets', asyncRoute(async (req, res) => {
+  const store = contentStore();
+  const facets = store.kind === 'demo' ? await store.getCatalogFacets() : catalogFacets(await query(
+    "SELECT genres, country, network, age_rating, release_year, imdb_score FROM contents WHERE status = 'published'",
+  ));
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(facets);
+}));
+
 app.get('/api/contents/:assetId', asyncRoute(async (req, res) => {
   const assetId = asString(req.params.assetId, 'شناسه اثر', { min: 36, max: 36 });
   if (contentStore().kind === 'demo') {
     const detail = await contentStore().getContent(assetId);
     if (detail.content.status !== 'published') throw new AppError(404, 'CONTENT_NOT_FOUND', 'اثر پیدا نشد.');
     res.setHeader('Cache-Control', 'no-store');
-    res.json({ content: contentFromStoreItem({ ...detail.content, genres: detail.content.genres || [] }) });
+    res.json({ content: await enrichCredits(contentFromStoreItem({ ...detail.content, genres: detail.content.genres || [] })) });
     return;
   }
   const rows = await query(
@@ -746,7 +804,25 @@ app.get('/api/contents/:assetId', asyncRoute(async (req, res) => {
   );
   assert(rows[0], 404, 'CONTENT_NOT_FOUND', 'اثر پیدا نشد.');
   res.setHeader('Cache-Control', 'public, max-age=30');
-  res.json({ content: contentDto(rows[0]) });
+  res.json({ content: await enrichCredits(contentDto(rows[0])) });
+}));
+
+// Only playback URLs are public here; Telegram delivery links and owner data stay private.
+app.get('/api/contents/:assetId/player-sources', asyncRoute(async (req, res) => {
+  const assetId = asString(req.params.assetId, 'شناسه اثر', { min: 36, max: 36 });
+  const detail = await contentStore().getContent(assetId);
+  if (detail.content.status !== 'published') throw new AppError(404, 'CONTENT_NOT_FOUND', 'اثر پیدا نشد.');
+  const sources = (detail.versions || []).flatMap((version) => (version.links || [])
+    .filter((link) => link.streamUrl)
+    .map((link) => ({
+      id: link.id, season: link.season ?? null, episode: link.episode ?? null,
+      episodeTitle: link.title || null, version: version.title || null,
+      resolution: version.resolution || null, quality: link.label || null,
+      audioLabel: version.kind === 'dub' ? 'دوبله' : 'سافت‌ساب',
+      streamUrl: link.streamUrl, subtitleUrl: link.subtitleUrl || null, audioUrl: link.dubUrl || null,
+    })));
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ sources });
 }));
 
 app.get('/api/contents/:assetId/media-options', asyncRoute(async (req, res) => {
@@ -904,7 +980,7 @@ app.get('/api/ads/serve', optionalUser, asyncRoute(async (req, res) => {
     'SELECT is_enabled, is_active FROM ad_placement_prices WHERE placement = :placement LIMIT 1',
     { placement },
   ).catch(() => []);
-  if (slot[0] && (!slot[0].is_enabled || !slot[0].is_active)) return res.json({ ad: null });
+  if (!slot[0] || !slot[0].is_enabled || !slot[0].is_active) return res.json({ ad: null });
   const rows = await query(
     `SELECT public_id, headline, body, placement, asset_type, creative_url,
             target_url, skip_after_seconds, duration_seconds, skip_after_seconds, budget, spent,
@@ -944,10 +1020,18 @@ app.post('/api/ads/:adId/events', optionalUser, asyncRoute(async (req, res) => {
   const sessionKey = hmacHex(`${req.params.adId}:${session}`);
   const accepted = await withTransaction(async (connection) => {
     const [ads] = await connection.execute(
-      'SELECT id, unit_price, budget, spent, status FROM ads WHERE public_id = :adId FOR UPDATE',
+      'SELECT id, unit_price, budget, spent, status, owner_campaign FROM ads WHERE public_id = :adId FOR UPDATE',
       { adId: req.params.adId },
     );
     assert(ads[0], 404, 'AD_NOT_FOUND', 'تبلیغ پیدا نشد.');
+    // Serialise transitions on the campaign row. The unique key alone prevents
+    // duplicate event types but cannot prevent both skip and complete for a session.
+    const [prior] = await connection.execute(
+      'SELECT event_type FROM ad_events WHERE ad_id = :adId AND session_key = :sessionKey',
+      { adId: ads[0].id, sessionKey },
+    );
+    const decision = eventDecision(eventType, prior.map((event) => event.event_type));
+    if (decision !== 'accept') return false;
     const [eventResult] = await connection.execute(
       `INSERT IGNORE INTO ad_events (ad_id, user_id, event_type, session_key, ip_hash, user_agent)
        VALUES (:adId, :userId, :eventType, :sessionKey, :ipHash, :userAgent)`,
@@ -960,7 +1044,7 @@ app.post('/api/ads/:adId/events', optionalUser, asyncRoute(async (req, res) => {
         userAgent: String(req.get('user-agent') || '').slice(0, 500) || null,
       },
     );
-    if (eventResult.affectedRows === 1 && eventType === 'impression' && ads[0].status === 'active') {
+    if (shouldChargeImpression(eventType, eventResult.affectedRows === 1, ads[0])) {
       await connection.execute(
         `UPDATE ads SET
            status = IF(spent + (unit_price / 1000) >= budget, 'completed', status),
@@ -1055,7 +1139,9 @@ app.get('/api/advertiser/profile', requireUser, requireRole('advertiser'), async
       `SELECT a.public_id, a.campaign_name, a.headline, a.placement, a.asset_type,
               a.creative_url, a.budget, a.spent, a.status, a.starts_at, a.ends_at, a.created_at,
               (SELECT COUNT(*) FROM ad_events ae WHERE ae.ad_id = a.id AND ae.event_type = 'impression') AS impressions,
-              (SELECT COUNT(*) FROM ad_events ae WHERE ae.ad_id = a.id AND ae.event_type = 'click') AS clicks
+              (SELECT COUNT(*) FROM ad_events ae WHERE ae.ad_id = a.id AND ae.event_type = 'click') AS clicks,
+              (SELECT COUNT(*) FROM ad_events ae WHERE ae.ad_id = a.id AND ae.event_type = 'complete') AS completes,
+              (SELECT COUNT(*) FROM ad_events ae WHERE ae.ad_id = a.id AND ae.event_type = 'skip') AS skips
        FROM ads a WHERE a.advertiser_id = :userId ORDER BY a.created_at DESC LIMIT 50`,
       { userId: req.user.id },
     ),
@@ -1068,9 +1154,11 @@ app.get('/api/advertiser/profile', requireUser, requireRole('advertiser'), async
   const analytics = campaignRows.reduce((total, row) => {
     total.impressions += Number(row.impressions || 0);
     total.clicks += Number(row.clicks || 0);
+    total.completes += Number(row.completes || 0);
+    total.skips += Number(row.skips || 0);
     total.spent += Number(row.spent || 0);
     return total;
-  }, { impressions: 0, clicks: 0, spent: 0 });
+  }, { impressions: 0, clicks: 0, completes: 0, skips: 0, spent: 0 });
   analytics.ctr = analytics.impressions > 0
     ? Number(((analytics.clicks / analytics.impressions) * 100).toFixed(2))
     : 0;
@@ -1091,6 +1179,8 @@ app.get('/api/advertiser/profile', requireUser, requireRole('advertiser'), async
       spent: Number(row.spent),
       impressions: Number(row.impressions || 0),
       clicks: Number(row.clicks || 0),
+      completes: Number(row.completes || 0),
+      skips: Number(row.skips || 0),
       status: row.status,
       startsAt: row.starts_at,
       endsAt: row.ends_at,
@@ -1172,6 +1262,9 @@ app.post(
       if (slotMeta.asset === 'video') {
         assert(assetType === 'video', 422, 'VIDEO_REQUIRED', 'این جایگاه به فایل ویدیویی نیاز دارد.');
       }
+      if (slotMeta.asset === 'image' || slotMeta.asset === 'link') {
+        assert(assetType === 'image', 422, 'IMAGE_REQUIRED', 'این جایگاه به تصویر نیاز دارد.');
+      }
       // Owner rules: upload caps and local files are stored with the campaign so a
       // rejection can delete them from the host.
       if (req.file) {
@@ -1191,7 +1284,7 @@ app.post(
       const publicId = crypto.randomUUID();
       const created = await withTransaction(async (connection) => {
         const [prices] = await connection.execute(
-          'SELECT * FROM ad_placement_prices WHERE placement = :placement AND is_active = TRUE FOR UPDATE',
+          'SELECT * FROM ad_placement_prices WHERE placement = :placement AND is_active = TRUE AND is_enabled = TRUE FOR UPDATE',
           { placement },
         );
         assert(prices[0], 422, 'PLACEMENT_UNAVAILABLE', 'این جایگاه در حال حاضر فعال نیست.');
@@ -1593,6 +1686,7 @@ app.get('/api/admin/contents/:assetId', requireAdmin, asyncRoute(async (req, res
 app.post('/api/admin/contents', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
   const payload = normalizeContentPayload(req.body || {}, { statuses: ['draft', 'published'] });
   const created = await contentStore().createContent(payload);
+  invalidatePeopleCache();
   res.status(201).json(created);
 }));
 
@@ -1601,11 +1695,15 @@ app.patch('/api/admin/contents/:assetId', requireAdmin, requireAdminCsrf, asyncR
   if (req.body?.status && Object.keys(req.body).length === 1) {
     const status = asEnum(req.body.status, 'وضعیت', ['draft', 'published', 'archived']);
     const payload = updateContentPayload(await contentStore().getContent(req.params.assetId), { status });
-    res.json(await contentStore().updateContent(req.params.assetId, payload));
+    const updated = await contentStore().updateContent(req.params.assetId, payload);
+    invalidatePeopleCache();
+    res.json(updated);
     return;
   }
   const payload = updateContentPayload(await contentStore().getContent(req.params.assetId), req.body || {});
-  res.json(await contentStore().updateContent(req.params.assetId, payload));
+  const updated = await contentStore().updateContent(req.params.assetId, payload);
+  invalidatePeopleCache();
+  res.json(updated);
 }));
 
 app.post('/api/admin/contents/:assetId/hero', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
@@ -1618,7 +1716,9 @@ app.post('/api/admin/contents/:assetId/sync-media', requireAdmin, requireAdminCs
 }));
 
 app.delete('/api/admin/contents/:assetId', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
-  res.json(await contentStore().deleteContent(req.params.assetId));
+  const deleted = await contentStore().deleteContent(req.params.assetId);
+  invalidatePeopleCache();
+  res.json(deleted);
 }));
 
 /**

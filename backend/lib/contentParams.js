@@ -34,6 +34,18 @@ function listOf(value, maxItems, field) {
   return [...new Set(items.map((item) => item.slice(0, 120)))];
 }
 
+function creditsOf(value, maxItems, field) {
+  // A pair is explicit only within a single entry; old two-list Telegram input
+  // ("A, B | C, D") is left flat instead of guessing correspondence.
+  let raw = Array.isArray(value) ? value : String(value || '').split(/[؛;\n]+/u).flatMap((part) => {
+    if (part.includes('|') && !/[,،]/u.test(part)) return [part];
+    return part.split(/[,،|]+/u);
+  });
+  raw = raw.map((entry) => String(entry || '').split('|').map((part) => part.trim()).filter(Boolean).join(' | ')).filter(Boolean);
+  if (raw.length > maxItems || raw.some((entry) => entry.length > 120 || entry.split('|').length > 2)) fail(field);
+  return [...new Set(raw)];
+}
+
 function optionalYear(value, field) {
   if (value === null || value === undefined || value === '') return null;
   const year = Number(normalizeDigits(String(value)).replace(/[^\d]/g, ''));
@@ -106,8 +118,8 @@ function normalizeContentPayload(body = {}, options = {}) {
     episodeCount: contentType === 'series' ? optionalInt(body.episodeCount, 'تعداد قسمت', 1, 5000) : null,
     broadcastNote,
     genres: listOf(body.genres, 12, 'ژانرها'),
-    directors: listOf(body.directors, 24, 'کارگردان'),
-    castMembers: listOf(body.cast ?? body.castMembers, 60, 'بازیگران'),
+    directors: creditsOf(body.directors, 24, 'کارگردان'),
+    castMembers: creditsOf(body.cast ?? body.castMembers, 60, 'بازیگران'),
     countries: listOf(body.countries ?? body.country, 8, 'کشور'),
     network: optionalText(body.network, 120, 'شبکه'),
     ageRating: optionalText(body.ageRating, 20, 'رده سنی'),

@@ -4,13 +4,13 @@ const { query } = require('../config/db');
 const { assert } = require('../lib/errors');
 
 const DEFAULTS = Object.freeze({
-  'site.name': 'Filmwork',
+  'site.name': 'Vizosten',
   'site.tagline': 'تماشای آنلاین و دریافت امن فیلم و سریال',
   'download.burst_limit': '10',
   'download.delay_minutes': '1,2,10,30',
   'download.reset_minutes': '60',
   'download.daily_cap': '0',
-  'download.caption': '🎬 {title}\n📦 {version}\n\nدریافت امن از Filmwork',
+  'download.caption': '🎬 {title}\n📦 {version}\n\nدریافت امن از Vizosten',
   'player.enabled': '1',
   'player.button_visible': '1',
 });
