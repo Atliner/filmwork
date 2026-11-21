@@ -1727,6 +1727,34 @@ app.get('/api/admin/diagnostics', requireAdmin, asyncRoute(async (_req, res) => 
     check('مهاجرت پنل نسخه ۲', report.migrations.contentVersions && report.migrations.mediaLinkColumn,
       report.migrations.mediaLinkColumn ? null : 'فایل database/migrations/2026-11-owner-console-v2.sql اجرا نشده است.');
     check('ستون ژانر', await columnExists('contents', 'genres'), null);
+    // A GitHub update copies SQL files but does not run them. Check the features
+    // separately so an owner can identify a partially applied upgrade.
+    const viewReceipts = await tableExists('content_view_receipts');
+    const adDeletedAt = await columnExists('ads', 'deleted_at');
+    const adBid = await columnExists('ads', 'bid_multiplier');
+    const telegramMode = await columnExists('ads', 'telegram_click_mode');
+    const adColumns = await query(`SELECT table_name AS tableName, column_name AS columnName, column_type AS columnType, numeric_precision AS precisionValue, numeric_scale AS scaleValue
+      FROM information_schema.columns WHERE table_schema = DATABASE()
+        AND ((table_name IN ('ads','ad_placement_prices') AND column_name = 'placement')
+          OR (table_name = 'ads' AND column_name IN ('budget','spent'))
+          OR (table_name = 'advertiser_wallets' AND column_name = 'balance')
+          OR (table_name = 'wallet_transactions' AND column_name IN ('amount','balance_after'))) `);
+    const pagePlacements = ['banner_home','text_home','banner_detail','text_detail','banner_search','text_search'];
+    const placementTypes = ['ads','ad_placement_prices'].every((table) => {
+      const column = adColumns.find((row) => row.tableName === table && row.columnName === 'placement');
+      return column && pagePlacements.every((name) => String(column.columnType).includes(`'${name}'`));
+    });
+    const preciseMoney = [['ads','budget'],['ads','spent'],['advertiser_wallets','balance'],['wallet_transactions','amount'],['wallet_transactions','balance_after']].every(([table, column]) => {
+      const row = adColumns.find((item) => item.tableName === table && item.columnName === column);
+      return row && Number(row.scaleValue) >= 5 && Number(row.precisionValue) - Number(row.scaleValue) >= 15;
+    });
+    report.migrations.contentViewReceipts = viewReceipts;
+    report.migrations.adSoftDelete = adDeletedAt;
+    report.migrations.adPageBidding = Boolean(adBid && telegramMode && placementTypes && preciseMoney);
+    check('جدول ثبت بازدید آثار', viewReceipts, viewReceipts ? null : 'پس از پشتیبان‌گیری، migration 2026-11-content-view-receipts.sql را اجرا کنید.');
+    check('ستون حذف کمپین', adDeletedAt, adDeletedAt ? null : 'پس از پشتیبان‌گیری، migration 2026-11-soft-delete-campaigns.sql را اجرا کنید.');
+    check('ساختار تبلیغات صفحه و ربات', report.migrations.adPageBidding, report.migrations.adPageBidding ? null : 'پس از پشتیبان‌گیری و بررسی پیش‌نیازها، migration 2026-11-page-ads-bidding.sql را اجرا کنید.');
+
   } catch (error) {
     check('بررسی ساختار دیتابیس', false, error.message);
   }
@@ -2239,6 +2267,10 @@ app.use((error, req, res, next) => {
     normalized = new AppError(422, 'UPLOAD_ERROR', error.code === 'LIMIT_FILE_SIZE' ? 'حجم فایل تبلیغ بیش از حد مجاز است.' : 'بارگذاری فایل ناموفق بود.');
   } else if (error?.type === 'entity.parse.failed') {
     normalized = new AppError(400, 'INVALID_JSON', 'بدنه JSON معتبر نیست.');
+  } else if (/^\/api\/advertiser(?:\/|$)/.test(req.path) && ['ER_BAD_FIELD_ERROR', 'ER_NO_SUCH_TABLE', 'ER_BAD_TABLE_ERROR'].includes(error?.code)) {
+    // Do not hide the original database error from operators or expose SQL to clients.
+    console.error(`[${req.requestId}] Advertiser schema error`, error);
+    normalized = new AppError(503, 'AD_SCHEMA_UNAVAILABLE', 'ساختار پایگاه دادهٔ تبلیغات کامل نیست؛ با پشتیبانی سایت تماس بگیرید.');
   } else if (error?.code === 'ER_DUP_ENTRY') {
     normalized = new AppError(409, 'DUPLICATE_RECORD', 'این رکورد پیش‌تر ثبت شده است.');
   }

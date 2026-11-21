@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { query, closePool } = require('../config/db');
 const { app } = require('../server');
-const { signUserToken } = require('../lib/security');
+const { signUserToken, signAdminToken } = require('../lib/security');
 const { deliverWithTelegramAd } = require('../services/telegramAds');
 let server, base, userId, auth;
 const assetId = crypto.randomUUID();
@@ -71,4 +71,39 @@ test('text placements bill the selected bid once per view and count click fallba
   assert.equal(Number(rows[0].spent),2); assert.equal(Number(rows[0].unit_price),2000); assert.equal(Number(rows[0].bid_multiplier),2);
   const counts = await query("SELECT event_type,COUNT(*) count FROM ad_events e JOIN ads a ON a.id=e.ad_id WHERE a.public_id=:id GROUP BY event_type",{id});
   assert.equal(Number(counts.find(x=>x.event_type==='click').count),1);
+});
+
+// An old deployment that copied JS without applying SQL must be identifiable.
+test('missing ad migrations produce actionable errors and owner diagnostics', async () => {
+  const cookie = `filmwork_admin=${signAdminToken('123456789', 'integration-csrf')}`;
+  async function diagnostics() {
+    const response = await fetch(`${base}/api/admin/diagnostics`, {headers:{cookie}});
+    assert.equal(response.status,200); return response.json();
+  }
+  let report = await diagnostics();
+  assert.equal(report.migrations.contentViewReceipts,true);
+  assert.equal(report.migrations.adSoftDelete,true);
+  assert.equal(report.migrations.adPageBidding,true);
+  await query('ALTER TABLE ads DROP COLUMN telegram_click_mode');
+  try {
+    const result = await request('/api/advertiser/profile');
+    assert.equal(result.response.status,503,JSON.stringify(result.data));
+    assert.equal(result.data.error.code,'AD_SCHEMA_UNAVAILABLE');
+    assert.match(result.data.error.message,/پایگاه داده/);
+    assert.ok(result.data.error.requestId);
+    report = await diagnostics(); assert.equal(report.migrations.adPageBidding,false);
+    assert.ok(report.checks.some(c => !c.ok && /2026-11-page-ads-bidding/.test(c.detail || '')));
+  } finally {
+    await query("ALTER TABLE ads ADD COLUMN telegram_click_mode ENUM('tracked','direct') NOT NULL DEFAULT 'tracked' AFTER target_url");
+  }
+  await query('ALTER TABLE ads DROP COLUMN deleted_at');
+  try {
+    const result = await request('/api/advertiser/profile');
+    assert.equal(result.response.status,503,JSON.stringify(result.data));
+    assert.equal(result.data.error.code,'AD_SCHEMA_UNAVAILABLE');
+    report = await diagnostics(); assert.equal(report.migrations.adSoftDelete,false);
+    assert.ok(report.checks.some(c => !c.ok && /2026-11-soft-delete/.test(c.detail || '')));
+  } finally {
+    await query('ALTER TABLE ads ADD COLUMN deleted_at TIMESTAMP(3) NULL AFTER reviewed_at');
+  }
 });

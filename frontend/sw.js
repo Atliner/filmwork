@@ -1,6 +1,6 @@
 /* Cache only the offline shell; never cache API responses or account data. */
-const CACHE = 'vizosten-shell-v16';
-const SHELL = ['/', '/manifest.webmanifest', '/styles.css?v=16', '/app.js?v=16', '/favicon.ico', '/icons/splash.jpg', '/icons/icon-192.png', '/icons/icon-512.png'];
+const CACHE = 'vizosten-shell-v17';
+const SHELL = ['/', '/manifest.webmanifest', '/styles.css?v=16', '/app.js?v=17', '/favicon.ico', '/icons/splash.jpg', '/icons/icon-192.png', '/icons/icon-512.png'];
 const SHELL_PATHS = new Set(SHELL.map((path) => new URL(path, self.location.origin).pathname));
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));

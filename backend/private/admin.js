@@ -2065,6 +2065,7 @@
     const changedFiles = (lastRun?.files || []);
     root.innerHTML = `<section class="view">
       <div class="page-head"><div><h1>به‌روزرسانی از گیت‌هاب</h1><p>هر تغییری که در گیت‌هاب می‌دهید، از همین صفحه روی هاست اعمال می‌شود؛ لازم نیست فایل‌ها را با File Manager عوض کنید</p></div></div>
+      <div class="callout callout--warn">${ICONS.warn}<span>این ابزار فقط فایل‌ها را کپی می‌کند و migrationهای پایگاه داده را اجرا نمی‌کند. پیش از اعمال نسخه‌های نیازمند migration از دیتابیس پشتیبان بگیرید و دستورهای راهنما را اجرا کنید. <button class="button button--ghost button--xs" type="button" data-diagnostics>بررسی ساختار دیتابیس</button></span></div>
       ${status.configured ? '' : `<div class="callout callout--warn">${ICONS.warn}<span>برای فعال شدن این صفحه، در <code>.env</code> مقدار <code>GITHUB_REPO=Atliner/filmwork</code> را بگذارید (برای ریپوی خصوصی <code>GITHUB_TOKEN</code> هم لازم است) و سرویس Node را یک‌بار ری‌استارت کنید.</span></div>`}
       <div class="deploy-grid">
         <article class="panel"><div class="panel__head"><div><h2>وضعیت</h2><p>مخزن و شاخه‌ای که روی هاست اعمال می‌شود</p></div></div>

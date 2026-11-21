@@ -138,7 +138,8 @@
   }
 
   function apiErrorMessage(error) {
-    return error?.message || 'ارتباط با سرور برقرار نشد.';
+    const message = error?.message || 'ارتباط با سرور برقرار نشد.';
+    return error?.requestId ? `${message} (شناسه پیگیری: ${error.requestId})` : message;
   }
 
   async function api(path, options = {}) {
@@ -166,6 +167,7 @@
       const error = new Error(data.error?.message || 'درخواست انجام نشد.');
       error.code = data.error?.code || `HTTP_${response.status}`;
       error.status = response.status;
+      if (response.status >= 500 && /^[a-f0-9-]{36}$/i.test(data.error?.requestId || '')) error.requestId = data.error.requestId;
       throw error;
     }
     return data;
