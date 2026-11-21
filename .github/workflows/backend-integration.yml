@@ -62,8 +62,7 @@ jobs:
           result=$?
           cat /tmp/mysql-test-output
           if [ "$result" -ne 0 ]; then
-            message=$(tail -c 12000 /tmp/mysql-test-output | sed ':a;N;$!ba;s/%/%25/g;s//%0D/g;s/
-/%0A/g')
+            message=$(python3 -c 's=open("/tmp/mysql-test-output").read()[-12000:]; print(s.replace("%", "%25").replace(chr(13), "%0D").replace(chr(10), "%0A"))')
             echo "::error::$message"
             exit "$result"
           fi
