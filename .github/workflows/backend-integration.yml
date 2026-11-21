@@ -55,4 +55,15 @@ jobs:
             done
           done
       - name: Exercise transactions and delivery against MySQL
-        run: node --test backend/tests/mysqlAds.integration.js
+        shell: bash
+        run: |
+          set +e
+          node --test backend/tests/mysqlAds.integration.js > /tmp/mysql-test-output 2>&1
+          result=$?
+          cat /tmp/mysql-test-output
+          if [ "$result" -ne 0 ]; then
+            message=$(tail -c 12000 /tmp/mysql-test-output | sed ':a;N;$!ba;s/%/%25/g;s//%0D/g;s/
+/%0A/g')
+            echo "::error::$message"
+            exit "$result"
+          fi
