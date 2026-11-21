@@ -228,15 +228,16 @@ test('every sidebar menu item is wired to the router and to an existing view', a
   assert.match(script, /button\.matches\('\[data-view\]'\)/, 'clicks on .nav-item must navigate');
 });
 
-test('ad settings expose the eight placements in three groups with a working policy', async () => {
+test('ad settings expose all placements in three groups with a working policy', async () => {
   const config = await call('/api/admin/ads/settings');
   assert.equal(config.status, 200);
-  assert.equal(config.data.placements.length, 8);
+  assert.equal(config.data.placements.length, 14);
   const groups = config.data.placements.reduce((acc, slot) => {
     acc[slot.group] = (acc[slot.group] || 0) + 1;
     return acc;
   }, {});
-  assert.deepEqual(groups, { video: 4, banner: 3, link: 1 });
+  assert.deepEqual(groups, { video: 4, banner: 9, link: 1 });
+  assert.equal(config.data.placements.find((slot) => slot.placement === 'text_home').enabled, false);
   assert.equal(config.data.policy.maxVideoMb, 8);
   assert.equal(config.data.policy.defaultVideoDuration, 15);
   assert.equal(config.data.policy.autoApprove, false);
@@ -579,4 +580,29 @@ test('IMDb poster collection requires owner and returns image links', async () =
     const result = await call('/api/admin/imdb-posters', {method:'POST',body:{url:'https://www.imdb.com/title/tt31938062/',count:2}});
     assert.equal(result.status, 200); assert.equal(result.data.posters.length, 1); assert.match(result.data.posters[0], /^https:\/\/m.media-amazon.com\//);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test('detail visits increment once per navigation token, and do not count reads', async () => {
+  const list = await call('/api/contents?limit=1'); const id = list.data.items[0].id;
+  const initial = (await call(`/api/contents/${id}`)).data.content.views;
+  const token = require('node:crypto').randomUUID();
+  const first = await call(`/api/contents/${id}/views`, { method:'POST', body:{visitId:token} });
+  const retry = await call(`/api/contents/${id}/views`, { method:'POST', body:{visitId:token} });
+  const second = await call(`/api/contents/${id}/views`, { method:'POST', body:{visitId:require('node:crypto').randomUUID()} });
+  assert.equal(first.data.views, initial + 1); assert.equal(first.data.counted, true);
+  assert.equal(retry.data.views, initial + 1); assert.equal(retry.data.counted, false);
+  assert.equal(second.data.views, initial + 2);
+  assert.equal((await call(`/api/contents/${id}`)).data.content.views, initial + 2);
+  assert.equal((await call(`/api/contents/${id}/views`, { method:'POST', body:{visitId:'invalid'} })).status, 422);
+});
+
+test('admin can hide an owner campaign while anonymous deletes are denied', async () => {
+  const campaigns = await call('/api/admin/ads/campaigns?owner=owner'); const id = campaigns.data.items[0].id;
+  const oldCookie = cookie, oldCsrf = csrf;
+  try { cookie = ''; csrf = ''; assert.equal((await call(`/api/admin/ads/campaigns/${id}`, {method:'DELETE'})).status, 404); }
+  finally { cookie = oldCookie; csrf = oldCsrf; }
+  const deleted = await call(`/api/admin/ads/campaigns/${id}`, {method:'DELETE'});
+  assert.equal(deleted.status, 200); assert.equal(deleted.data.deleted, true);
+  assert.ok(!(await call('/api/admin/ads/campaigns?owner=owner')).data.items.some((item) => item.id === id));
+  assert.equal((await call(`/api/admin/ads/campaigns/${id}`, {method:'DELETE'})).status, 404);
 });

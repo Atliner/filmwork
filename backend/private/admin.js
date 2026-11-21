@@ -1679,6 +1679,7 @@
           <button class="button button--danger button--xs" type="button" data-ad-review="rejected" data-ad-id="${esc(campaign.id)}">رد</button>` : ''}
         ${campaign.status === 'active' ? `<button class="button button--ghost button--xs" type="button" data-ad-review="paused" data-ad-id="${esc(campaign.id)}">توقف</button>` : ''}
         ${campaign.status === 'paused' ? `<button class="button button--ghost button--xs" type="button" data-ad-review="active" data-ad-id="${esc(campaign.id)}">فعال‌سازی</button>` : ''}
+        <button class="button button--danger button--xs" type="button" data-ad-delete="${esc(campaign.id)}">حذف</button>
       </div>
     </article>`;
   }
@@ -1727,10 +1728,12 @@
                 <label class="field"><span>فایل تبلیغ (آپلود)</span><input class="input" type="file" name="creative" accept="video/mp4,video/webm,image/jpeg,image/png,image/webp"></label>
                 <label class="field"><span>یا لینک فایل</span><input class="input" dir="ltr" name="creativeUrl" placeholder="https://cdn.example.com/ad.mp4"></label>
               </div>
+              <label class="field"><span>ضریب پیشنهاد (به‌جز دکمهٔ ربات)</span><input class="input" type="number" name="bidMultiplier" min="1" max="${esc(data.policy?.maxPriorityMultiplier || 5)}" step="0.01" value="1"><small>ضریب بیشتر، احتمال انتخاب را بیشتر می‌کند. کمپین مالک هزینه ندارد.</small></label>
               <div class="grid-2">
                 <label class="field"><span>لینک مقصد</span><input class="input" dir="ltr" name="targetUrl" placeholder="https://example.com"></label>
                 <label class="field"><span>مدت نمایش (ثانیه)</span><input class="input" type="number" name="durationSeconds" min="0" max="120" value="${esc(data.policy?.defaultVideoDuration || 15)}"></label>
               </div>
+              <label class="field"><span>دکمهٔ ربات: شیوهٔ هدایت</span><select class="select" name="telegramClickMode"><option value="tracked">از سایت، با ثبت کلیک</option><option value="direct">مستقیم به تلگرام، بدون آمار کلیک</option></select><small>فقط برای دکمهٔ ربات؛ مقصد باید لینک t.me باشد. تعرفه به‌ازای هزار ارسال فایل است.</small></label>
               <div class="grid-2">
                 <label class="field"><span>شروع</span><input class="input" type="datetime-local" name="startsAt"></label>
                 <label class="field"><span>پایان</span><input class="input" type="datetime-local" name="endsAt"></label>
@@ -1899,6 +1902,14 @@
         review.disabled = false;
         toast(error.message, 'error');
       }
+      return;
+    }
+    const removeAd = event.target.closest('[data-ad-delete]');
+    if (removeAd) {
+      if (!(await confirmDialog({ title:'حذف کمپین', message:'کمپین متوقف و از فهرست حذف می‌شود. بودجهٔ مصرف‌نشده به کیف پول صاحب آن برمی‌گردد و سوابق مالی محفوظ می‌ماند.', confirmLabel:'حذف کمپین' }))) return;
+      removeAd.disabled = true;
+      try { await api(`/api/admin/ads/campaigns/${encodeURIComponent(removeAd.dataset.adDelete)}`, { method:'DELETE' }); toast('کمپین حذف شد.', 'success'); await renderAdSettings(); }
+      catch (error) { removeAd.disabled = false; toast(error.message, 'error'); }
       return;
     }
     const ownerFilter = event.target.closest('[data-ad-owner]');
@@ -2304,7 +2315,7 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
         <details>
           <summary>۱۰. تنظیمات تبلیغات (جایگاه‌ها، تعرفه، بررسی و کمپین مالک)</summary>
           <div class="guide__body">
-            <p style="margin:0 0 8px"><b>سه نوع تبلیغ، هشت جایگاه:</b> ویدیویی ۴ جایگاه (پیش از پخش، میان‌پخش، پس از پخش، لایه توقف) · بنری ۳ جایگاه (روی پلیر ۷۲۸×۹۰، بنر توقف ۳۰۰×۲۵۰، بنر قبل از دانلود ۱۰۸۰×۱۹۲۰) · لینکی ۱ جایگاه (دکمه لینک زیر فایل در ربات).</p>
+            <p style="margin:0 0 8px"><b>جایگاه‌های تبلیغ:</b> ویدیویی ۴ جایگاه (پیش از پخش، میان‌پخش، پس از پخش، لایه توقف) · بنری و متنی (پلیر، توقف، دانلود، صفحهٔ اصلی، جزئیات و جست‌وجو) · لینکی ۱ جایگاه (دکمه لینک زیر فایل در ربات).</p>
             <ul>
               <li><b>روشن/خاموش:</b> هر جایگاه یک کلید دارد. خاموش یعنی حتی اگر کمپین فعال باشد، هیچ تبلیغی در آن جایگاه سرو نمی‌شود و آن جایگاه از فرم تبلیغ‌دهنده هم حذف می‌شود.</li>
               <li><b>مدت نمایش:</b> برای هر جایگاه ویدیویی/بنری مدت پیش‌فرض را تعیین کنید؛ برای کمپین‌ها هم مقدار جدا ذخیره می‌شود. «دکمه رد کردن پس از» مشخص می‌کند کاربر چند ثانیه بعد بتواند تبلیغ را رد کند.</li>

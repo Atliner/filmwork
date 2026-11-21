@@ -97,7 +97,7 @@ async function updatePlacement(placement, patch = {}) {
 
 /** Review queue: pending campaigns with their advertiser and creative. */
 async function listCampaigns({ status = '', owner = '', limit = 200 } = {}) {
-  const where = ['1 = 1'];
+  const where = ['a.deleted_at IS NULL'];
   const params = { limit: Math.min(500, Math.max(1, Number(limit) || 200)) };
   if (status && ['pending', 'active', 'paused', 'completed', 'rejected'].includes(status)) {
     where.push('a.status = :status');
@@ -107,7 +107,7 @@ async function listCampaigns({ status = '', owner = '', limit = 200 } = {}) {
   if (owner === 'users') where.push('a.owner_campaign = FALSE');
   const rows = await query(
     `SELECT a.public_id, a.campaign_name, a.headline, a.body, a.placement, a.asset_type,
-            a.creative_url, a.creative_local_path, a.target_url, a.budget, a.spent, a.status,
+            a.creative_url, a.creative_local_path, a.target_url, a.telegram_click_mode, a.budget, a.spent, a.status,
             a.owner_campaign, a.review_note, a.reviewed_at, a.duration_seconds, a.skip_after_seconds,
             a.starts_at, a.ends_at, a.created_at,
             u.account_name, u.tg_username,
@@ -130,6 +130,7 @@ async function listCampaigns({ status = '', owner = '', limit = 200 } = {}) {
     creativeUrl: row.creative_url,
     localUpload: Boolean(row.creative_local_path),
     targetUrl: row.target_url,
+    telegramClickMode: row.telegram_click_mode,
     budget: Number(row.budget),
     spent: Number(row.spent),
     status: row.status,
@@ -179,16 +180,21 @@ async function createOwnerCampaign(payload) {
   const crypto = require('crypto');
   const { asString, asEnum, asPositiveNumber, asDate, asHttpUrl } = require('../lib/validation');
   const { PLACEMENT_KEYS } = require('./adSettings');
+  const { normalizeBid } = require('./adCompetition');
+  const { telegramTarget, trackedOrigin } = require('../lib/telegramAd');
   const settings = await readSettings();
   const policy = adPolicy(settings);
   const placement = asEnum(payload.placement, 'جایگاه', PLACEMENT_KEYS);
   const meta = placementMeta(placement);
   const group = meta.group;
-  const assetType = meta.asset === 'link' ? 'image' : meta.asset === 'image' ? 'image' : 'video';
+  const bid = normalizeBid(payload.bidMultiplier, placement, policy.maxPriorityMultiplier);
+  const assetType = meta.asset === 'video' ? 'video' : 'image';
   const campaignName = asString(payload.campaignName, 'نام کمپین', { min: 3, max: 180 });
   const headline = asString(payload.headline, 'عنوان تبلیغ', { min: 3, max: 180 });
   const body = asString(payload.body, 'متن تبلیغ', { max: 1000, optional: true });
-  const targetUrl = asHttpUrl(payload.targetUrl, 'نشانی مقصد', { optional: true });
+  let targetUrl = asHttpUrl(payload.targetUrl, 'نشانی مقصد', { optional: placement !== 'link_file_button' });
+  const clickMode = placement === 'link_file_button' ? asEnum(payload.telegramClickMode || 'tracked', 'شیوهٔ هدایت', ['tracked','direct']) : 'tracked';
+  if (placement === 'link_file_button') { targetUrl = telegramTarget(targetUrl); if (clickMode === 'tracked') trackedOrigin(); assert(headline.length <= 64, 422, 'BUTTON_TEXT_TOO_LONG', 'عنوان دکمه حداکثر ۶۴ نویسه است.'); }
   const startsAt = payload.startsAt ? asDate(payload.startsAt, 'زمان شروع') : new Date();
   const endsAt = payload.endsAt
     ? asDate(payload.endsAt, 'زمان پایان')
@@ -196,11 +202,12 @@ async function createOwnerCampaign(payload) {
   const creativeUrl = payload.creativeUrl
     ? asHttpUrl(payload.creativeUrl, 'فایل تبلیغ')
     : '';
-  assert(creativeUrl || payload.creativeLocalPath, 422, 'CREATIVE_REQUIRED', 'فایل یا لینک تبلیغ لازم است.');
+  assert(['text','link'].includes(meta.asset) || creativeUrl || payload.creativeLocalPath, 422, 'CREATIVE_REQUIRED', 'فایل یا لینک تبلیغ لازم است.');
   const duration = payload.durationSeconds !== undefined
     ? Math.max(0, Math.round(Number(payload.durationSeconds) || 0))
     : (group === 'banner' ? policy.defaultBannerDuration : policy.defaultVideoDuration);
-  const budget = payload.budget ? asPositiveNumber(payload.budget, 'بودجه', { min: 1000 }) : 0;
+  // Owner campaigns do not spend their budget, but the schema requires it to be positive.
+  const budget = payload.budget ? asPositiveNumber(payload.budget, 'بودجه', { min: 1000 }) : 1000;
   const ownerId = await query(
     "SELECT id FROM users WHERE status = 'active' ORDER BY id ASC LIMIT 1",
   );
@@ -209,11 +216,11 @@ async function createOwnerCampaign(payload) {
   await query(
     `INSERT INTO ads
       (public_id, advertiser_id, owner_campaign, campaign_name, headline, body, placement, asset_type,
-       creative_url, creative_local_path, target_url, unit_price, budget, spent, duration_seconds,
+       creative_url, creative_local_path, target_url, telegram_click_mode, unit_price, bid_multiplier, budget, spent, duration_seconds,
        skip_after_seconds, starts_at, ends_at, status)
      VALUES
       (:publicId, :ownerId, TRUE, :campaignName, :headline, :body, :placement, :assetType,
-       :creativeUrl, :localPath, :targetUrl, :unitPrice, :budget, 0, :duration,
+       :creativeUrl, :localPath, :targetUrl, :clickMode, :unitPrice, :bid, :budget, 0, :duration,
        :skipAfter, :startsAt, :endsAt, 'active')`,
     {
       publicId,
@@ -226,7 +233,9 @@ async function createOwnerCampaign(payload) {
       creativeUrl: creativeUrl || '',
       localPath: payload.creativeLocalPath || null,
       targetUrl,
+      clickMode,
       unitPrice: policy.cpm[group] || 0,
+      bid,
       budget: budget || 1,
       duration,
       skipAfter: policy.skipAfterSeconds,

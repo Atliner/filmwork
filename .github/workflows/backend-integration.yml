@@ -1,0 +1,57 @@
+name: Backend and MySQL integration
+on:
+  pull_request:
+  push:
+    branches: ['arena/0c7ee8aa-filmwork']
+permissions:
+  contents: read
+jobs:
+  mysql:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: integration-test
+          MYSQL_DATABASE: filmwork_test
+          MYSQL_ROOT_HOST: "%"
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pintegration-test"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+    env:
+      NODE_ENV: development
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_NAME: filmwork_test
+      DB_USER: root
+      DB_PASSWORD: integration-test
+      MYSQL_PWD: integration-test
+      JWT_SECRET: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      AUTH_CODE_PEPPER: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      PHONE_ENCRYPTION_KEY: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      APP_URL: https://film.example
+      ADMIN_OWNER_IDS: '123456789'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: backend
+      - run: npm test
+        working-directory: backend
+      - name: Install MySQL client
+        run: command -v mysql || (sudo apt-get update && sudo apt-get install -y default-mysql-client)
+      - name: Install schema and verify upgrade migrations are repeatable
+        run: |
+          mysql -h 127.0.0.1 -u root filmwork_test < database/schema.sql
+          for iteration in 1 2; do
+            for migration in database/migrations/2026-11-content-view-receipts.sql database/migrations/2026-11-soft-delete-campaigns.sql database/migrations/2026-11-page-ads-bidding.sql; do
+              mysql -h 127.0.0.1 -u root filmwork_test < "$migration"
+            done
+          done
+      - name: Exercise transactions and delivery against MySQL
+        run: node --test backend/tests/mysqlAds.integration.js

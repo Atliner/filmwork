@@ -906,3 +906,19 @@
 .poster-gallery a { flex: 0 0 132px; border-radius: 12px; overflow: hidden; }
 .poster-gallery img { display: block; width: 100%; aspect-ratio: 2/3; object-fit: cover; }
 .poster-gallery a:focus-visible { outline: 3px solid #a78bfa; outline-offset: 3px; }
+
+.detail-view-count { color: #c6bbb1; font-size: 12px; margin: 12px 0 0; }
+
+.page-ad-slots { display:grid; gap:10px; margin:16px 0; }
+.page-ad-slots:has(> div:empty):has(> div:only-child) { margin:0; }
+.page-ad { display:flex; align-items:center; gap:14px; padding:14px; border:1px solid #514638; border-radius:16px; background:#211b19; color:#f5eee7; text-decoration:none; position:relative; }
+.page-ad--banner img { width:120px; height:68px; object-fit:cover; border-radius:10px; }
+.page-ad-copy { display:grid; gap:4px; flex:1; min-width:0; }
+.page-ad-copy strong { font-size:14px; } .page-ad-copy > span { color:#b7aaa3; font-size:12px; }
+.page-ad-label { color:#dfbc82; font-size:10px; } .page-ad b { color:#dfbc82; }
+@media (max-width:480px) { .page-ad { gap:10px; padding:10px; } .page-ad--banner img { width:80px; height:55px; } }
+
+[data-creative-field][hidden], [data-bid-field][hidden] { display: none !important; }
+.page-ad-slots:has(> div:empty + div:empty) { margin: 0; }
+
+[data-telegram-mode][hidden] { display: none !important; }
