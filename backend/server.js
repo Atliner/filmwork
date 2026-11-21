@@ -1336,11 +1336,11 @@ app.post(
       const publicId = crypto.randomUUID();
       const created = await withTransaction(async (connection) => {
         const [prices] = await connection.execute(
-          'SELECT *, CAST(price_per_thousand AS CHAR) AS price_exact, CAST(minimum_budget AS CHAR) AS minimum_exact FROM ad_placement_prices WHERE placement = :placement AND is_active = TRUE AND is_enabled = TRUE FOR UPDATE',
-          { placement },
+          'SELECT *, CAST(price_per_thousand AS CHAR) AS price_exact, (CAST(:budget AS DECIMAL(20,5)) >= minimum_budget) AS budget_sufficient FROM ad_placement_prices WHERE placement = :placement AND is_active = TRUE AND is_enabled = TRUE FOR UPDATE',
+          { placement, budget },
         );
         assert(prices[0], 422, 'PLACEMENT_UNAVAILABLE', 'این جایگاه در حال حاضر فعال نیست.');
-        assert(budgetCents >= moneyCents(prices[0].minimum_exact), 422, 'BUDGET_TOO_LOW', `حداقل بودجه این جایگاه ${Number(prices[0].minimum_budget).toLocaleString('fa-IR')} ریال است.`);
+        assert(prices[0].budget_sufficient, 422, 'BUDGET_TOO_LOW', `حداقل بودجه این جایگاه ${Number(prices[0].minimum_budget).toLocaleString('fa-IR')} ریال است.`);
         await connection.execute(
           `INSERT INTO advertiser_wallets (user_id, balance)
            VALUES (:userId, 0) ON DUPLICATE KEY UPDATE user_id = VALUES(user_id)`,
