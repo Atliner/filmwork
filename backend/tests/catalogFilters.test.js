@@ -33,3 +33,11 @@ test('published archive facets and combined filters agree in demo', async () => 
   assert.equal((await get('/api/contents?role=director&person=Noah%20Wyle')).body.items.length, 0);
   assert.equal((await get('/api/contents?minRating=9&maxRating=2')).status, 422);
 });
+
+test('MySQL public DTO includes the last broadcast year including equal years and null', () => {
+  const { contentDto } = require('../server');
+  const row = { asset_uuid:'id', content_type:'series', release_year:2025, last_air_year:2026, imdb_score:null };
+  assert.equal(contentDto(row).lastAirYear, 2026);
+  assert.equal(contentDto({ ...row, last_air_year:2025 }).lastAirYear, 2025);
+  assert.equal(contentDto({ ...row, last_air_year:null }).lastAirYear, null);
+});

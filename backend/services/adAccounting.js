@@ -4,8 +4,11 @@ const { withTransaction } = require('../config/db');
 const { AppError, assert } = require('../lib/errors');
 
 async function refundUnspent(connection, ad, reason) {
-  const refundable = Math.max(0, Number(ad.budget) - Number(ad.spent));
-  if (refundable <= 0) return { refunded: 0 };
+  if (Number(ad.owner_campaign || 0)) return { refunded: 0 };
+  // Calculate and add currency in MySQL DECIMAL, never with floating-point JS.
+  const [amounts] = await connection.execute('SELECT CAST(CAST(GREATEST(budget - spent, 0) AS DECIMAL(20,5)) AS CHAR) AS refundable FROM ads WHERE id = :id', { id: ad.id });
+  const refundable = amounts[0].refundable;
+  if (Number(refundable) <= 0) return { refunded: 0 };
 
   const reference = `campaign-refund:${ad.public_id}`;
   const [existing] = await connection.execute(
@@ -23,11 +26,12 @@ async function refundUnspent(connection, ad, reason) {
     'SELECT balance, currency FROM advertiser_wallets WHERE user_id = :userId FOR UPDATE',
     { userId: ad.advertiser_id },
   );
-  const balance = Number(wallets[0].balance) + refundable;
   await connection.execute(
-    'UPDATE advertiser_wallets SET balance = :balance WHERE user_id = :userId',
-    { balance, userId: ad.advertiser_id },
+    'UPDATE advertiser_wallets SET balance = balance + :refundable WHERE user_id = :userId',
+    { refundable, userId: ad.advertiser_id },
   );
+  const [updatedWallets] = await connection.execute('SELECT CAST(balance AS CHAR) AS balance FROM advertiser_wallets WHERE user_id = :userId', { userId: ad.advertiser_id });
+  const balance = updatedWallets[0].balance;
   await connection.execute(
     `INSERT INTO wallet_transactions
       (user_id, ad_id, transaction_type, amount, balance_after, reference)
@@ -40,13 +44,13 @@ async function refundUnspent(connection, ad, reason) {
       reference,
     },
   );
-  return { refunded: refundable, balance, currency: wallets[0].currency, reason };
+  return { refunded: Number(refundable), balance: Number(balance), currency: wallets[0].currency, reason };
 }
 
 async function changeCampaignStatus(publicId, nextStatus) {
   return withTransaction(async (connection) => {
     const [rows] = await connection.execute(
-      'SELECT * FROM ads WHERE public_id = :publicId FOR UPDATE',
+      'SELECT * FROM ads WHERE public_id = :publicId AND deleted_at IS NULL FOR UPDATE',
       { publicId },
     );
     const ad = rows[0];
@@ -78,7 +82,7 @@ async function settleExpiredCampaigns(advertiserId = null) {
     if (advertiserId) params.advertiserId = advertiserId;
     const [rows] = await connection.execute(
       `SELECT * FROM ads
-       WHERE status IN ('pending', 'active', 'paused')
+       WHERE status IN ('pending', 'active', 'paused') AND deleted_at IS NULL
          AND ends_at <= UTC_TIMESTAMP(3) ${advertiserFilter}
        ORDER BY id ASC LIMIT 100 FOR UPDATE`,
       params,
@@ -95,8 +99,26 @@ async function settleExpiredCampaigns(advertiserId = null) {
   }, { isolationLevel: 'READ COMMITTED' });
 }
 
+
+// Hide the campaign but retain ledger and event records. The row lock serializes
+// deletion, serving events and settlement; owner funds were never reserved.
+async function deleteCampaignLocked(connection, publicId, advertiserId = null) {
+  const [rows] = await connection.execute(
+    'SELECT * FROM ads WHERE public_id = :publicId AND deleted_at IS NULL FOR UPDATE', { publicId },
+  );
+  const ad = rows[0];
+  assert(ad && (advertiserId === null || (!Number(ad.owner_campaign || 0) && String(ad.advertiser_id) === String(advertiserId))), 404, 'AD_NOT_FOUND', 'کمپین پیدا نشد.');
+  const refund = await refundUnspent(connection, ad, 'campaign_deleted');
+  await connection.execute("UPDATE ads SET status = 'completed', deleted_at = UTC_TIMESTAMP(3) WHERE id = :id", { id: ad.id });
+  return { deleted: true, ...refund };
+}
+async function deleteCampaign(publicId, advertiserId = null) {
+  return withTransaction((connection) => deleteCampaignLocked(connection, publicId, advertiserId), { isolationLevel: 'READ COMMITTED' });
+}
 module.exports = {
   refundUnspent,
+  deleteCampaign,
+  deleteCampaignLocked,
   changeCampaignStatus,
   settleExpiredCampaigns,
 };

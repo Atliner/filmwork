@@ -38,3 +38,18 @@ test('public prices exclude legacy and unknown placements without mutating rows'
   assert.deepEqual(publicPlacementPrices(rows), [rows[1], rows[3]]);
   assert.equal(rows.length, 4);
 });
+
+
+test('bot-file placement is offered when enabled', () => {
+  assert.deepEqual(publicPlacementPrices([{placement:'link_file_button'}, {placement:'pre_roll'}]), [{placement:'link_file_button'}, {placement:'pre_roll'}]);
+});
+
+test('page advertising migration widens storage without deleting balances or history', () => {
+  const migration = read('database/migrations/2026-11-page-ads-bidding.sql');
+  for (const key of ['banner_home','text_home','banner_detail','text_detail','banner_search','text_search']) assert.ok(migration.includes(`'${key}'`));
+  assert.match(migration, /spent DECIMAL\(20,5\)/);
+  assert.match(migration, /balance DECIMAL\(20,5\)/);
+  assert.doesNotMatch(migration, /DELETE\s+FROM/i);
+  const deletion = read('database/migrations/2026-11-soft-delete-campaigns.sql');
+  assert.match(deletion, /deleted_at/); assert.doesNotMatch(deletion, /DELETE\s+FROM/i);
+});

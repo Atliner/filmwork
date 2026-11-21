@@ -28,18 +28,18 @@ class DownloadBotService {
   ensureReady() {
     if (!this.bot || !this.started) { const error = new Error('Download bot is not running'); error.code = 'BOT_UNAVAILABLE'; throw error; }
   }
-  async copyMedia(chatId, sourceChatId, messageId, caption) {
+  async copyMedia(chatId, sourceChatId, messageId, caption, adButton = null) {
     this.ensureReady();
-    return this.bot.telegram.copyMessage(chatId, sourceChatId, messageId, { protect_content: false, ...(caption ? { caption } : {}) });
+    return this.bot.telegram.copyMessage(chatId, sourceChatId, messageId, { protect_content: false, ...(caption ? { caption } : {}), ...(adButton ? { reply_markup:{ inline_keyboard:[[adButton]] } } : {}) });
   }
   async sendSubtitle(chatId, sourceChatId, messageId) {
     this.ensureReady();
     return this.bot.telegram.copyMessage(chatId, sourceChatId, messageId, { caption: 'زیرنویس مجزای فایل بالا', protect_content: false });
   }
-  async sendFallbackLink(chatId, link, caption) {
+  async sendFallbackLink(chatId, link, caption, adButton = null) {
     this.ensureReady();
     return this.bot.telegram.sendMessage(chatId, caption || 'اگر دریافت خودکار انجام نشد، پیام ذخیره‌شده را باز کنید:', {
-      reply_markup: { inline_keyboard: [[{ text: 'باز کردن فایل در تلگرام', url: link }]] }, link_preview_options: { is_disabled: true },
+      reply_markup: { inline_keyboard: [[{ text: 'باز کردن فایل در تلگرام', url: link }], ...(adButton ? [[adButton]] : [])] }, link_preview_options: { is_disabled: true },
     });
   }
   async stop(reason = 'shutdown') { if (this.bot && this.started) { this.bot.stop(reason); this.started = false; } }

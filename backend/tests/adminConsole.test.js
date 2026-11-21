@@ -228,15 +228,16 @@ test('every sidebar menu item is wired to the router and to an existing view', a
   assert.match(script, /button\.matches\('\[data-view\]'\)/, 'clicks on .nav-item must navigate');
 });
 
-test('ad settings expose the eight placements in three groups with a working policy', async () => {
+test('ad settings expose all placements in three groups with a working policy', async () => {
   const config = await call('/api/admin/ads/settings');
   assert.equal(config.status, 200);
-  assert.equal(config.data.placements.length, 8);
+  assert.equal(config.data.placements.length, 14);
   const groups = config.data.placements.reduce((acc, slot) => {
     acc[slot.group] = (acc[slot.group] || 0) + 1;
     return acc;
   }, {});
-  assert.deepEqual(groups, { video: 4, banner: 3, link: 1 });
+  assert.deepEqual(groups, { video: 4, banner: 9, link: 1 });
+  assert.equal(config.data.placements.find((slot) => slot.placement === 'text_home').enabled, false);
   assert.equal(config.data.policy.maxVideoMb, 8);
   assert.equal(config.data.policy.defaultVideoDuration, 15);
   assert.equal(config.data.policy.autoApprove, false);
@@ -502,4 +503,106 @@ test('confirmed bilingual credits connect old single-name records across the arc
   assert.deepEqual(after.data.content.directors, ['Unique Actor']);
   await call(`/api/admin/contents/${faOnly}`, { method: 'DELETE' });
   await call(`/api/admin/contents/${enOnly}`, { method: 'DELETE' });
+});
+
+test('public series detail preserves a saved last season year', async () => {
+  const created = await call('/api/admin/contents', { method: 'POST', body: {
+    titleFa: 'آزمون سال', titleEn: 'Year test', contentType: 'series', releaseYear: 2025, lastAirYear: 2026, status: 'published',
+  } });
+  assert.equal(created.status, 201);
+  const id = created.data.content.id;
+  const detail = await call(`/api/contents/${id}`);
+  assert.equal(detail.status, 200); assert.equal(detail.data.content.releaseYear, 2025); assert.equal(detail.data.content.lastAirYear, 2026);
+  await call(`/api/admin/contents/${id}`, { method: 'DELETE' });
+});
+
+test('the actual admin parse API accepts a public Telegram post and groups ordered credits', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url, options) => {
+      if (String(url).startsWith('https://t.me/')) return new Response('<div class="tgme_widget_message_text js-message_text">نام فارسی: پیت<br>سال: 2025 - 2026<br>کارگردان: دامین مارکانو؛ جان ولز؛ Damian Marcano؛ John Wells</div>', { status: 200 });
+      return originalFetch(url, options);
+    };
+    const result = await call('/api/admin/parse', { method:'POST', body: { link:'https://t.me/Vizosten/72' } });
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.data.draft.fields.directors, ['دامین مارکانو | Damian Marcano', 'جان ولز | John Wells']);
+    const fields = result.data.draft.fields;
+    const saved = await call('/api/admin/contents', { method:'POST', body: { ...fields, contentType:'series', titleFa:'پیت آزمون', titleEn:'The Pitt test', status:'published' } });
+    assert.equal(saved.status, 201);
+    const id = saved.data.content.id;
+    try {
+      const detail = await call(`/api/contents/${id}`);
+      assert.ok(detail.data.content.directors.includes('دامین مارکانو | Damian Marcano'));
+      for (const person of ['دامین مارکانو', 'Damian Marcano']) {
+        const resultByName = await call(`/api/contents?person=${encodeURIComponent(person)}`);
+        assert.ok(resultByName.data.items.some((item) => item.id === id));
+      }
+    } finally { await call(`/api/admin/contents/${id}`, { method:'DELETE' }); }
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('poster import is owner-only and rejects off-domain URLs without fetching', async () => {
+  const oldCookie = cookie, oldCsrf = csrf;
+  try {
+    cookie = ''; csrf = '';
+    assert.equal((await call('/api/admin/import-poster', { method:'POST', body:{ url:'http://www.impawards.com/tv/pitt.html' } })).status, 404);
+  } finally { cookie = oldCookie; csrf = oldCsrf; }
+  const bad = await call('/api/admin/import-poster', { method:'POST', body:{ url:'http://127.0.0.1/secret.html' } });
+  assert.equal(bad.status, 422); assert.equal(bad.data.error.code, 'POSTER_URL_INVALID');
+});
+
+test('owner resolves IMPAwards links and relays the image without writing a file', async () => {
+  const jpeg = Buffer.from([0xff,0xd8,0xff,0xe0,0,0,0,0,0xff,0xd9]);
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url, options) => {
+      if (String(url) === 'http://www.impawards.com/tv/pitt.html') return new Response('<img src="/tv/posters/pitt.jpg">', { headers:{'Content-Type':'text/html'} });
+      if (String(url) === 'http://www.impawards.com/tv/posters/pitt.jpg') return new Response(jpeg, { headers:{'Content-Type':'image/jpeg'} });
+      return originalFetch(url, options);
+    };
+    const result = await call('/api/admin/import-poster', { method:'POST', body:{ url:'http://www.impawards.com/tv/pitt.html' } });
+    assert.equal(result.status, 200); assert.equal(result.data.source, 'http://www.impawards.com/tv/posters/pitt.jpg');
+    assert.equal(result.data.path, '/img?url=' + encodeURIComponent(result.data.source));
+    const image = await originalFetch(`${base}${result.data.path}`);
+    assert.equal(image.status, 200); assert.match(image.headers.get('content-type'), /image\/jpeg/); assert.equal(image.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(Buffer.from(await image.arrayBuffer()), jpeg);
+    const bad = await originalFetch(`${base}/img?url=${encodeURIComponent('http://127.0.0.1/private')}`); assert.equal(bad.status, 422);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('IMDb poster collection requires owner and returns image links', async () => {
+  const oldCookie = cookie, oldCsrf = csrf;
+  try { cookie = ''; csrf = ''; assert.equal((await call('/api/admin/imdb-posters', {method:'POST',body:{url:'https://www.imdb.com/title/tt31938062/',count:2}})).status, 404); }
+  finally { cookie = oldCookie; csrf = oldCsrf; }
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url, options) => String(url).startsWith('https://www.imdb.com/') ? new Response('<a href="/title/tt31938062/mediaviewer/rm1/"><img src="https://m.media-amazon.com/images/M/MV5Babcdef._V1_QL75_UX328_.jpg"></a>', {headers:{'content-type':'text/html'}}) : originalFetch(url, options);
+    const result = await call('/api/admin/imdb-posters', {method:'POST',body:{url:'https://www.imdb.com/title/tt31938062/',count:2}});
+    assert.equal(result.status, 200); assert.equal(result.data.posters.length, 1); assert.match(result.data.posters[0], /^https:\/\/m.media-amazon.com\//);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('detail visits increment once per navigation token, and do not count reads', async () => {
+  const list = await call('/api/contents?limit=1'); const id = list.data.items[0].id;
+  const initial = (await call(`/api/contents/${id}`)).data.content.views;
+  const token = require('node:crypto').randomUUID();
+  const first = await call(`/api/contents/${id}/views`, { method:'POST', body:{visitId:token} });
+  const retry = await call(`/api/contents/${id}/views`, { method:'POST', body:{visitId:token} });
+  const second = await call(`/api/contents/${id}/views`, { method:'POST', body:{visitId:require('node:crypto').randomUUID()} });
+  assert.equal(first.data.views, initial + 1); assert.equal(first.data.counted, true);
+  assert.equal(retry.data.views, initial + 1); assert.equal(retry.data.counted, false);
+  assert.equal(second.data.views, initial + 2);
+  assert.equal((await call(`/api/contents/${id}`)).data.content.views, initial + 2);
+  assert.equal((await call(`/api/contents/${id}/views`, { method:'POST', body:{visitId:'invalid'} })).status, 422);
+});
+
+test('admin can hide an owner campaign while anonymous deletes are denied', async () => {
+  const campaigns = await call('/api/admin/ads/campaigns?owner=owner'); const id = campaigns.data.items[0].id;
+  const oldCookie = cookie, oldCsrf = csrf;
+  try { cookie = ''; csrf = ''; assert.equal((await call(`/api/admin/ads/campaigns/${id}`, {method:'DELETE'})).status, 404); }
+  finally { cookie = oldCookie; csrf = oldCsrf; }
+  const deleted = await call(`/api/admin/ads/campaigns/${id}`, {method:'DELETE'});
+  assert.equal(deleted.status, 200); assert.equal(deleted.data.deleted, true);
+  assert.ok(!(await call('/api/admin/ads/campaigns?owner=owner')).data.items.some((item) => item.id === id));
+  assert.equal((await call(`/api/admin/ads/campaigns/${id}`, {method:'DELETE'})).status, 404);
 });

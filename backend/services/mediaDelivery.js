@@ -8,6 +8,7 @@ const {
   probeTelegramLink,
 } = require('../lib/telegram');
 const { downloadBotService } = require('../bots/downloadBot');
+const { deliverWithTelegramAd } = require('./telegramAds');
 
 async function getMedia(publicId) {
   const rows = await query(
@@ -145,7 +146,7 @@ async function deliverMedia(publicId, user, settings = {}) {
     // that Bot API copying was possible.
     if (!media.primary_chat_id || !media.primary_message_id) {
       try {
-        await downloadBotService.sendFallbackLink(user.tg_chat_id, media.tg_link_primary, caption);
+        await deliverWithTelegramAd(user.id, (adButton) => downloadBotService.sendFallbackLink(user.tg_chat_id, media.tg_link_primary, caption, adButton));
       } catch (error) {
         if (error.code === 'BOT_UNAVAILABLE' || /bot was blocked by the user|chat not found|bot can't initiate conversation/i.test(telegramErrorDescription(error))) {
           throw new AppError(503, 'DELIVERY_BOT_START_REQUIRED', `برای دریافت فایل، ابتدا ربات دریافت را باز کنید و /start بزنید${process.env.DOWNLOAD_BOT_USERNAME ? `: @${String(process.env.DOWNLOAD_BOT_USERNAME).replace(/^@/, '')}` : ''}.`);
@@ -162,7 +163,7 @@ async function deliverMedia(publicId, user, settings = {}) {
     }
 
     try {
-      await downloadBotService.copyMedia(user.tg_chat_id, media.primary_chat_id, media.primary_message_id, caption);
+      await deliverWithTelegramAd(user.id, (adButton) => downloadBotService.copyMedia(user.tg_chat_id, media.primary_chat_id, media.primary_message_id, caption, adButton));
       const subtitleDelivered = await deliverSubtitleBestEffort(user, media);
       await markHealthy(media.id);
       return {

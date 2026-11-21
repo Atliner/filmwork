@@ -206,9 +206,18 @@ CREATE TABLE IF NOT EXISTS download_history (
   CONSTRAINT fk_download_history_media FOREIGN KEY (media_link_id) REFERENCES media_links(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- One receipt per rendered detail-page visit; retries reuse the same UUID.
+CREATE TABLE IF NOT EXISTS content_view_receipts (
+  content_id BIGINT UNSIGNED NOT NULL,
+  visit_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (content_id, visit_id),
+  CONSTRAINT fk_view_receipts_content FOREIGN KEY (content_id) REFERENCES contents(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS advertiser_wallets (
   user_id BIGINT UNSIGNED NOT NULL,
-  balance DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+  balance DECIMAL(20,5) NOT NULL DEFAULT 0.00000,
   currency CHAR(3) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'IRR',
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (user_id),
@@ -218,12 +227,13 @@ CREATE TABLE IF NOT EXISTS advertiser_wallets (
 
 CREATE TABLE IF NOT EXISTS ad_placement_prices (
   placement ENUM('pre_roll', 'mid_roll', 'timed_banner', 'post_play', 'pause_overlay',
-                 'banner_player', 'banner_pause', 'banner_download', 'link_file_button') NOT NULL,
+                 'banner_player', 'banner_pause', 'banner_download', 'link_file_button',
+                 'banner_home', 'text_home', 'banner_detail', 'text_detail', 'banner_search', 'text_search') NOT NULL,
   slot_group ENUM('video', 'banner', 'link') NOT NULL DEFAULT 'video',
   display_name_fa VARCHAR(80) NOT NULL,
   price_per_thousand DECIMAL(15,2) NOT NULL,
   default_duration_seconds SMALLINT UNSIGNED NOT NULL DEFAULT 15,
-  minimum_budget DECIMAL(15,2) NOT NULL,
+  minimum_budget DECIMAL(20,5) NOT NULL,
   currency CHAR(3) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'IRR',
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
@@ -244,7 +254,13 @@ VALUES
   ('banner_player', 'banner', 'بنر روی پلیر (۷۲۸×۹۰)', 50000.00, 8, 50000.00, 'IRR', TRUE, 5),
   ('banner_pause', 'banner', 'بنر توقف (۳۰۰×۲۵۰)', 40000.00, 8, 50000.00, 'IRR', TRUE, 6),
   ('banner_download', 'banner', 'بنر قبل از دانلود (۱۰۸۰×۱۹۲۰)', 60000.00, 8, 50000.00, 'IRR', TRUE, 7),
-  ('link_file_button', 'link', 'دکمه لینک زیر فایل (ربات)', 50000.00, 0, 50000.00, 'IRR', TRUE, 8)
+  ('link_file_button', 'link', 'دکمه لینک زیر فایل (ربات)', 50000.00, 0, 50000.00, 'IRR', TRUE, 8),
+  ('banner_home', 'banner', 'بنر صفحهٔ اصلی', 50000.00, 0, 50000.00, 'IRR', FALSE, 9),
+  ('text_home', 'banner', 'تبلیغ متنی صفحهٔ اصلی', 50000.00, 0, 50000.00, 'IRR', FALSE, 10),
+  ('banner_detail', 'banner', 'بنر صفحهٔ جزئیات اثر', 50000.00, 0, 50000.00, 'IRR', FALSE, 11),
+  ('text_detail', 'banner', 'تبلیغ متنی صفحهٔ جزئیات اثر', 50000.00, 0, 50000.00, 'IRR', FALSE, 12),
+  ('banner_search', 'banner', 'بنر صفحهٔ جست‌وجو', 50000.00, 0, 50000.00, 'IRR', FALSE, 13),
+  ('text_search', 'banner', 'تبلیغ متنی صفحهٔ جست‌وجو', 50000.00, 0, 50000.00, 'IRR', FALSE, 14)
 ON DUPLICATE KEY UPDATE
   slot_group = VALUES(slot_group),
   display_name_fa = VALUES(display_name_fa),
@@ -259,17 +275,20 @@ CREATE TABLE IF NOT EXISTS ads (
   headline VARCHAR(180) NOT NULL,
   body VARCHAR(1000) NULL,
   placement ENUM('pre_roll', 'mid_roll', 'timed_banner', 'post_play', 'pause_overlay',
-                 'banner_player', 'banner_pause', 'banner_download', 'link_file_button') NOT NULL,
+                 'banner_player', 'banner_pause', 'banner_download', 'link_file_button',
+                 'banner_home', 'text_home', 'banner_detail', 'text_detail', 'banner_search', 'text_search') NOT NULL,
   asset_type ENUM('video', 'image') NOT NULL,
   creative_url VARCHAR(2048) NOT NULL,
   target_url VARCHAR(2048) NULL,
+  telegram_click_mode ENUM('tracked', 'direct') NOT NULL DEFAULT 'tracked',
   telegram_post_text TEXT NULL,
   telegram_buttons JSON NULL,
   targeting JSON NULL,
   pricing_model ENUM('cpm') NOT NULL DEFAULT 'cpm',
   unit_price DECIMAL(15,2) NOT NULL,
-  budget DECIMAL(15,2) NOT NULL,
-  spent DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+  bid_multiplier DECIMAL(5,2) NOT NULL DEFAULT 1.00,
+  budget DECIMAL(20,5) NOT NULL,
+  spent DECIMAL(20,5) NOT NULL DEFAULT 0.00000,
   status ENUM('pending', 'active', 'paused', 'completed', 'rejected') NOT NULL DEFAULT 'pending',
   skip_after_seconds TINYINT UNSIGNED NOT NULL DEFAULT 5,
   duration_seconds SMALLINT UNSIGNED NULL,
@@ -277,6 +296,7 @@ CREATE TABLE IF NOT EXISTS ads (
   creative_local_path VARCHAR(255) NULL,
   review_note VARCHAR(255) NULL,
   reviewed_at TIMESTAMP(3) NULL,
+  deleted_at TIMESTAMP(3) NULL,
   starts_at TIMESTAMP(3) NOT NULL,
   ends_at TIMESTAMP(3) NOT NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -296,8 +316,8 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
   user_id BIGINT UNSIGNED NOT NULL,
   ad_id BIGINT UNSIGNED NULL,
   transaction_type ENUM('credit', 'campaign_reserve', 'refund', 'adjustment', 'coupon_credit') NOT NULL,
-  amount DECIMAL(15,2) NOT NULL,
-  balance_after DECIMAL(15,2) NOT NULL,
+  amount DECIMAL(20,5) NOT NULL,
+  balance_after DECIMAL(20,5) NOT NULL,
   reference VARCHAR(190) NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (id),
