@@ -110,7 +110,7 @@ test('multiple placements share one reservation and charge their own rates atomi
   const balanceBefore=Number((await query('SELECT balance FROM advertiser_wallets WHERE user_id=:userId',{userId}))[0].balance);
   const id = await createCampaign('text_home','7',{placements:['text_home','text_search'],bidMultiplier:2,landingMode:'direct'});
   assert.equal(Number((await query('SELECT balance FROM advertiser_wallets WHERE user_id=:userId',{userId}))[0].balance), balanceBefore-7);
-  const slots=await query('SELECT placement,unit_price FROM ad_campaign_placements ap JOIN ads a ON a.id=ap.ad_id WHERE a.public_id=:id ORDER BY ap.placement',{id});
+  const slots=await query('SELECT ap.placement,ap.unit_price FROM ad_campaign_placements ap JOIN ads a ON a.id=ap.ad_id WHERE a.public_id=:id ORDER BY ap.placement',{id});
   assert.deepEqual(slots.map(row=>[row.placement,Number(row.unit_price)]),[['text_home',2000],['text_search',3000]]);
   const home=(await request('/api/ads/serve?placement=text_home','GET',undefined,'')).data.ad;
   const search=(await request('/api/ads/serve?placement=text_search','GET',undefined,'')).data.ad;
@@ -139,7 +139,7 @@ test('invalid multi-slot submissions do not reserve funds; owner can publish sev
   const csrf='integration-csrf'; const cookie=`filmwork_admin=${signAdminToken('123456789',csrf)}`;
   const response=await fetch(`${base}/api/admin/ads/campaigns`, {method:'POST',headers:{cookie,'x-csrf-token':csrf,'content-type':'application/json'},body:JSON.stringify({campaignName:'Owner multi',headline:'owner ad',placements:['text_home','text_search'],landingMode:'intermediate',telegramPostText:'example'})});
   const data=await response.json(); assert.equal(response.status,201,JSON.stringify(data));
-  const rows=await query('SELECT placement FROM ad_campaign_placements ap JOIN ads a ON a.id=ap.ad_id WHERE a.public_id=:id ORDER BY ap.placement',{id:data.campaign.id}); assert.deepEqual(rows.map(row=>row.placement),['text_home','text_search']);
+  const rows=await query('SELECT ap.placement FROM ad_campaign_placements ap JOIN ads a ON a.id=ap.ad_id WHERE a.public_id=:id ORDER BY ap.placement',{id:data.campaign.id}); assert.deepEqual(rows.map(row=>row.placement),['text_home','text_search']);
   const land=await request(`/api/ad-tunnel/${data.campaign.id}`,'GET',undefined,''); assert.equal(land.response.status,200);
 });
 
