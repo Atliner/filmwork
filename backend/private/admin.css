@@ -755,3 +755,10 @@ table.data .muted { color: var(--muted); font-size: 10.5px; }
 .imdb-import-row { margin-top: 10px; }
 .imdb-import-row .imdb-count { flex: 0 0 84px; width: 84px; }
 @media (max-width: 600px) { .imdb-import-row { flex-wrap: wrap; } .imdb-import-row [data-imdb-url] { flex: 1 1 100%; min-width: 0; } }
+
+#owner-ad-form [hidden] { display:none !important; }
+.owner-ad-placements { border:1px solid var(--line);border-radius:14px;padding:12px;margin:12px 0; }
+.owner-ad-placements legend { padding:0 6px;font-weight:700;font-size:12px; }
+.owner-ad-placements p { color:var(--muted);font-size:11px; }
+.owner-ad-slot { display:flex;gap:9px;align-items:center;padding:8px;border-bottom:1px solid var(--line);font-size:12px; }
+.owner-ad-slot input { accent-color:#a855f7; }

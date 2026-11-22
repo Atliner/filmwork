@@ -61,6 +61,7 @@ const { changeCampaignStatus, settleExpiredCampaigns, deleteCampaign } = require
 const { eventDecision, shouldChargeImpression } = require('./services/adEventRules');
 const { normalizeBid, chooseAd } = require('./services/adCompetition');
 const { createAdSession, verifyAdSession } = require('./lib/adSession');
+const { parsePlacements } = require('./services/adPlacements');
 const { telegramTarget, trackedOrigin } = require('./lib/telegramAd');
 const { moneyCents } = require('./lib/money');
 const { buildParseDraft, normalizeContentPayload, updateContentPayload } = require('./lib/contentParams');
@@ -989,19 +990,19 @@ app.get('/api/ads/serve', optionalUser, asyncRoute(async (req, res) => {
   ).catch(() => []);
   if (!slot[0] || !slot[0].is_enabled || !slot[0].is_active) return res.json({ ad: null });
   const rows = await query(
-    `SELECT public_id, headline, body, placement, asset_type, creative_url,
-            target_url, skip_after_seconds, duration_seconds, skip_after_seconds, budget, spent,
-            owner_campaign, bid_multiplier
-     FROM ads
-     WHERE placement = :placement AND status = 'active' AND deleted_at IS NULL
-       AND starts_at <= UTC_TIMESTAMP(3) AND ends_at > UTC_TIMESTAMP(3)
-       AND (owner_campaign = TRUE OR spent < budget)
-     ORDER BY id DESC`,
+    `SELECT a.public_id, a.headline, a.body, ap.placement, a.asset_type, a.creative_url,
+            a.target_url, a.skip_after_seconds, a.duration_seconds, a.budget, a.spent,
+            a.owner_campaign, ap.bid_multiplier
+     FROM ad_campaign_placements ap JOIN ads a ON a.id = ap.ad_id
+     WHERE ap.placement = :placement AND a.status = 'active' AND a.deleted_at IS NULL
+       AND a.starts_at <= UTC_TIMESTAMP(3) AND a.ends_at > UTC_TIMESTAMP(3)
+       AND (a.owner_campaign = TRUE OR a.spent < a.budget)
+     ORDER BY a.id DESC`,
     { placement },
   );
   if (!rows.length) return res.json({ ad: null });
   const row = chooseAd(rows);
-  const adSession = createAdSession(row.public_id);
+  const adSession = createAdSession(row.public_id, { placement });
   res.setHeader('Cache-Control', 'no-store');
   res.json({
     ad: {
@@ -1021,14 +1022,17 @@ app.get('/api/ads/serve', optionalUser, asyncRoute(async (req, res) => {
 }));
 
 async function recordAdEvent(req, adId, session, eventType, { requireImpression = false } = {}) {
-  verifyAdSession(session, adId);
+  const claims = verifyAdSession(session, adId);
   const sessionKey = hmacHex(`${adId}:${session}`);
   const accepted = await withTransaction(async (connection) => {
     const [ads] = await connection.execute(
-      'SELECT id, unit_price, budget, spent, status, owner_campaign FROM ads WHERE public_id = :adId AND deleted_at IS NULL FOR UPDATE',
+      'SELECT id, placement, unit_price, budget, spent, status, owner_campaign FROM ads WHERE public_id = :adId AND deleted_at IS NULL FOR UPDATE',
       { adId: adId },
     );
     assert(ads[0], 404, 'AD_NOT_FOUND', 'تبلیغ پیدا نشد.');
+    const eventPlacement = claims.placement || ads[0].placement;
+    const [slots] = await connection.execute('SELECT CAST(unit_price AS CHAR) AS unit_price FROM ad_campaign_placements WHERE ad_id = :id AND placement = :placement', { id:ads[0].id, placement:eventPlacement });
+    assert(slots[0], 422, 'INVALID_AD_SESSION', 'جایگاه نمایش نامعتبر است.');
     // Serialise transitions on the campaign row. The unique key alone prevents
     // duplicate event types but cannot prevent both skip and complete for a session.
     const [prior] = await connection.execute(
@@ -1039,12 +1043,13 @@ async function recordAdEvent(req, adId, session, eventType, { requireImpression 
     const decision = eventDecision(eventType, prior.map((event) => event.event_type));
     if (decision !== 'accept') return false;
     const [eventResult] = await connection.execute(
-      `INSERT IGNORE INTO ad_events (ad_id, user_id, event_type, session_key, ip_hash, user_agent)
-       VALUES (:adId, :userId, :eventType, :sessionKey, :ipHash, :userAgent)`,
+      `INSERT IGNORE INTO ad_events (ad_id, user_id, event_type, placement, session_key, ip_hash, user_agent)
+       VALUES (:adId, :userId, :eventType, :placement, :sessionKey, :ipHash, :userAgent)`,
       {
         adId: ads[0].id,
         userId: req.user?.id || null,
         eventType,
+        placement: eventPlacement,
         sessionKey,
         ipHash: hashIp(req.ip),
         userAgent: String(req.get('user-agent') || '').slice(0, 500) || null,
@@ -1053,10 +1058,10 @@ async function recordAdEvent(req, adId, session, eventType, { requireImpression 
     if (shouldChargeImpression(eventType, eventResult.affectedRows === 1, ads[0])) {
       await connection.execute(
         `UPDATE ads SET
-           status = IF(spent + (unit_price / 1000) >= budget, 'completed', status),
-           spent = LEAST(budget, spent + (unit_price / 1000))
+           status = IF(spent + (:unitPrice / 1000) >= budget, 'completed', status),
+           spent = LEAST(budget, spent + (:unitPrice / 1000))
          WHERE id = :id`,
-        { id: ads[0].id },
+        { id: ads[0].id, unitPrice: slots[0].unit_price },
       );
     }
     return eventResult.affectedRows === 1;
@@ -1091,7 +1096,7 @@ app.get('/api/ads/telegram-click/:adId', asyncRoute(async (req, res) => {
 app.get('/api/ad-tunnel/:adId', asyncRoute(async (req, res) => {
   const rows = await query(
     `SELECT public_id, headline, body, asset_type, creative_url, target_url,
-            telegram_post_text, telegram_buttons
+            telegram_post_text, telegram_buttons, landing_mode
      FROM ads
      WHERE public_id = :adId AND deleted_at IS NULL AND status IN ('active', 'completed') LIMIT 1`,
     { adId: req.params.adId },
@@ -1106,6 +1111,11 @@ app.get('/api/ad-tunnel/:adId', asyncRoute(async (req, res) => {
   const ad = rows[0];
   const creative = safePublicUrl(ad.creative_url);
   const target = safePublicUrl(ad.target_url);
+  if (ad.landing_mode === 'direct' && target) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    return res.redirect(302, target);
+  }
   const rawButtons = parseJsonColumn(ad.telegram_buttons, []);
   const buttons = Array.isArray(rawButtons)
     ? rawButtons.filter((button) => button && safePublicUrl(button.url)).slice(0, 12)
@@ -1174,7 +1184,8 @@ app.get('/api/advertiser/profile', requireUser, requireRole('advertiser'), async
     query('SELECT balance, currency FROM advertiser_wallets WHERE user_id = :userId LIMIT 1', { userId: req.user.id }),
     query(
       `SELECT a.public_id, a.campaign_name, a.headline, a.placement, a.asset_type,
-              a.creative_url, a.telegram_click_mode, a.budget, a.spent, a.status, a.starts_at, a.ends_at, a.created_at,
+              a.creative_url, a.telegram_click_mode, a.landing_mode, a.budget, a.spent, a.status, a.starts_at, a.ends_at, a.created_at,
+              (SELECT GROUP_CONCAT(ap.placement ORDER BY ap.placement SEPARATOR ',') FROM ad_campaign_placements ap WHERE ap.ad_id = a.id) AS placements,
               (SELECT COUNT(*) FROM ad_events ae WHERE ae.ad_id = a.id AND ae.event_type = 'impression') AS impressions,
               (SELECT COUNT(*) FROM ad_events ae WHERE ae.ad_id = a.id AND ae.event_type = 'click') AS clicks,
               (SELECT COUNT(*) FROM ad_events ae WHERE ae.ad_id = a.id AND ae.event_type = 'complete') AS completes,
@@ -1211,6 +1222,8 @@ app.get('/api/advertiser/profile', requireUser, requireRole('advertiser'), async
       name: row.campaign_name,
       headline: row.headline,
       placement: row.placement,
+      placements: row.placements ? row.placements.split(',') : [row.placement],
+      landingMode: row.landing_mode,
       assetType: row.asset_type,
       creativeUrl: row.creative_url,
       telegramClickMode: row.telegram_click_mode,
@@ -1274,7 +1287,8 @@ app.post(
   asyncRoute(async (req, res) => {
     let uploadedPath = req.file?.path || null;
     try {
-      const placement = asEnum(req.body?.placement, 'جایگاه', adSettingsLib.PLACEMENT_KEYS);
+      const placements = parsePlacements(req.body || {});
+      const placement = placements[0];
       const adPolicy = adSettingsLib.adPolicy(await adPlatform.readSettings().catch(() => ({ ...adSettingsLib.DEFAULTS })));
       const campaignName = asString(req.body?.campaignName, 'نام کمپین', { min: 3, max: 180 });
       const headline = asString(req.body?.headline, 'عنوان تبلیغ', { min: 3, max: 180 });
@@ -1290,6 +1304,8 @@ app.post(
       const skipAfter = Math.round(asPositiveNumber(req.body?.skipAfterSeconds ?? 5, 'زمان رد کردن', { min: 0, max: 30 }));
       let targetUrl = asHttpUrl(req.body?.targetUrl, 'نشانی مقصد', { optional: placement !== 'link_file_button', httpsOnly: isProduction });
       const clickMode = placement === 'link_file_button' ? asEnum(req.body?.telegramClickMode || 'tracked', 'شیوهٔ هدایت', ['tracked','direct']) : 'tracked';
+      const landingMode = placement === 'link_file_button' ? 'intermediate' : asEnum(req.body?.landingMode || 'intermediate', 'شیوهٔ هدایت', ['intermediate','direct']);
+      if (landingMode === 'direct') assert(targetUrl, 422, 'TARGET_REQUIRED', 'برای هدایت مستقیم نشانی مقصد لازم است.');
       if (placement === 'link_file_button') { targetUrl = telegramTarget(targetUrl); if (clickMode === 'tracked') trackedOrigin(); assert(headline.length <= 64, 422, 'BUTTON_TEXT_TOO_LONG', 'عنوان دکمه حداکثر ۶۴ نویسه است.'); }
       const buttons = parseButtons(req.body?.telegramButtons);
       const telegramPostText = asString(req.body?.telegramPostText, 'متن صفحه واسط', { max: 5000, optional: true });
@@ -1335,12 +1351,18 @@ app.post(
 
       const publicId = crypto.randomUUID();
       const created = await withTransaction(async (connection) => {
-        const [prices] = await connection.execute(
-          'SELECT *, CAST(price_per_thousand AS CHAR) AS price_exact, (CAST(:budget AS DECIMAL(20,5)) >= minimum_budget) AS budget_sufficient FROM ad_placement_prices WHERE placement = :placement AND is_active = TRUE AND is_enabled = TRUE FOR UPDATE',
-          { placement, budget },
-        );
-        assert(prices[0], 422, 'PLACEMENT_UNAVAILABLE', 'این جایگاه در حال حاضر فعال نیست.');
-        assert(prices[0].budget_sufficient, 422, 'BUDGET_TOO_LOW', `حداقل بودجه این جایگاه ${Number(prices[0].minimum_budget).toLocaleString('fa-IR')} ریال است.`);
+        // Lock in a deterministic order; reject the whole purchase if any slot
+        // is disabled or the one shared budget is below that slot's minimum.
+        const prices = new Map();
+        for (const key of [...placements].sort()) {
+          const [rows] = await connection.execute(
+            'SELECT *, CAST(price_per_thousand AS CHAR) AS price_exact, (CAST(:budget AS DECIMAL(20,5)) >= minimum_budget) AS budget_sufficient FROM ad_placement_prices WHERE placement = :placement AND is_active = TRUE AND is_enabled = TRUE FOR UPDATE',
+            { placement:key, budget },
+          );
+          assert(rows[0], 422, 'PLACEMENT_UNAVAILABLE', 'یکی از جایگاه‌های انتخاب‌شده فعال نیست.');
+          assert(rows[0].budget_sufficient, 422, 'BUDGET_TOO_LOW', `حداقل بودجهٔ جایگاه ${rows[0].display_name_fa} ${Number(rows[0].minimum_budget).toLocaleString('fa-IR')} ریال است.`);
+          prices.set(key, rows[0]);
+        }
         await connection.execute(
           `INSERT INTO advertiser_wallets (user_id, balance)
            VALUES (:userId, 0) ON DUPLICATE KEY UPDATE user_id = VALUES(user_id)`,
@@ -1360,11 +1382,11 @@ app.post(
         const [adResult] = await connection.execute(
           `INSERT INTO ads
             (public_id, advertiser_id, campaign_name, headline, body, placement, asset_type,
-             creative_url, creative_local_path, target_url, telegram_click_mode, telegram_post_text, telegram_buttons,
+             creative_url, creative_local_path, target_url, telegram_click_mode, landing_mode, telegram_post_text, telegram_buttons,
              unit_price, bid_multiplier, budget, skip_after_seconds, duration_seconds, starts_at, ends_at, status)
            VALUES
             (:publicId, :userId, :campaignName, :headline, :body, :placement, :assetType,
-             :creativeUrl, :localPath, :targetUrl, :clickMode, :postText, :buttons,
+             :creativeUrl, :localPath, :targetUrl, :clickMode, :landingMode, :postText, :buttons,
              ROUND(:basePrice * :bid, 2), :bid, :budget, :skipAfter, :duration, :startsAt, :endsAt, :status)`,
           {
             publicId,
@@ -1378,11 +1400,12 @@ app.post(
             localPath: creativeLocalPath,
             targetUrl,
             clickMode,
+            landingMode,
             duration: slotMeta.group === 'banner' ? adPolicy.defaultBannerDuration : adPolicy.defaultVideoDuration,
             status: adPolicy.autoApprove ? 'active' : 'pending',
             postText: telegramPostText,
             buttons: JSON.stringify(buttons),
-            basePrice: prices[0].price_exact,
+            basePrice: prices.get(placement).price_exact,
             bid,
             budget,
             skipAfter,
@@ -1390,6 +1413,11 @@ app.post(
             endsAt,
           },
         );
+        for (const key of placements) {
+          await connection.execute(`INSERT INTO ad_campaign_placements (ad_id, placement, unit_price, bid_multiplier)
+            VALUES (:adId, :placement, ROUND(:basePrice * :bid, 2), :bid)`,
+          {adId:adResult.insertId, placement:key, basePrice:prices.get(key).price_exact, bid});
+        }
         await connection.execute(
           `INSERT INTO wallet_transactions
             (user_id, ad_id, transaction_type, amount, balance_after, reference)
@@ -1407,7 +1435,7 @@ app.post(
 
       uploadedPath = null;
       res.status(201).json({
-        campaign: { id: publicId, status: 'pending' },
+        campaign: { id: publicId, status: adPolicy.autoApprove ? 'active' : 'pending', placements },
         wallet: created,
       });
     } finally {
@@ -1754,6 +1782,9 @@ app.get('/api/admin/diagnostics', requireAdmin, asyncRoute(async (_req, res) => 
     check('جدول ثبت بازدید آثار', viewReceipts, viewReceipts ? null : 'پس از پشتیبان‌گیری، migration 2026-11-content-view-receipts.sql را اجرا کنید.');
     check('ستون حذف کمپین', adDeletedAt, adDeletedAt ? null : 'پس از پشتیبان‌گیری، migration 2026-11-soft-delete-campaigns.sql را اجرا کنید.');
     check('ساختار تبلیغات صفحه و ربات', report.migrations.adPageBidding, report.migrations.adPageBidding ? null : 'پس از پشتیبان‌گیری و بررسی پیش‌نیازها، migration 2026-11-page-ads-bidding.sql را اجرا کنید.');
+    const multiplePlacements = await tableExists('ad_campaign_placements') && await columnExists('ads', 'landing_mode') && await columnExists('ad_events', 'placement');
+    report.migrations.adMultiplePlacements = multiplePlacements;
+    check('جایگاه‌های چندگانه و صفحهٔ واسط اختیاری', multiplePlacements, multiplePlacements ? null : 'پس از پشتیبان‌گیری و اجرای migrationهای قبلی، فایل 2026-11-ad-multiple-placements.sql را اجرا کنید.');
 
   } catch (error) {
     check('بررسی ساختار دیتابیس', false, error.message);
@@ -2138,10 +2169,15 @@ app.post('/api/admin/ads/campaigns/:adId/review', requireAdmin, requireAdminCsrf
  * per-placement on/off switch and the dates).
  */
 app.post('/api/admin/ads/campaigns', requireAdmin, requireAdminCsrf, upload.single('creative'), asyncRoute(async (req, res) => {
+  let retainUpload = false;
+  try {
   const appUrl = String(process.env.APP_URL || '').replace(/\/$/, '');
   const payload = {
     campaignName: req.body?.campaignName,
     bidMultiplier: req.body?.bidMultiplier,
+    placements: req.body?.placements,
+    landingMode: req.body?.landingMode,
+    telegramPostText: req.body?.telegramPostText,
     telegramClickMode: req.body?.telegramClickMode,
     headline: req.body?.headline,
     body: req.body?.body,
@@ -2154,15 +2190,24 @@ app.post('/api/admin/ads/campaigns', requireAdmin, requireAdminCsrf, upload.sing
     creativeUrl: req.body?.creativeUrl,
     creativeLocalPath: req.file ? req.file.filename : null,
   };
+  if (req.file) {
+    const placementType = adSettingsLib.placementMeta(parsePlacements(payload)[0]).asset;
+    const matches = (placementType === 'video' && req.file.mimetype.startsWith('video/')) || (placementType === 'image' && req.file.mimetype.startsWith('image/'));
+    if (!matches) throw new AppError(422, 'CREATIVE_TYPE_MISMATCH', 'فایل با نوع جایگاه انتخاب‌شده سازگار نیست.');
+  }
   if (req.file) payload.creativeUrl = `${appUrl}/uploads/${encodeURIComponent(req.file.filename)}`;
   const created = adStoreKind() === 'demo'
     ? await contentStore().createOwnerAdCampaign(payload)
     : await adPlatform.createOwnerCampaign(payload);
+  retainUpload = true;
   await query(
     "INSERT INTO admin_events (kind, title, detail) VALUES ('ad', 'کمپین مالک ساخته شد', :detail)",
     { detail: String(payload.campaignName || '') },
   ).catch(() => {});
   res.status(201).json({ campaign: created });
+  } finally {
+    if (req.file && !retainUpload) await fs.promises.unlink(req.file.path).catch(() => {});
+  }
 }));
 
 app.get('/api/admin/ads', requireAdmin, asyncRoute(async (_req, res) => {

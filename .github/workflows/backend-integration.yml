@@ -50,7 +50,7 @@ jobs:
         run: |
           mysql -h 127.0.0.1 -u root filmwork_test < database/schema.sql
           for iteration in 1 2; do
-            for migration in database/migrations/2026-11-content-view-receipts.sql database/migrations/2026-11-soft-delete-campaigns.sql database/migrations/2026-11-page-ads-bidding.sql; do
+            for migration in database/migrations/2026-11-content-view-receipts.sql database/migrations/2026-11-soft-delete-campaigns.sql database/migrations/2026-11-page-ads-bidding.sql database/migrations/2026-11-ad-multiple-placements.sql; do
               mysql -h 127.0.0.1 -u root filmwork_test < "$migration"
             done
           done

@@ -16,10 +16,10 @@ async function deliverWithTelegramAd(userId, send, deps = {}) {
   const transact = deps.withTransaction || withTransaction;
   let candidates;
   try {
-    candidates = await getRows(`SELECT a.public_id FROM ads a JOIN ad_placement_prices p ON p.placement = a.placement
-      WHERE a.placement = 'link_file_button' AND a.deleted_at IS NULL AND a.status = 'active'
+    candidates = await getRows(`SELECT a.public_id FROM ads a JOIN ad_campaign_placements ap ON ap.ad_id = a.id JOIN ad_placement_prices p ON p.placement = ap.placement
+      WHERE ap.placement = 'link_file_button' AND a.deleted_at IS NULL AND a.status = 'active'
         AND p.is_enabled = TRUE AND p.is_active = TRUE AND a.starts_at <= UTC_TIMESTAMP(3) AND a.ends_at > UTC_TIMESTAMP(3)
-        AND (a.owner_campaign = TRUE OR a.budget - a.spent >= a.unit_price / 1000)
+        AND (a.owner_campaign = TRUE OR a.budget - a.spent >= ap.unit_price / 1000)
       ORDER BY a.id`, {});
   } catch (error) { console.error('Could not select Telegram ad; delivering without ad:', error.message); return send(null); }
   // Random circular order is a uniform choice without using a bid multiplier.
@@ -31,16 +31,16 @@ async function deliverWithTelegramAd(userId, send, deps = {}) {
     let sent = false, sentResult, sendError;
     try {
       const outcome = await transact(async (connection) => {
-        const [rows] = await connection.execute(`SELECT a.id, a.public_id, a.headline, a.target_url, a.telegram_click_mode, a.owner_campaign
-          FROM ads a JOIN ad_placement_prices p ON p.placement = a.placement
-          WHERE a.public_id = :id AND a.placement = 'link_file_button' AND a.deleted_at IS NULL AND a.status = 'active'
+        const [rows] = await connection.execute(`SELECT a.id, a.public_id, a.headline, a.target_url, a.telegram_click_mode, a.owner_campaign, CAST(ap.unit_price AS CHAR) AS unit_price
+          FROM ads a JOIN ad_campaign_placements ap ON ap.ad_id = a.id JOIN ad_placement_prices p ON p.placement = ap.placement
+          WHERE a.public_id = :id AND ap.placement = 'link_file_button' AND a.deleted_at IS NULL AND a.status = 'active'
             AND p.is_enabled = TRUE AND p.is_active = TRUE AND a.starts_at <= UTC_TIMESTAMP(3) AND a.ends_at > UTC_TIMESTAMP(3)
-            AND (a.owner_campaign = TRUE OR a.budget - a.spent >= a.unit_price / 1000) FOR UPDATE`, { id:candidate.public_id });
+            AND (a.owner_campaign = TRUE OR a.budget - a.spent >= ap.unit_price / 1000) FOR UPDATE`, { id:candidate.public_id });
         const ad = rows[0];
         if (!ad) return { skipped:true };
         let target;
         try { target = telegramTarget(ad.target_url); } catch { return { skipped:true }; }
-        const session = createAdSession(ad.public_id, { purpose:'telegram', ttlMs:90 * 86400_000 });
+        const session = createAdSession(ad.public_id, { purpose:'telegram', placement:'link_file_button', ttlMs:90 * 86400_000 });
         let link = target;
         if (ad.telegram_click_mode !== 'direct') {
           try { link = `${trackedOrigin()}/api/ads/telegram-click/${encodeURIComponent(ad.public_id)}?session=${encodeURIComponent(session)}`; }
@@ -49,11 +49,11 @@ async function deliverWithTelegramAd(userId, send, deps = {}) {
         try { sentResult = await send({ text:String(ad.headline).slice(0, 64), url:link }); sent = true; }
         catch (error) { sendError = error; throw error; }
         const sessionKey = hmacHex(`${ad.public_id}:${session}`);
-        await connection.execute(`INSERT INTO ad_events (ad_id,user_id,event_type,session_key,user_agent)
-          VALUES (:id,:userId,'impression',:sessionKey,'telegram-delivery')`, { id:ad.id, userId, sessionKey });
+        await connection.execute(`INSERT INTO ad_events (ad_id,user_id,event_type,placement,session_key,user_agent)
+          VALUES (:id,:userId,'impression','link_file_button',:sessionKey,'telegram-delivery')`, { id:ad.id, userId, sessionKey });
         if (!ad.owner_campaign) await connection.execute(`UPDATE ads SET
-          status = IF(spent + (unit_price / 1000) >= budget, 'completed', status),
-          spent = spent + (unit_price / 1000) WHERE id = :id`, { id:ad.id });
+          status = IF(spent + (:unitPrice / 1000) >= budget, 'completed', status),
+          spent = spent + (:unitPrice / 1000) WHERE id = :id`, { id:ad.id, unitPrice:ad.unit_price });
         return { sent:true, result:sentResult };
       }, { isolationLevel:'READ COMMITTED' });
       if (outcome.sent) return outcome.result;

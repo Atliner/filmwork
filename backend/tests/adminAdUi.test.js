@@ -19,8 +19,9 @@ async function setup(view = 'adsettings') {
     requests.push({url, ...options}); let data;
     if (url === '/api/admin/session') data = {csrfToken:'secret-csrf'};
     else if (url === '/api/admin/stats') data = {overview:{totals:{contents:0,pendingAds:1}}};
-    else if (url === '/api/admin/ads/settings') data = {settings:{}, placements:[], groups:[], policy:{}};
+    else if (url === '/api/admin/ads/settings') data = {settings:{}, placements:[{placement:'text_home',asset:'text',group:'banner',label:'متنی اصلی',enabled:true,active:true},{placement:'text_search',asset:'text',group:'banner',label:'متنی جستجو',enabled:true,active:true},{placement:'pre_roll',asset:'video',group:'video',label:'ویدیو',enabled:true,active:true}], groups:[], policy:{}};
     else if (url === '/api/admin/ads/dashboard') data = {totals:{},byGroup:[]};
+    else if (url === '/api/admin/ads/campaigns' && options.method === 'POST') data = {campaign:{id:'new-owner'}};
     else if (url === '/api/admin/ads/campaigns') data = {items:campaigns};
     else if (url === '/api/admin/ads') data = {items:campaigns.map(c => ({public_id:c.id,campaign_name:c.campaignName,headline:c.headline,status:c.status,placement:c.placement,budget:c.budget}))};
     else if (String(url).startsWith('/api/admin/ads/campaigns/') && options.method === 'DELETE') {
@@ -69,4 +70,23 @@ test('the shared confirmation dialog permits rejecting a pending advertiser camp
   assert.equal(JSON.parse(review.body).status,'rejected');
   await wait(()=>w.document.querySelector('[data-ad-tab="review"]') && !w.document.querySelector('[data-ad-review="rejected"]'));
   dom.window.close();
+});
+
+test('owner selects creative type first, multiple slots and optional intermediate page', async () => {
+  const {dom,w,wait,requests} = await setup();
+  w.document.querySelector('[data-ad-tab="owner"]').click();
+  const form=w.document.querySelector('#owner-ad-form');
+  const type=form.querySelector('[name=creativeType]'); assert.equal(type.value,'');
+  type.value='text'; type.dispatchEvent(new w.Event('change',{bubbles:true}));
+  assert.equal(form.querySelector('[data-owner-slot-type=text]').hidden,false);
+  assert.equal(form.querySelector('[data-owner-slot-type=video]').hidden,true);
+  form.querySelector('[value=text_home]').checked=true; form.querySelector('[value=text_search]').checked=true;
+  const landing=form.querySelector('[name=landingMode]'); landing.value='intermediate'; landing.dispatchEvent(new w.Event('change',{bubbles:true}));
+  assert.equal(form.querySelector('[data-owner-landing-fields]').hidden,false);
+  form.querySelector('[name=telegramPostText]').value='توضیح واسط';
+  form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
+  const req=await wait(()=>requests.find(r=>r.url==='/api/admin/ads/campaigns' && r.method==='POST'));
+  assert.deepEqual(JSON.parse(req.body.get('placements')),['text_home','text_search']);
+  assert.equal(req.body.get('landingMode'),'intermediate'); assert.equal(req.body.get('telegramPostText'),'توضیح واسط');
+  await new Promise(r=>setTimeout(r,30)); dom.window.close();
 });

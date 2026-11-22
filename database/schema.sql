@@ -281,6 +281,7 @@ CREATE TABLE IF NOT EXISTS ads (
   creative_url VARCHAR(2048) NOT NULL,
   target_url VARCHAR(2048) NULL,
   telegram_click_mode ENUM('tracked', 'direct') NOT NULL DEFAULT 'tracked',
+  landing_mode ENUM('intermediate', 'direct') NOT NULL DEFAULT 'intermediate',
   telegram_post_text TEXT NULL,
   telegram_buttons JSON NULL,
   targeting JSON NULL,
@@ -309,6 +310,16 @@ CREATE TABLE IF NOT EXISTS ads (
   CONSTRAINT chk_ads_budget CHECK (budget > 0 AND spent >= 0 AND spent <= budget),
   CONSTRAINT chk_ads_dates CHECK (ends_at > starts_at),
   CONSTRAINT chk_ads_skip CHECK (skip_after_seconds BETWEEN 0 AND 30)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS ad_campaign_placements (
+  ad_id BIGINT UNSIGNED NOT NULL,
+  placement VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  unit_price DECIMAL(15,2) NOT NULL,
+  bid_multiplier DECIMAL(5,2) NOT NULL DEFAULT 1.00,
+  PRIMARY KEY (ad_id, placement),
+  KEY idx_campaign_placements_slot (placement, ad_id),
+  CONSTRAINT fk_campaign_placements_ad FOREIGN KEY (ad_id) REFERENCES ads(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS wallet_transactions (
@@ -367,6 +378,7 @@ CREATE TABLE IF NOT EXISTS ad_events (
   ad_id BIGINT UNSIGNED NOT NULL,
   user_id BIGINT UNSIGNED NULL,
   event_type ENUM('impression', 'click', 'skip', 'complete') NOT NULL,
+  placement VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
   session_key CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   ip_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
   user_agent VARCHAR(500) NULL,

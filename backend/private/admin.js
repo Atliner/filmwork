@@ -1669,7 +1669,7 @@
         <div class="ad-row__title"><strong>${esc(campaign.headline || campaign.campaignName)}</strong>
           <span class="status-badge status-badge--${campaign.status === 'active' ? 'published' : campaign.status === 'pending' ? 'draft' : campaign.status === 'rejected' ? 'archived' : 'draft'}">${statusLabels[campaign.status] || campaign.status}</span></div>
         <div class="ad-row__meta">
-          <span>${esc(campaign.group === 'video' ? 'ویدیویی' : campaign.group === 'banner' ? 'بنری' : 'لینکی')} · ${esc(campaign.placement)}</span>
+          <span>${esc(campaign.group === 'video' ? 'ویدیویی' : campaign.group === 'banner' ? 'بنری' : 'لینکی')} · ${esc((campaign.placements || [campaign.placement]).map((key) => adState.placements.find((p) => p.placement === key)?.label || key).join('، '))}</span>
           <span>${esc(campaign.advertiser || '')}</span>
           <span>${faNum(campaign.impressions || 0)} نمایش · ${faNum(campaign.clicks || 0)} کلیک</span>
           ${campaign.ownerCampaign ? '<span>بدون کسر کیف پول</span>' : `<span>${faNum(Math.round(Number(campaign.budget || 0) / 10))} تومان بودجه</span>`}
@@ -1719,23 +1719,24 @@
         <div class="panel"><div class="panel__head"><div><h2>کمپین مالک</h2><p>بدون کسر از کیف پول، فوراً فعال؛ فقط جایگاه باید روشن باشد</p></div></div>
           <div class="panel__body">
             <form id="owner-ad-form">
+              <label class="field"><span>۱. نوع محتوای تبلیغ</span><select class="select" name="creativeType" required><option value="">نوع محتوا را انتخاب کنید</option>${[['video','ویدیو'],['image','تصویر / بنر'],['text','متن'],['link','دکمهٔ تلگرام']].filter(([type]) => data.placements.some((slot) => slot.asset === type && slot.enabled && slot.active !== false)).map(([type,label]) => `<option value="${type}">${label}</option>`).join('')}</select></label>
+              <fieldset class="owner-ad-placements"><legend>۲. جایگاه‌ها (یک یا چند مورد)</legend><p data-owner-slot-prompt>ابتدا نوع محتوا را انتخاب کنید.</p>${data.placements.filter((slot) => slot.enabled && slot.active !== false).map((slot) => `<label class="owner-ad-slot" data-owner-slot-type="${esc(slot.asset)}" hidden><input type="checkbox" name="placements" value="${esc(slot.placement)}"> <span>${esc(slot.label)}</span></label>`).join('')}</fieldset>
               <div class="grid-2">
                 <label class="field"><span>نام کمپین</span><input class="input" name="campaignName" required minlength="3" maxlength="180" placeholder="مثلاً معرفی فیلم‌ورک پلاس"></label>
                 <label class="field"><span>عنوان نمایشی</span><input class="input" name="headline" required minlength="3" maxlength="180" placeholder="مثلاً فیلم‌ورک پلاس را امتحان کنید"></label>
               </div>
-              <label class="field"><span>جایگاه</span><select class="select" name="placement">
-                ${data.placements.filter((slot) => slot.group === adState.group && slot.enabled).map((slot) => `<option value="${esc(slot.placement)}">${esc(slot.label)}</option>`).join('') || '<option value="">جایگاه روشنی نیست</option>'}
-              </select></label>
-              <div class="grid-2">
+              <div class="grid-2" data-owner-creative hidden>
                 <label class="field"><span>فایل تبلیغ (آپلود)</span><input class="input" type="file" name="creative" accept="video/mp4,video/webm,image/jpeg,image/png,image/webp"></label>
                 <label class="field"><span>یا لینک فایل</span><input class="input" dir="ltr" name="creativeUrl" placeholder="https://cdn.example.com/ad.mp4"></label>
               </div>
-              <label class="field"><span>ضریب پیشنهاد (به‌جز دکمهٔ ربات)</span><input class="input" type="number" name="bidMultiplier" min="1" max="${esc(data.policy?.maxPriorityMultiplier || 5)}" step="0.01" value="1"><small>ضریب بیشتر، احتمال انتخاب را بیشتر می‌کند. کمپین مالک هزینه ندارد.</small></label>
+              <label class="field" data-owner-bid hidden><span>ضریب پیشنهاد</span><input class="input" type="number" name="bidMultiplier" min="1" max="${esc(data.policy?.maxPriorityMultiplier || 5)}" step="0.01" value="1"><small>ضریب بیشتر، احتمال انتخاب را بیشتر می‌کند. کمپین مالک هزینه ندارد.</small></label>
               <div class="grid-2">
                 <label class="field"><span>لینک مقصد</span><input class="input" dir="ltr" name="targetUrl" placeholder="https://example.com"></label>
                 <label class="field"><span>مدت نمایش (ثانیه)</span><input class="input" type="number" name="durationSeconds" min="0" max="120" value="${esc(data.policy?.defaultVideoDuration || 15)}"></label>
               </div>
-              <label class="field"><span>دکمهٔ ربات: شیوهٔ هدایت</span><select class="select" name="telegramClickMode"><option value="tracked">از سایت، با ثبت کلیک</option><option value="direct">مستقیم به تلگرام، بدون آمار کلیک</option></select><small>فقط برای دکمهٔ ربات؛ مقصد باید لینک t.me باشد. تعرفه به‌ازای هزار ارسال فایل است.</small></label>
+              <label class="field" data-owner-landing hidden><span>پس از کلیک</span><select class="select" name="landingMode"><option value="direct">مستقیم به مقصد (با ثبت کلیک)</option><option value="intermediate">صفحهٔ واسط سایت، سپس مقصد</option></select></label>
+              <label class="field" data-owner-landing-fields hidden><span>متن صفحهٔ واسط (اختیاری)</span><textarea class="textarea" name="telegramPostText" maxlength="5000"></textarea></label>
+              <label class="field" data-owner-telegram hidden><span>دکمهٔ ربات: شیوهٔ هدایت</span><select class="select" name="telegramClickMode"><option value="tracked">از سایت، با ثبت کلیک</option><option value="direct">مستقیم به تلگرام، بدون آمار کلیک</option></select><small>فقط برای دکمهٔ ربات؛ مقصد باید لینک t.me باشد. تعرفه به‌ازای هزار ارسال فایل است.</small></label>
               <div class="grid-2">
                 <label class="field"><span>شروع</span><input class="input" type="datetime-local" name="startsAt"></label>
                 <label class="field"><span>پایان</span><input class="input" type="datetime-local" name="endsAt"></label>
@@ -1923,14 +1924,43 @@
     }
   });
 
+  function updateOwnerAdForm(form) {
+    const type = $('[name="creativeType"]', form).value;
+    $$('[data-owner-slot-type]', form).forEach((label) => {
+      const visible = Boolean(type) && label.dataset.ownerSlotType === type;
+      label.hidden = !visible;
+      const box = $('input', label); box.disabled = !visible; if (!visible) box.checked = false;
+    });
+    $('[data-owner-slot-prompt]', form).hidden = Boolean(type);
+    $('[data-owner-creative]', form).hidden = !['image','video'].includes(type);
+    const file = $('[name="creative"]', form); file.disabled = !['image','video'].includes(type);
+    file.accept = type === 'video' ? 'video/mp4,video/webm' : 'image/jpeg,image/png,image/webp';
+    $('[name="creativeUrl"]', form).disabled = file.disabled;
+    $('[data-owner-bid]', form).hidden = !type || type === 'link';
+    if (type === 'link') $('[name="bidMultiplier"]', form).value = '1';
+    $('[data-owner-telegram]', form).hidden = type !== 'link';
+    $('[data-owner-landing]', form).hidden = !type || type === 'link';
+    const intermediate = type && type !== 'link' && $('[name="landingMode"]', form).value === 'intermediate';
+    $('[data-owner-landing-fields]', form).hidden = !intermediate;
+    $('[name="targetUrl"]', form).required = type === 'link' || (Boolean(type) && !intermediate);
+    $('[name="headline"]', form).maxLength = type === 'link' ? 64 : 180;
+  }
+  document.addEventListener('change', (event) => {
+    if (event.target.closest('#owner-ad-form') && event.target.matches('[name=creativeType], [name=landingMode]')) updateOwnerAdForm(event.target.form);
+  });
+
   document.addEventListener('submit', async (event) => {
     if (event.target.id !== 'owner-ad-form') return;
     event.preventDefault();
     const form = event.target;
+    const selected = $$('[name=placements]:checked', form).map((input) => input.value);
+    if (!selected.length) { toast('حداقل یک جایگاه انتخاب کنید.', 'error'); return; }
     const submit = $('button[type="submit"]', form);
     submit.disabled = true;
     try {
       const body = new FormData(form);
+      body.delete('placements'); body.set('placements', JSON.stringify(selected));
+      if (body.get('landingMode') !== 'intermediate') body.delete('telegramPostText');
       const response = await fetch('/api/admin/ads/campaigns', {
         method: 'POST',
         credentials: 'same-origin',

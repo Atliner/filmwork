@@ -1,8 +1,8 @@
 'use strict';
 const { generateOpaqueToken, hmacHex, timingSafeHexEqual } = require('./security');
 const { AppError, assert } = require('./errors');
-function createAdSession(adPublicId, { purpose = 'web', ttlMs = 2 * 60 * 60_000 } = {}) {
-  const payload = Buffer.from(JSON.stringify({ ad: adPublicId, exp: Date.now() + ttlMs, nonce: generateOpaqueToken(12), purpose })).toString('base64url');
+function createAdSession(adPublicId, { purpose = 'web', ttlMs = 2 * 60 * 60_000, placement }  = {}) {
+  const payload = Buffer.from(JSON.stringify({ ad: adPublicId, exp: Date.now() + ttlMs, nonce: generateOpaqueToken(12), purpose, ...(placement ? { placement } : {}) })).toString('base64url');
   return `${payload}.${hmacHex(payload)}`;
 }
 function verifyAdSession(session, expectedAdId, { allowExpired = false } = {}) {

@@ -726,14 +726,17 @@ store.reviewAdCampaign = async (id, { status, note }) => {
 
 store.createOwnerAdCampaign = async (payload) => {
   const data = demoAdState();
+  const placements = require('./adPlacements').parsePlacements(payload);
   const id = `owner-ad-${data.ownerCampaigns.length + 1}`;
   data.ownerCampaigns.unshift({
     id,
     campaignName: payload.campaignName,
     headline: payload.headline,
-    placement: payload.placement,
-    group: 'video',
-    assetType: 'video',
+    placement: placements[0],
+    placements,
+    landingMode: payload.landingMode || 'intermediate',
+    group: require('./adSettings').placementMeta(placements[0]).group,
+    assetType: require('./adSettings').placementMeta(placements[0]).asset === 'video' ? 'video' : 'image',
     status: 'active',
     ownerCampaign: true,
     budget: 0,

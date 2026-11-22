@@ -8,7 +8,7 @@ const { deliverWithTelegramAd } = require('../services/telegramAds');
 const { DownloadBotService } = require('../bots/downloadBot');
 function fake(mode = 'tracked', owner = 0, commitFails = false) {
   const calls = [];
-  const ad = {id:9,public_id:'campaign-1',headline:'تبلیغ کانال',target_url:'https://t.me/my_channel',telegram_click_mode:mode,owner_campaign:owner};
+  const ad = {id:9,public_id:'campaign-1',headline:'تبلیغ کانال',target_url:'https://t.me/my_channel',telegram_click_mode:mode,owner_campaign:owner,unit_price:'1000.00'};
   const conn = {execute:async (sql,params) => { calls.push({sql,params}); return sql.includes('SELECT a.id') ? [[ad]] : [{affectedRows:1}]; }};
   const deps = {query:async () => [{public_id:ad.public_id}], randomInt:() => 0, withTransaction:async (work) => { const result = await work(conn); if (commitFails) throw Error('commit lost'); return result; }};
   return {calls,deps};

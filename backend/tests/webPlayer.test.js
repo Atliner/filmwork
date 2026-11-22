@@ -207,20 +207,21 @@ test('download banner uses its own placement and counts only after image load', 
 
 test('advertiser creative type follows the selected placement', async () => {
   const prices = [
-    { placement: 'pre_roll', group: 'video', label: 'پیش پخش', cpm: 1, currency: 'IRR' },
-    { placement: 'banner_player', group: 'banner', label: 'بنر', cpm: 1, currency: 'IRR' },
+    { placement: 'pre_roll', group: 'video', asset:'video', label: 'پیش پخش', cpm: 1, currency: 'IRR' },
+    { placement: 'banner_player', group: 'banner', asset:'image', label: 'بنر', cpm: 1, currency: 'IRR' },
   ];
   const { dom, w, d } = await setup({ signedIn: true, prices });
   try {
     w.location.hash = '#/advertiser';
     for (let i = 0; i < 30 && !d.querySelector('#campaign-form'); i++) await delay();
-    const select = d.querySelector('#campaign-form [name="assetType"]');
-    assert.equal(select.value, 'video');
-    d.querySelector('[data-placement="banner_player"]').click();
-    assert.equal(select.value, 'image');
-    assert.equal([...select.options].find((o) => o.value === 'video').disabled, true);
-    d.querySelector('[data-placement="pre_roll"]').click();
-    assert.equal(select.value, 'video');
+    const select = d.querySelector('#campaign-form [name="creativeType"]');
+    assert.equal(select.value, '');
+    select.value = 'image'; select.dispatchEvent(new w.Event('change', { bubbles:true }));
+    assert.equal(d.querySelector('[data-slot-type="image"]').hidden, false);
+    assert.equal(d.querySelector('[data-slot-type="video"]').hidden, true);
+    select.value = 'video'; select.dispatchEvent(new w.Event('change', { bubbles:true }));
+    assert.equal(d.querySelector('[data-slot-type="video"]').hidden, false);
+
   } finally { dom.window.close(); }
 });
 

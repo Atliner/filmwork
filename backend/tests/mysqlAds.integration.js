@@ -104,6 +104,45 @@ test('admin can remove own and advertiser campaigns, preserving ledger and refun
   assert.ok(ledger.some(x=>x.transaction_type==='refund' && Number(x.amount)===8));
 });
 
+test('multiple placements share one reservation and charge their own rates atomically', async () => {
+  await query("UPDATE ads SET status='paused' WHERE status='active'");
+  await query("UPDATE ad_placement_prices SET is_enabled=1,is_active=1,minimum_budget=1,price_per_thousand=IF(placement='text_home',1000,1500) WHERE placement IN ('text_home','text_search')");
+  const balanceBefore=Number((await query('SELECT balance FROM advertiser_wallets WHERE user_id=:userId',{userId}))[0].balance);
+  const id = await createCampaign('text_home','7',{placements:['text_home','text_search'],bidMultiplier:2,landingMode:'direct'});
+  assert.equal(Number((await query('SELECT balance FROM advertiser_wallets WHERE user_id=:userId',{userId}))[0].balance), balanceBefore-7);
+  const slots=await query('SELECT placement,unit_price FROM ad_campaign_placements ap JOIN ads a ON a.id=ap.ad_id WHERE a.public_id=:id ORDER BY ap.placement',{id});
+  assert.deepEqual(slots.map(row=>[row.placement,Number(row.unit_price)]),[['text_home',2000],['text_search',3000]]);
+  const home=(await request('/api/ads/serve?placement=text_home','GET',undefined,'')).data.ad;
+  const search=(await request('/api/ads/serve?placement=text_search','GET',undefined,'')).data.ad;
+  assert.equal(home.id,id); assert.equal(search.id,id);
+  const events = await Promise.all([...Array(4)].flatMap(()=>[home,search].map(ad=>request(`/api/ads/${id}/events`,'POST',{eventType:'impression',session:ad.session},''))));
+  assert.equal(events.filter(e=>e.data.accepted).length,2);
+  let rows=await query('SELECT spent,status FROM ads WHERE public_id=:id',{id}); assert.equal(Number(rows[0].spent),5);
+  const click=await request(home.tunnelUrl,'GET',undefined,''); assert.equal(click.response.status,302); assert.equal(click.response.headers.get('location'),'https://t.me/example_bot');
+  const again=(await request('/api/ads/serve?placement=text_home','GET',undefined,'')).data.ad;
+  await request(`/api/ads/${id}/events`,'POST',{eventType:'impression',session:again.session},'');
+  rows=await query('SELECT spent,status FROM ads WHERE public_id=:id',{id}); assert.equal(Number(rows[0].spent),7); assert.equal(rows[0].status,'completed');
+  assert.equal((await request('/api/ads/serve?placement=text_search','GET',undefined,'')).data.ad,null);
+  const counts=await query("SELECT e.placement,COUNT(*) AS count FROM ad_events e JOIN ads a ON a.id=e.ad_id WHERE a.public_id=:id AND e.event_type='impression' GROUP BY e.placement ORDER BY e.placement",{id});
+  assert.deepEqual(counts.map(row=>[row.placement,Number(row.count)]),[['text_home',2],['text_search',1]]);
+  const ledger=await query("SELECT COUNT(*) AS count FROM wallet_transactions t JOIN ads a ON a.id=t.ad_id WHERE a.public_id=:id AND t.transaction_type='campaign_reserve'",{id}); assert.equal(Number(ledger[0].count),1);
+});
+
+test('invalid multi-slot submissions do not reserve funds; owner can publish several slots', async () => {
+  const balance=Number((await query('SELECT balance FROM advertiser_wallets WHERE user_id=:userId',{userId}))[0].balance);
+  const dates={startsAt:new Date(Date.now()-1000).toISOString(),endsAt:new Date(Date.now()+3600000).toISOString()};
+  const baseBody={campaignName:'Bad slots',headline:'bad ad',budget:'10',targetUrl:'https://t.me/example_bot',...dates};
+  for (const placements of [['text_home','pre_roll'],['text_home','banner_home']]) {
+    const bad=await request('/api/advertiser/campaigns','POST',{...baseBody,placements}); assert.equal(bad.response.status,422);
+  }
+  assert.equal(Number((await query('SELECT balance FROM advertiser_wallets WHERE user_id=:userId',{userId}))[0].balance),balance);
+  const csrf='integration-csrf'; const cookie=`filmwork_admin=${signAdminToken('123456789',csrf)}`;
+  const response=await fetch(`${base}/api/admin/ads/campaigns`, {method:'POST',headers:{cookie,'x-csrf-token':csrf,'content-type':'application/json'},body:JSON.stringify({campaignName:'Owner multi',headline:'owner ad',placements:['text_home','text_search'],landingMode:'intermediate',telegramPostText:'example'})});
+  const data=await response.json(); assert.equal(response.status,201,JSON.stringify(data));
+  const rows=await query('SELECT placement FROM ad_campaign_placements ap JOIN ads a ON a.id=ap.ad_id WHERE a.public_id=:id ORDER BY ap.placement',{id:data.campaign.id}); assert.deepEqual(rows.map(row=>row.placement),['text_home','text_search']);
+  const land=await request(`/api/ad-tunnel/${data.campaign.id}`,'GET',undefined,''); assert.equal(land.response.status,200);
+});
+
 // An old deployment that copied JS without applying SQL must be identifiable.
 test('missing ad migrations produce actionable errors and owner diagnostics', async () => {
   const cookie = `filmwork_admin=${signAdminToken('123456789', 'integration-csrf')}`;
