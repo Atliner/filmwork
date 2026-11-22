@@ -627,7 +627,10 @@ store.deleteUser = async (userId) => {
   pushEvent('user', `کاربر حذف شد: ${removed.accountName}`, 'حذف کامل همراه داده‌های وابسته');
   return { id: removed.id, accountName: removed.accountName };
 };
-store.listAds = async () => ensureState().ads.filter((ad) => !ad.deletedAt);
+store.listAds = async () => {
+  const data = demoAdState();
+  return [...data.ads, ...data.ownerCampaigns].filter((ad) => !ad.deletedAt);
+};
 
 /* ------------------------------------------------------------- ad platform */
 const demoAdState = () => {

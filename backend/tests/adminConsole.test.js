@@ -603,6 +603,7 @@ test('admin can hide an owner campaign while anonymous deletes are denied', asyn
   finally { cookie = oldCookie; csrf = oldCsrf; }
   const deleted = await call(`/api/admin/ads/campaigns/${id}`, {method:'DELETE'});
   assert.equal(deleted.status, 200); assert.equal(deleted.data.deleted, true);
+  assert.ok(!(await call('/api/admin/ads')).data.items.some((item) => item.id === id));
   assert.ok(!(await call('/api/admin/ads/campaigns?owner=owner')).data.items.some((item) => item.id === id));
   assert.equal((await call(`/api/admin/ads/campaigns/${id}`, {method:'DELETE'})).status, 404);
 });

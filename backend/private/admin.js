@@ -183,6 +183,7 @@
 
   function confirmDialog({ title, message, confirmLabel = 'تأیید', danger = true }) {
     return new Promise((resolve) => {
+      let confirmed = false;
       const { root, close } = openOverlay(`
         <div class="modal modal--sm" role="dialog" aria-modal="true" aria-label="${esc(title)}">
           <div class="modal__head">
@@ -194,8 +195,8 @@
             <button class="button button--ghost button--sm" type="button" data-close>بستن</button>
             <button class="button ${danger ? 'button--danger' : 'button--primary'} button--sm" type="button" data-confirm>${esc(confirmLabel)}</button>
           </div>
-        </div>`, { onClose: () => resolve(false) });
-      $('[data-confirm]', root).addEventListener('click', () => { close(); resolve(true); });
+        </div>`, { onClose: () => resolve(confirmed) });
+      $('[data-confirm]', root).addEventListener('click', () => { confirmed = true; close(); });
     });
   }
 
@@ -1590,7 +1591,7 @@
     root.innerHTML = '<section class="view"><div class="skeleton" style="height:260px"></div></section>';
     const data = await api('/api/admin/ads');
     const rows = data.items.length ? data.items.map((ad) => `<tr>
-      <td><strong>${esc(ad.campaign_name || ad.campaign)}</strong><div class="muted">${esc(ad.headline || ad.advertiser || '')}</div></td>
+      <td><strong>${esc(ad.campaign_name || ad.campaignName || ad.campaign)}</strong><div class="muted">${esc(ad.headline || ad.advertiser || '')}</div></td>
       <td>${esc(ad.advertiser || ad.account_name || '—')}</td>
       <td><span class="tag">${esc(ad.placement)}</span></td>
       <td>${faNum(ad.budget)}</td>
@@ -1598,13 +1599,14 @@
       <td><select class="select" style="height:34px;min-width:120px" data-ad-status="${esc(ad.public_id || ad.id)}">
         ${['pending', 'active', 'paused', 'completed', 'rejected'].map((status) => `<option value="${status}" ${ad.status === status ? 'selected' : ''}>${statusLabel(status)}</option>`).join('')}
       </select></td>
-    </tr>`).join('') : '<tr><td colspan="6" class="muted">کمپینی وجود ندارد.</td></tr>';
+      <td><button class="button button--danger button--xs" type="button" data-ad-delete="${esc(ad.public_id || ad.id)}">حذف</button></td>
+    </tr>`).join('') : '<tr><td colspan="7" class="muted">کمپینی وجود ندارد.</td></tr>';
 
     root.innerHTML = `<section class="view">
       <div class="page-head"><div><h1>تبلیغات</h1><p>بررسی و تغییر وضعیت کمپین‌ها</p></div></div>
       <div class="panel"><div class="panel__body" style="padding-top:16px">
         <div class="table-wrap"><table class="data">
-          <thead><tr><th>کمپین</th><th>تبلیغ‌دهنده</th><th>جایگاه</th><th>بودجه (ریال)</th><th>وضعیت</th><th>تغییر</th></tr></thead>
+          <thead><tr><th>کمپین</th><th>تبلیغ‌دهنده</th><th>جایگاه</th><th>بودجه (ریال)</th><th>وضعیت</th><th>تغییر</th><th>حذف</th></tr></thead>
           <tbody>${rows}</tbody>
         </table></div>
       </div></div>
@@ -1906,9 +1908,9 @@
     }
     const removeAd = event.target.closest('[data-ad-delete]');
     if (removeAd) {
-      if (!(await confirmDialog({ title:'حذف کمپین', message:'کمپین متوقف و از فهرست حذف می‌شود. بودجهٔ مصرف‌نشده به کیف پول صاحب آن برمی‌گردد و سوابق مالی محفوظ می‌ماند.', confirmLabel:'حذف کمپین' }))) return;
+      if (!(await confirmDialog({ title:'حذف کمپین', message:'کمپین متوقف و از فهرست حذف می‌شود. در صورت وجود بودجهٔ رزروشده، مانده به کیف پول صاحب آن برمی‌گردد؛ سوابق مالی محفوظ می‌ماند.', confirmLabel:'حذف کمپین' }))) return;
       removeAd.disabled = true;
-      try { await api(`/api/admin/ads/campaigns/${encodeURIComponent(removeAd.dataset.adDelete)}`, { method:'DELETE' }); toast('کمپین حذف شد.', 'success'); await renderAdSettings(); }
+      try { await api(`/api/admin/ads/campaigns/${encodeURIComponent(removeAd.dataset.adDelete)}`, { method:'DELETE' }); toast('کمپین حذف شد.', 'success'); if (state.view === 'ads') await renderAds(); else await renderAdSettings(); }
       catch (error) { removeAd.disabled = false; toast(error.message, 'error'); }
       return;
     }

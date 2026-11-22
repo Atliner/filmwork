@@ -73,6 +73,37 @@ test('text placements bill the selected bid once per view and count click fallba
   assert.equal(Number(counts.find(x=>x.event_type==='click').count),1);
 });
 
+test('admin can remove own and advertiser campaigns, preserving ledger and refunding only paid budget', async () => {
+  const csrf = 'integration-csrf';
+  const cookie = `filmwork_admin=${signAdminToken('123456789', csrf)}`;
+  async function admin(path, method = 'GET', body, token = csrf) {
+    const response = await fetch(base+path, {method, headers:{cookie, ...(token ? {'x-csrf-token':token} : {}), ...(body ? {'content-type':'application/json'} : {})}, body:body ? JSON.stringify(body) : undefined});
+    return {response, data:await response.json().catch(()=>({}))};
+  }
+  const created = await admin('/api/admin/ads/campaigns', 'POST', {campaignName:'Owner sample',headline:'Owner ad',placement:'text_home',targetUrl:'https://t.me/example_bot'});
+  assert.equal(created.response.status,201,JSON.stringify(created.data));
+  const ownerId = created.data.campaign.id;
+  const balanceBefore = Number((await query('SELECT balance FROM advertiser_wallets WHERE user_id=:userId',{userId}))[0].balance);
+  assert.equal((await request(`/api/admin/ads/campaigns/${ownerId}`,'DELETE',undefined,'')).response.status,404);
+  assert.equal((await admin(`/api/admin/ads/campaigns/${ownerId}`,'DELETE',undefined,'wrong')).response.status,403);
+  const removed = await admin(`/api/admin/ads/campaigns/${ownerId}`,'DELETE');
+  assert.equal(removed.response.status,200,JSON.stringify(removed.data)); assert.equal(removed.data.refunded,0);
+  assert.equal(Number((await query('SELECT balance FROM advertiser_wallets WHERE user_id=:userId',{userId}))[0].balance),balanceBefore);
+  assert.ok((await query('SELECT deleted_at FROM ads WHERE public_id=:id',{id:ownerId}))[0].deleted_at);
+  assert.ok(!(await admin('/api/admin/ads/campaigns')).data.items.some(a=>a.id===ownerId));
+  assert.ok(!(await admin('/api/admin/ads')).data.items.some(a=>a.public_id===ownerId));
+  assert.equal((await admin(`/api/admin/ads/campaigns/${ownerId}`,'DELETE')).response.status,404);
+
+  const paidId = await createCampaign('text_home','10');
+  await query('UPDATE ads SET spent=2 WHERE public_id=:id',{id:paidId});
+  const paidRemoved = await admin(`/api/admin/ads/campaigns/${paidId}`,'DELETE');
+  assert.equal(paidRemoved.response.status,200,JSON.stringify(paidRemoved.data)); assert.equal(paidRemoved.data.refunded,8);
+  assert.equal(Number((await query('SELECT balance FROM advertiser_wallets WHERE user_id=:userId',{userId}))[0].balance),balanceBefore-2);
+  const ledger = await query('SELECT transaction_type, amount FROM wallet_transactions t JOIN ads a ON a.id=t.ad_id WHERE a.public_id=:id',{id:paidId});
+  assert.ok(ledger.some(x=>x.transaction_type==='campaign_reserve' && Number(x.amount)===10));
+  assert.ok(ledger.some(x=>x.transaction_type==='refund' && Number(x.amount)===8));
+});
+
 // An old deployment that copied JS without applying SQL must be identifiable.
 test('missing ad migrations produce actionable errors and owner diagnostics', async () => {
   const cookie = `filmwork_admin=${signAdminToken('123456789', 'integration-csrf')}`;
