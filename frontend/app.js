@@ -1321,7 +1321,7 @@
     const typeLabels = { video:'ویدیو', image:'تصویر / بنر', text:'متن', link:'دکمهٔ زیر فایل تلگرام' };
     const availableTypes = [...new Set(prices.map((price) => price.asset))];
     const typeOptions = availableTypes.map((type) => `<option value="${escapeHtml(type)}">${escapeHtml(typeLabels[type] || type)}</option>`).join('');
-    const priceCards = prices.map((price) => `<label class="price-card" data-slot-type="${escapeHtml(price.asset)}" hidden><input type="checkbox" name="placements" value="${escapeHtml(price.placement)}"><strong>${escapeHtml(price.label)}</strong><span>${formatMoney(price.cpm, price.currency)} / ${price.group === 'link' ? 'هزار ارسال فایل' : 'هزار نمایش'}</span></label>`).join('');
+    const priceCards = prices.map((price) => `<label class="price-card" data-slot-type="${escapeHtml(price.asset)}" hidden><input type="checkbox" name="placements" value="${escapeHtml(price.placement)}"><strong>${escapeHtml(price.label)}</strong><span>تعرفهٔ پایه: ${formatMoney(price.cpm, price.currency)} / ${price.group === 'link' ? 'هزار ارسال فایل' : 'هزار نمایش'}</span></label>`).join('');
     const statusLabels = { active: 'فعال', paused: 'متوقف', pending: 'در بررسی', rejected: 'ردشده', completed: 'پایان‌یافته', cancelled: 'لغوشده' };
     const campaigns = data.campaigns.length ? data.campaigns.map((campaign) => {
       const percent = campaign.budget > 0 ? Math.min(100, (campaign.spent / campaign.budget) * 100) : 0;

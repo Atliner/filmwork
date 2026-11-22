@@ -132,7 +132,7 @@ test('invalid multi-slot submissions do not reserve funds; owner can publish sev
   const balance=Number((await query('SELECT balance FROM advertiser_wallets WHERE user_id=:userId',{userId}))[0].balance);
   const dates={startsAt:new Date(Date.now()-1000).toISOString(),endsAt:new Date(Date.now()+3600000).toISOString()};
   const baseBody={campaignName:'Bad slots',headline:'bad ad',budget:'10',targetUrl:'https://t.me/example_bot',...dates};
-  for (const placements of [['text_home','pre_roll'],['text_home','banner_home']]) {
+  for (const placements of [['text_home','pre_roll'],['text_home','text_detail']]) {
     const bad=await request('/api/advertiser/campaigns','POST',{...baseBody,placements}); assert.equal(bad.response.status,422);
   }
   assert.equal(Number((await query('SELECT balance FROM advertiser_wallets WHERE user_id=:userId',{userId}))[0].balance),balance);

@@ -46,14 +46,20 @@ jobs:
           DB_PORT: '1' # Unit/demo tests intentionally run without a live database.
       - name: Install MySQL client
         run: command -v mysql || (sudo apt-get update && sudo apt-get install -y default-mysql-client)
-      - name: Install schema and verify upgrade migrations are repeatable
+      - name: Install schema and verify old-campaign upgrade and repeatability
         run: |
           mysql -h 127.0.0.1 -u root filmwork_test < database/schema.sql
-          for iteration in 1 2; do
-            for migration in database/migrations/2026-11-content-view-receipts.sql database/migrations/2026-11-soft-delete-campaigns.sql database/migrations/2026-11-page-ads-bidding.sql database/migrations/2026-11-ad-multiple-placements.sql; do
-              mysql -h 127.0.0.1 -u root filmwork_test < "$migration"
-            done
+          for migration in database/migrations/2026-11-content-view-receipts.sql database/migrations/2026-11-soft-delete-campaigns.sql database/migrations/2026-11-page-ads-bidding.sql; do
+            mysql -h 127.0.0.1 -u root filmwork_test < "$migration"
           done
+          # Simulate a campaign created by the old application before the upgrade.
+          mysql -h 127.0.0.1 -u root filmwork_test -e "INSERT INTO users (tg_user_id,tg_chat_id,account_name,encrypted_phone) VALUES (900001,900001,'legacy','x'); SET @u=LAST_INSERT_ID(); INSERT INTO ads (public_id,advertiser_id,campaign_name,headline,placement,asset_type,creative_url,unit_price,bid_multiplier,budget,spent,starts_at,ends_at,status) VALUES ('00000000-0000-4000-8000-000000000001',@u,'legacy','legacy','text_home','image','',123.45,2,50,4,UTC_TIMESTAMP()-INTERVAL 1 DAY,UTC_TIMESTAMP()+INTERVAL 1 DAY,'active');"
+          for iteration in 1 2; do
+            mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-ad-multiple-placements.sql
+          done
+          result=$(mysql -N -B -h 127.0.0.1 -u root filmwork_test -e "SELECT COUNT(*) FROM ads a JOIN ad_campaign_placements ap ON ap.ad_id=a.id WHERE a.public_id='00000000-0000-4000-8000-000000000001' AND ap.placement='text_home' AND ap.unit_price=123.45 AND ap.bid_multiplier=2 AND a.spent=4 AND a.budget=50 AND a.landing_mode='intermediate'")
+          test "$result" = 1
+          mysql -h 127.0.0.1 -u root filmwork_test -e "DELETE FROM ads WHERE public_id='00000000-0000-4000-8000-000000000001'; DELETE FROM users WHERE tg_user_id=900001"
       - name: Exercise transactions and delivery against MySQL
         shell: bash
         run: |
