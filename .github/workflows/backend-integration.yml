@@ -20,7 +20,7 @@ jobs:
           MYSQL_ROOT_HOST: "%"
         ports: ['3306:3306']
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -pintegration-test"
+          --health-cmd="${{ matrix.database == 'mariadb:11.4' && 'healthcheck.sh --connect --innodb_initialized' || 'mysqladmin ping -h 127.0.0.1 -pintegration-test' }}"
           --health-interval=10s --health-timeout=5s --health-retries=12
     env:
       NODE_ENV: development
