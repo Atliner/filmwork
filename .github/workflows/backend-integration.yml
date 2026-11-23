@@ -48,7 +48,10 @@ jobs:
         run: command -v mysql || (sudo apt-get update && sudo apt-get install -y default-mysql-client)
       - name: Install schema and verify old-campaign upgrade and repeatability
         run: |
+          trap 'echo "::error::Migration verification failed at line $LINENO (status $?)"' ERR
           mysql -h 127.0.0.1 -u root filmwork_test < database/schema.sql
+          # Simulate a pre-upgrade install; old enum migrations predate video_download.
+          mysql -h 127.0.0.1 -u root filmwork_test -e "DELETE FROM ad_placement_prices WHERE placement='video_download'"
           for migration in database/migrations/2026-11-content-view-receipts.sql database/migrations/2026-11-soft-delete-campaigns.sql database/migrations/2026-11-page-ads-bidding.sql; do
             mysql -h 127.0.0.1 -u root filmwork_test < "$migration"
           done
