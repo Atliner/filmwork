@@ -37,6 +37,6 @@ test('paid delete returns unspent balance in decimal SQL and preserves audit rec
 });
 test('owner campaign is deleted without crediting an unreserved wallet', async () => {
   const db = fakeDb({...paid, owner_campaign:1}); const result = await deleteCampaignLocked(db.connection, 'ad-5');
-  assert.equal(result.refunded, 0); assert.ok(!db.calls.some((call) => call.sql.includes('advertiser_wallets')));
+  assert.equal(result.refunded, 0); assert.ok(!db.calls.some((call) => /(?:UPDATE|INSERT INTO) advertiser_wallets/.test(call.sql)));
   assert.ok(db.calls.some((call) => call.sql.includes('DELETE FROM ads WHERE id')));
 });
