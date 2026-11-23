@@ -30,11 +30,13 @@ test('paid delete returns unspent balance in decimal SQL and preserves audit rec
   assert.equal(result.refunded, 600.5); assert.equal(result.deleted, true);
   assert.ok(db.calls.some((call) => call.sql.includes('balance = balance + :refundable') && call.params.refundable === '600.50'));
   assert.ok(db.calls.some((call) => call.sql.includes('INSERT INTO wallet_transactions') && call.params.amount === '600.50'));
-  assert.ok(db.calls.some((call) => call.sql.includes('deleted_at = UTC_TIMESTAMP')));
-  assert.ok(!db.calls.some((call) => /DELETE FROM (ads|ad_events|wallet_transactions)/i.test(call.sql)));
+  assert.ok(db.calls.some(call => /INSERT INTO ad_financial_archive/.test(call.sql)));
+  assert.ok(db.calls.some(call => /UPDATE wallet_transactions SET campaign_public_id/.test(call.sql)));
+  assert.ok(db.calls.some(call => /DELETE FROM ads WHERE id/.test(call.sql)));
+  assert.ok(!db.calls.some(call => /DELETE FROM wallet_transactions/i.test(call.sql)));
 });
 test('owner campaign is deleted without crediting an unreserved wallet', async () => {
   const db = fakeDb({...paid, owner_campaign:1}); const result = await deleteCampaignLocked(db.connection, 'ad-5');
   assert.equal(result.refunded, 0); assert.ok(!db.calls.some((call) => call.sql.includes('advertiser_wallets')));
-  assert.ok(db.calls.some((call) => call.sql.includes('deleted_at = UTC_TIMESTAMP')));
+  assert.ok(db.calls.some((call) => call.sql.includes('DELETE FROM ads WHERE id')));
 });

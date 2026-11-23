@@ -1205,7 +1205,7 @@ app.get('/api/advertiser/profile', requireUser, requireRole('advertiser'), async
       (SELECT COUNT(*) FROM ad_events e JOIN ads a ON a.id = e.ad_id WHERE a.advertiser_id = :userId AND a.owner_campaign = FALSE AND e.event_type = 'click') AS clicks,
       (SELECT COUNT(*) FROM ad_events e JOIN ads a ON a.id = e.ad_id WHERE a.advertiser_id = :userId AND a.owner_campaign = FALSE AND e.event_type = 'complete') AS completes,
       (SELECT COUNT(*) FROM ad_events e JOIN ads a ON a.id = e.ad_id WHERE a.advertiser_id = :userId AND a.owner_campaign = FALSE AND e.event_type = 'skip') AS skips,
-      (SELECT COALESCE(SUM(spent), 0) FROM ads WHERE advertiser_id = :userId AND owner_campaign = FALSE) AS spent`,
+      ((SELECT COALESCE(SUM(spent), 0) FROM ads WHERE advertiser_id = :userId AND owner_campaign = FALSE) + (SELECT COALESCE(SUM(spent), 0) FROM ad_financial_archive WHERE advertiser_id = :userId AND owner_campaign = FALSE)) AS spent`,
       { userId: req.user.id }),
   ]);
   const totals = analyticsRows[0] || {};
@@ -1805,6 +1805,8 @@ app.get('/api/admin/diagnostics', requireAdmin, asyncRoute(async (_req, res) => 
     const downloadVideoRow = downloadVideoEnums && (await query("SELECT COUNT(*) AS found FROM ad_placement_prices WHERE placement='video_download'"))[0]?.found > 0;
     report.migrations.pauseBannerDownloadVideo = Boolean(downloadVideoEnums && downloadVideoRow);
     check('بنر توقف و ویدیوی قبل از دانلود', report.migrations.pauseBannerDownloadVideo, report.migrations.pauseBannerDownloadVideo ? null : 'پس از پشتیبان‌گیری و اجرای migrationهای قبلی، فایل 2026-11-pause-banner-download-video.sql را اجرا کنید.');
+    report.migrations.permanentDeletion = await tableExists('ad_financial_archive') && await tableExists('ad_financial_placement_rates') && await columnExists('wallet_transactions', 'campaign_public_id') && await columnExists('admin_events', 'content_asset_id') && await columnExists('admin_events', 'ad_public_id');
+    check('حذف قطعی و حفظ اطلاعات مالی', report.migrations.permanentDeletion, report.migrations.permanentDeletion ? null : 'پس از بکاپ و migrationهای قبلی، فایل 2026-11-permanent-deletion-finance.sql را اجرا کنید.');
 
   } catch (error) {
     check('بررسی ساختار دیتابیس', false, error.message);
@@ -2165,7 +2167,6 @@ app.delete('/api/admin/ads/campaigns/:adId', requireAdmin, requireAdminCsrf, asy
   const result = adStoreKind() === 'demo'
     ? await contentStore().deleteAdCampaign(req.params.adId)
     : await deleteCampaign(req.params.adId);
-  await query("INSERT INTO admin_events (kind, title, detail) VALUES ('ad', 'کمپین حذف شد', :detail)", { detail: req.params.adId }).catch(() => {});
   res.json(result);
 }));
 
@@ -2177,8 +2178,8 @@ app.post('/api/admin/ads/campaigns/:adId/review', requireAdmin, requireAdminCsrf
     ? await contentStore().reviewAdCampaign(req.params.adId, { status, note })
     : await adPlatform.reviewCampaign(req.params.adId, { status, note });
   await query(
-    "INSERT INTO admin_events (kind, title, detail) VALUES ('ad', :title, :detail)",
-    { title: `کمپین ${status === 'active' ? 'تأیید' : status === 'rejected' ? 'رد' : status} شد`, detail: note || req.params.adId },
+    "INSERT INTO admin_events (kind, title, detail, ad_public_id) VALUES ('ad', :title, :detail, :adPublicId)",
+    { adPublicId: req.params.adId, title: `کمپین ${status === 'active' ? 'تأیید' : status === 'rejected' ? 'رد' : status} شد`, detail: note || req.params.adId },
   ).catch(() => {});
   res.json(result);
 }));
@@ -2221,8 +2222,8 @@ app.post('/api/admin/ads/campaigns', requireAdmin, requireAdminCsrf, upload.sing
     : await adPlatform.createOwnerCampaign(payload);
   retainUpload = true;
   await query(
-    "INSERT INTO admin_events (kind, title, detail) VALUES ('ad', 'کمپین مالک ساخته شد', :detail)",
-    { detail: String(payload.campaignName || '') },
+    "INSERT INTO admin_events (kind, title, detail, ad_public_id) VALUES ('ad', 'کمپین مالک ساخته شد', :detail, :adPublicId)",
+    { detail: String(payload.campaignName || ''), adPublicId: created.id },
   ).catch(() => {});
   res.status(201).json({ campaign: created });
   } finally {

@@ -16,6 +16,9 @@ async function refundUnspent(connection, ad, reason) {
     { reference },
   );
   if (existing[0]) return { refunded: 0, alreadyRefunded: true };
+  // An already hidden legacy campaign with no matching refund needs manual
+  // reconciliation; never manufacture a second credit during maintenance.
+  if (ad.deleted_at) throw new AppError(409, 'LEGACY_REFUND_UNVERIFIED', 'بازپرداخت کمپین قبلاً حذف‌شده قابل تأیید نیست؛ سوابق مالی را بررسی کنید.');
 
   await connection.execute(
     `INSERT INTO advertiser_wallets (user_id, balance)
@@ -100,21 +103,30 @@ async function settleExpiredCampaigns(advertiserId = null) {
 }
 
 
-// Hide the campaign but retain ledger and event records. The row lock serializes
-// deletion, serving events and settlement; owner funds were never reserved.
-async function deleteCampaignLocked(connection, publicId, advertiserId = null) {
+// Financial snapshot, wallet refund, ledger unlink, event cleanup and campaign
+// deletion are one transaction under the same row lock as charging/settlement.
+async function deleteCampaignLocked(connection, publicId, advertiserId = null, { includeDeleted = false } = {}) {
   const [rows] = await connection.execute(
-    'SELECT * FROM ads WHERE public_id = :publicId AND deleted_at IS NULL FOR UPDATE', { publicId },
+    `SELECT * FROM ads WHERE public_id = :publicId ${includeDeleted ? '' : 'AND deleted_at IS NULL'} FOR UPDATE`, { publicId },
   );
   const ad = rows[0];
   assert(ad && (advertiserId === null || (!Number(ad.owner_campaign || 0) && String(ad.advertiser_id) === String(advertiserId))), 404, 'AD_NOT_FOUND', 'کمپین پیدا نشد.');
   const refund = await refundUnspent(connection, ad, 'campaign_deleted');
-  await connection.execute("UPDATE ads SET status = 'completed', deleted_at = UTC_TIMESTAMP(3) WHERE id = :id", { id: ad.id });
-  return { deleted: true, ...refund };
+  await connection.execute(`INSERT INTO ad_financial_archive (campaign_public_id,advertiser_id,owner_campaign,primary_placement,budget,spent,status_at_deletion,created_at)
+    SELECT public_id,advertiser_id,owner_campaign,placement,budget,spent,status,created_at FROM ads WHERE id=:id`, { id:ad.id });
+  await connection.execute(`INSERT INTO ad_financial_placement_rates (campaign_public_id,placement,unit_price,bid_multiplier)
+    SELECT :publicId,placement,unit_price,bid_multiplier FROM ad_campaign_placements WHERE ad_id=:id`, { id:ad.id, publicId });
+  await connection.execute('UPDATE wallet_transactions SET campaign_public_id=:publicId, ad_id=NULL WHERE ad_id=:id', { id:ad.id, publicId });
+  await connection.execute("DELETE FROM admin_events WHERE kind='ad' AND (ad_public_id=:publicId OR detail=:publicId)", {publicId});
+  await connection.execute('DELETE FROM ads WHERE id = :id', { id: ad.id });
+  return { deleted: true, ...refund, localPath:ad.creative_local_path || null };
 }
-async function deleteCampaign(publicId, advertiserId = null) {
-  return withTransaction((connection) => deleteCampaignLocked(connection, publicId, advertiserId), { isolationLevel: 'READ COMMITTED' });
+async function deleteCampaign(publicId, advertiserId = null, options = {}) {
+  const {localPath, ...result} = await withTransaction((connection) => deleteCampaignLocked(connection, publicId, advertiserId, options), { isolationLevel: 'READ COMMITTED' });
+  if (localPath) await require('./adPlatform').deleteCreativeFile(localPath);
+  return result;
 }
+
 module.exports = {
   refundUnspent,
   deleteCampaign,

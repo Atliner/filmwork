@@ -1779,7 +1779,7 @@
     if (campaignScroll) { $('#new-campaign')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
     const campaignDelete = event.target.closest('[data-campaign-delete]');
     if (campaignDelete) {
-      if (!window.confirm('کمپین متوقف و حذف شود؟ بودجهٔ مصرف‌نشده به کیف پول برمی‌گردد.')) return;
+      if (!window.confirm('کمپین و آمار آن برای همیشه حذف شود؟ بودجهٔ مصرف‌نشده به کیف پول برمی‌گردد و سوابق مالی حفظ می‌شود.')) return;
       campaignDelete.disabled = true;
       try {
         await api(`/advertiser/campaigns/${encodeURIComponent(campaignDelete.dataset.campaignDelete)}`, { method:'DELETE' });

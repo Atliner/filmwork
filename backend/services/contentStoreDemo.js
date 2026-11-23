@@ -678,7 +678,7 @@ store.updateAdPlacement = async (placement, patch) => {
   const data = demoAdState();
   const row = data.adPlacements.find((item) => item.placement === placement);
   if (!row) throw new AppError(422, 'INVALID_PLACEMENT', 'جایگاه نامعتبر است.');
-  if (patch.enabled !== undefined) row.enabled = Boolean(patch.enabled);
+  if (patch.enabled !== undefined) { row.enabled = Boolean(patch.enabled); row.active = Boolean(patch.enabled); }
   if (patch.pricePerThousand !== undefined) row.cpm = Number(patch.pricePerThousand);
   if (patch.minimumBudget !== undefined) row.minBudget = Number(patch.minimumBudget);
   if (patch.durationSeconds !== undefined) row.durationSeconds = Number(patch.durationSeconds);
@@ -704,7 +704,8 @@ store.deleteAdCampaign = async (id) => {
   const data = demoAdState();
   const ad = [...data.ownerCampaigns, ...(data.ads || [])].find((item) => item.id === id && !item.deletedAt);
   assert(ad, 404, 'AD_NOT_FOUND', 'کمپین پیدا نشد.');
-  ad.status = 'completed'; ad.deletedAt = new Date().toISOString();
+  data.ownerCampaigns = data.ownerCampaigns.filter((item) => item.id !== id);
+  data.ads = (data.ads || []).filter((item) => item.id !== id);
   return { deleted: true, refunded: 0 };
 };
 

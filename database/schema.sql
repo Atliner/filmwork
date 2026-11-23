@@ -327,6 +327,7 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id BIGINT UNSIGNED NOT NULL,
   ad_id BIGINT UNSIGNED NULL,
+  campaign_public_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
   transaction_type ENUM('credit', 'campaign_reserve', 'refund', 'adjustment', 'coupon_credit') NOT NULL,
   amount DECIMAL(20,5) NOT NULL,
   balance_after DECIMAL(20,5) NOT NULL,
@@ -475,6 +476,8 @@ CREATE TABLE IF NOT EXISTS content_version_links (
 
 CREATE TABLE IF NOT EXISTS admin_events (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  content_asset_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  ad_public_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
   kind ENUM('content', 'media', 'user', 'ad', 'system') NOT NULL DEFAULT 'system',
   title VARCHAR(180) NOT NULL,
   detail VARCHAR(400) NULL,
@@ -533,3 +536,21 @@ BEGIN
   COMMIT;
 END$$
 DELIMITER ;
+
+-- Financial facts survive permanent campaign deletion, without retaining the creative.
+CREATE TABLE IF NOT EXISTS ad_financial_archive (
+  campaign_public_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  advertiser_id BIGINT UNSIGNED NOT NULL, owner_campaign BOOLEAN NOT NULL,
+  primary_placement VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  budget DECIMAL(20,5) NOT NULL, spent DECIMAL(20,5) NOT NULL,
+  status_at_deletion VARCHAR(24) NOT NULL, created_at TIMESTAMP(3) NOT NULL,
+  deleted_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (campaign_public_id), KEY idx_ad_financial_advertiser (advertiser_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS ad_financial_placement_rates (
+  campaign_public_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  placement VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  unit_price DECIMAL(15,2) NOT NULL, bid_multiplier DECIMAL(5,2) NOT NULL,
+  PRIMARY KEY (campaign_public_id, placement),
+  CONSTRAINT fk_financial_rates_archive FOREIGN KEY (campaign_public_id) REFERENCES ad_financial_archive(campaign_public_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

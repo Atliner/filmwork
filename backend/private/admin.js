@@ -1840,7 +1840,9 @@
       toggle.disabled = true;
       try {
         const result = await api(`/api/admin/ads/placements/${encodeURIComponent(placement)}`, { method: 'PATCH', body: { enabled: next } });
-        adState.placements = result.placements;
+        adState.placements = result.placements || [];
+        const saved = adState.placements.find((slot) => slot.placement === placement);
+        if (!saved || Boolean(saved.enabled && saved.active !== false) !== next) throw new Error('وضعیت جایگاه ذخیره نشد؛ ساختار دیتابیس را بررسی کنید.');
         toast(next ? 'جایگاه روشن شد.' : 'جایگاه خاموش شد.', 'success');
         paintAdSettings();
       } catch (error) {
@@ -1909,7 +1911,7 @@
     }
     const removeAd = event.target.closest('[data-ad-delete]');
     if (removeAd) {
-      if (!(await confirmDialog({ title:'حذف کمپین', message:'کمپین متوقف و از فهرست حذف می‌شود. در صورت وجود بودجهٔ رزروشده، مانده به کیف پول صاحب آن برمی‌گردد؛ سوابق مالی محفوظ می‌ماند.', confirmLabel:'حذف کمپین' }))) return;
+      if (!(await confirmDialog({ title:'حذف کمپین', message:'کمپین و آمار آن برای همیشه از دیتابیس حذف می‌شود. ماندهٔ بودجه به کیف پول برمی‌گردد و سوابق مالی و تراکنش‌ها باقی می‌مانند.', confirmLabel:'حذف کمپین' }))) return;
       removeAd.disabled = true;
       try { await api(`/api/admin/ads/campaigns/${encodeURIComponent(removeAd.dataset.adDelete)}`, { method:'DELETE' }); toast('کمپین حذف شد.', 'success'); if (state.view === 'ads') await renderAds(); else await renderAdSettings(); }
       catch (error) { removeAd.disabled = false; toast(error.message, 'error'); }
@@ -2557,7 +2559,7 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
       if (button.matches('[data-delete-content]')) {
         const confirmed = await confirmDialog({
           title: 'حذف محتوا',
-          message: `«${esc(button.dataset.deleteTitle || 'این محتوا')}» و همه نسخه‌ها و لینک‌های آن حذف می‌شوند. این کار قابل بازگشت نیست.`,
+          message: `«${esc(button.dataset.deleteTitle || 'این محتوا')}» و همه نسخه‌ها، لینک‌ها، دیدگاه‌ها، نشان‌ها، سابقهٔ دانلود و پیشرفت تماشا از دیتابیس حذف می‌شوند. این کار قابل بازگشت نیست.`,
           confirmLabel: 'حذف قطعی',
         });
         if (!confirmed) return;

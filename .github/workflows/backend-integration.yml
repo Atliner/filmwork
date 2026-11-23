@@ -6,10 +6,14 @@ permissions:
 jobs:
   mysql:
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        database: ['mysql:8.0', 'mariadb:11.4']
     runs-on: ubuntu-latest
     services:
       mysql:
-        image: mysql:8.0
+        image: ${{ matrix.database }}
         env:
           MYSQL_ROOT_PASSWORD: integration-test
           MYSQL_DATABASE: filmwork_test
@@ -69,6 +73,7 @@ jobs:
           test "$(mysql -N -B -h 127.0.0.1 -u root filmwork_test -e "SELECT COUNT(*) FROM ad_placement_prices WHERE placement='video_download' AND is_enabled=0")" = 1
           mysql -h 127.0.0.1 -u root filmwork_test -e "DELETE FROM ads WHERE public_id='00000000-0000-4000-8000-000000000002'"
           mysql -h 127.0.0.1 -u root filmwork_test -e "DELETE FROM ads WHERE public_id='00000000-0000-4000-8000-000000000001'; DELETE FROM users WHERE tg_user_id=900001"
+          for iteration in 1 2; do mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-permanent-deletion-finance.sql; done
       - name: Exercise transactions and delivery against MySQL
         shell: bash
         run: |

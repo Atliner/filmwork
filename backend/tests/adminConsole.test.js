@@ -249,6 +249,9 @@ test('the owner switches a placement off and on, and saves its duration', async 
   assert.equal(off.data.placements.find((slot) => slot.placement === 'banner_player').enabled, false);
   const on = await call('/api/admin/ads/placements/banner_player', { method: 'PATCH', body: { enabled: true } });
   assert.equal(on.data.placements.find((slot) => slot.placement === 'banner_player').enabled, true);
+  assert.equal(on.data.placements.find((slot) => slot.placement === 'banner_player').active, true);
+  const pageOn = await call('/api/admin/ads/placements/text_home', { method:'PATCH', body:{ enabled:true } });
+  assert.equal(pageOn.data.placements.find((slot) => slot.placement === 'text_home').active, true);
   const timed = await call('/api/admin/ads/placements/pre_roll', { method: 'PATCH', body: { durationSeconds: 20, pricePerThousand: 60000 } });
   const slot = timed.data.placements.find((entry) => entry.placement === 'pre_roll');
   assert.equal(slot.durationSeconds, 20);

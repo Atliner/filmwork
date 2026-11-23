@@ -115,9 +115,9 @@ function versionDto(version, links) {
   };
 }
 
-async function logEvent(kind, title, detail, connection = null) {
-  const sql = 'INSERT INTO admin_events (kind, title, detail) VALUES (:kind, :title, :detail)';
-  const params = { kind, title: String(title).slice(0, 180), detail: detail ? String(detail).slice(0, 400) : null };
+async function logEvent(kind, title, detail, connection = null, contentAssetId = null) {
+  const sql = 'INSERT INTO admin_events (kind, title, detail, content_asset_id) VALUES (:kind, :title, :detail, :contentAssetId)';
+  const params = { kind, title: String(title).slice(0, 180), detail: detail ? String(detail).slice(0, 400) : null, contentAssetId };
   try {
     if (connection) await connection.execute(sql, params);
     else await query(sql, params);
@@ -375,7 +375,7 @@ const store = {
       await store.writeVersions(connection, result.insertId, payload.versions);
       await store.syncSeriesCounts(connection, result.insertId, payload);
       await logEvent('content', `محتوا ثبت شد: ${payload.titleFa}`,
-        `${payload.contentType === 'series' ? 'سریال' : 'فیلم'} · ${payload.status}`, connection);
+        `${payload.contentType === 'series' ? 'سریال' : 'فیلم'} · ${payload.status}`, connection, assetUuid);
       return result.insertId;
     });
     const rows = await query(`SELECT ${CONTENT_COLUMNS} FROM contents c WHERE c.id = :id`, { id: item });
@@ -441,15 +441,18 @@ const store = {
         await store.writeVersions(connection, rows[0].id, payload.versions);
       }
       await store.syncSeriesCounts(connection, rows[0].id, payload);
-      await logEvent('content', `محتوا ویرایش شد: ${payload.titleFa}`, `وضعیت ${payload.status}`, connection);
+      await logEvent('content', `محتوا ویرایش شد: ${payload.titleFa}`, `وضعیت ${payload.status}`, connection, assetId);
     });
     return store.getContent(assetId);
   },
 
   async deleteContent(assetId) {
-    const result = await query('DELETE FROM contents WHERE asset_uuid = :assetId', { assetId });
-    assert(result.affectedRows, 404, 'CONTENT_NOT_FOUND', 'اثر پیدا نشد.');
-    await logEvent('content', 'محتوا حذف شد', assetId);
+    await withTransaction(async (connection) => {
+      const [rows] = await connection.execute('SELECT id FROM contents WHERE asset_uuid = :assetId FOR UPDATE', { assetId });
+      assert(rows[0], 404, 'CONTENT_NOT_FOUND', 'اثر پیدا نشد.');
+      await connection.execute("DELETE FROM admin_events WHERE content_asset_id = :assetId OR (kind IN ('content','media') AND detail = :assetId)", { assetId });
+      await connection.execute('DELETE FROM contents WHERE id = :id', { id: rows[0].id });
+    });
     return { deleted: true };
   },
 
@@ -467,7 +470,7 @@ const store = {
         'UPDATE contents SET featured_hero = :enabled WHERE id = :id',
         { enabled: Boolean(enabled), id: rows[0].id },
       );
-      await logEvent('content', enabled ? `به بنر هیرو اضافه شد: ${rows[0].title}` : `از بنر هیرو برداشته شد: ${rows[0].title}`, null, connection);
+      await logEvent('content', enabled ? `به بنر هیرو اضافه شد: ${rows[0].title}` : `از بنر هیرو برداشته شد: ${rows[0].title}`, null, connection, assetId);
     });
     return { featuredHero: Boolean(enabled) };
   },
@@ -625,7 +628,7 @@ const store = {
           },
         );
       }
-      await logEvent('media', `لینک‌های رسانه همگام شد: ${content[0].title}`, `${rows.length} لینک در ربات`, connection);
+      await logEvent('media', `لینک‌های رسانه همگام شد: ${content[0].title}`, `${rows.length} لینک در ربات`, connection, assetId);
     });
     return { imported, scanned: rows.length, ...(await store.getContent(assetId)) };
   },

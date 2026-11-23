@@ -14,12 +14,14 @@ async function setup(view = 'adsettings') {
     {id:'owner-1',campaignName:'مالک',headline:'مالک',status:'active',ownerCampaign:true,placement:'text_home',group:'banner',assetType:'image'},
     {id:'paid-2',campaignName:'مشتری',headline:'مشتری',status:'pending',ownerCampaign:false,placement:'text_home',group:'banner',assetType:'image',budget:1000},
   ];
+  let placements=[{placement:'text_home',asset:'text',group:'banner',label:'متنی اصلی',enabled:true,active:true,cpm:50000,minBudget:50000,durationSeconds:0},{placement:'text_search',asset:'text',group:'banner',label:'متنی جستجو',enabled:true,active:true,cpm:50000,minBudget:50000,durationSeconds:0},{placement:'pre_roll',asset:'video',group:'video',label:'ویدیو',enabled:true,active:true,cpm:50000,minBudget:50000,durationSeconds:15}];
   w.scrollTo = () => {};
   w.fetch = async (url, options={}) => {
     requests.push({url, ...options}); let data;
     if (url === '/api/admin/session') data = {csrfToken:'secret-csrf'};
     else if (url === '/api/admin/stats') data = {overview:{totals:{contents:0,pendingAds:1}}};
-    else if (url === '/api/admin/ads/settings') data = {settings:{}, placements:[{placement:'text_home',asset:'text',group:'banner',label:'متنی اصلی',enabled:true,active:true},{placement:'text_search',asset:'text',group:'banner',label:'متنی جستجو',enabled:true,active:true},{placement:'pre_roll',asset:'video',group:'video',label:'ویدیو',enabled:true,active:true}], groups:[], policy:{}};
+    else if (url === '/api/admin/ads/settings') data = {settings:{}, placements, groups:[{group:'video',label:'ویدیو'},{group:'banner',label:'بنر'}], policy:{}};
+    else if (url === '/api/admin/ads/placements/pre_roll' && options.method === 'PATCH') { const enabled=JSON.parse(options.body).enabled; placements=placements.map(p=>p.placement==='pre_roll'?{...p,enabled,active:enabled}:p); data={placements}; }
     else if (url === '/api/admin/ads/dashboard') data = {totals:{},byGroup:[]};
     else if (url === '/api/admin/ads/campaigns' && options.method === 'POST') data = {campaign:{id:'new-owner'}};
     else if (url === '/api/admin/ads/campaigns') data = {items:campaigns};
@@ -90,4 +92,19 @@ test('owner selects creative type first, multiple slots and optional intermediat
   assert.deepEqual(JSON.parse(req.body.get('placements')),['text_home','text_search']);
   assert.equal(req.body.get('landingMode'),'intermediate'); assert.equal(req.body.get('telegramPostText'),'توضیح واسط');
   await new Promise(r=>setTimeout(r,30)); dom.window.close();
+});
+
+test('placement can be switched off, on, and remain enabled after loading settings again', async () => {
+  const {dom,w,wait,requests}=await setup();
+  w.document.querySelector('[data-ad-tab="settings"]').click();
+  w.document.querySelector('[data-slot-toggle="pre_roll"]').click();
+  await wait(()=>w.document.querySelector('[data-slot-toggle="pre_roll"]')?.getAttribute('aria-checked')==='false');
+  w.document.querySelector('[data-slot-toggle="pre_roll"]').click();
+  await wait(()=>w.document.querySelector('[data-slot-toggle="pre_roll"]')?.getAttribute('aria-checked')==='true');
+  assert.deepEqual(requests.filter(r=>r.url==='/api/admin/ads/placements/pre_roll').map(r=>JSON.parse(r.body).enabled),[false,true]);
+  w.location.hash='#/ads'; await wait(()=>w.document.querySelector('[data-ad-delete="owner-1"]'));
+  w.location.hash='#/adsettings'; await wait(()=>w.document.querySelector('[data-ad-tab="settings"]'));
+  w.document.querySelector('[data-ad-tab="settings"]').click();
+  assert.equal(w.document.querySelector('[data-slot-toggle="pre_roll"]').getAttribute('aria-checked'),'true');
+  dom.window.close();
 });

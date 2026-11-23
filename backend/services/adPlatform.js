@@ -68,6 +68,22 @@ async function readPlacements() {
 async function updatePlacement(placement, patch = {}) {
   const meta = placementMeta(placement);
   assert(meta, 422, 'INVALID_PLACEMENT', 'جایگاه نامعتبر است.');
+  if (patch.enabled !== undefined) assert(typeof patch.enabled === 'boolean', 422, 'INVALID_PLACEMENT_STATE', 'وضعیت جایگاه معتبر نیست.');
+  // If an older installation has a missing catalogue row, create only that
+  // row with safe configured defaults; never overwrite an existing price.
+  const existsBefore = await query('SELECT placement FROM ad_placement_prices WHERE placement = :placement', { placement });
+  if (!existsBefore.length) {
+    const policy = adPolicy(await readSettings());
+    await query(`INSERT INTO ad_placement_prices
+      (placement,slot_group,display_name_fa,price_per_thousand,default_duration_seconds,minimum_budget,currency,is_enabled,is_active,display_order)
+      VALUES (:placement,:groupName,:label,:cpm,:duration,:minimum,'IRR',FALSE,FALSE,:orderValue)
+      ON DUPLICATE KEY UPDATE placement=VALUES(placement)`, {
+      placement, groupName:meta.group, label:meta.label,
+      cpm:Math.max(1, policy.cpm[meta.group] || 50000), minimum:Math.max(1000, policy.minBudget),
+      duration:meta.group === 'video' ? policy.defaultVideoDuration : meta.group === 'banner' ? policy.defaultBannerDuration : 0,
+      orderValue:meta.order,
+    });
+  }
   const fields = [];
   const params = { placement };
   if (patch.enabled !== undefined) {
@@ -91,8 +107,16 @@ async function updatePlacement(placement, patch = {}) {
     fields.push('display_name_fa = :label');
   }
   assert(fields.length, 422, 'NO_PLACEMENT_CHANGES', 'تغییری برای ذخیره وجود ندارد.');
-  await query(`UPDATE ad_placement_prices SET ${fields.join(', ')} WHERE placement = :placement`, params);
-  return readPlacements();
+  const result = await query(`UPDATE ad_placement_prices SET ${fields.join(', ')} WHERE placement = :placement`, params);
+  // An absent placement row must not silently produce a success toast.
+  const placements = await readPlacements();
+  const selected = placements.find((slot) => slot.placement === placement);
+  if (!result.affectedRows) {
+    const exists = await query('SELECT placement FROM ad_placement_prices WHERE placement = :placement', { placement });
+    assert(exists.length, 409, 'PLACEMENT_MISSING', 'رکورد این جایگاه در دیتابیس موجود نیست؛ migration مربوط به تبلیغات را بررسی کنید.');
+  }
+  if (patch.enabled !== undefined) assert(selected && selected.enabled === Boolean(patch.enabled) && selected.active === Boolean(patch.enabled), 409, 'PLACEMENT_NOT_SAVED', 'وضعیت جایگاه ذخیره نشد؛ ساختار دیتابیس و دسترسی نوشتن را بررسی کنید.');
+  return placements;
 }
 
 /** Review queue: pending campaigns with their advertiser and creative. */
@@ -262,7 +286,7 @@ async function adDashboard() {
             SUM(status = 'pending') AS pending,
             SUM(status = 'active') AS active,
             SUM(owner_campaign = TRUE) AS ownerCampaigns,
-            COALESCE(SUM(spent), 0) AS spent
+            COALESCE(SUM(spent), 0) + (SELECT COALESCE(SUM(spent),0) FROM ad_financial_archive) AS spent
      FROM ads`,
   );
   const [events] = await query(
@@ -282,6 +306,8 @@ async function adDashboard() {
      FROM ad_placement_prices p LEFT JOIN ads a ON a.placement = p.placement
      GROUP BY p.slot_group`,
   );
+  const archivedByGroup = await query(`SELECT p.slot_group AS grp, SUM(f.budget) AS budget, SUM(f.spent) AS spent
+    FROM ad_financial_archive f JOIN ad_placement_prices p ON p.placement=f.primary_placement GROUP BY p.slot_group`);
   return {
     totals: {
       campaigns: Number(totals.campaigns || 0),
@@ -297,13 +323,14 @@ async function adDashboard() {
     },
     byGroup: GROUPS.map((group) => {
       const row = byGroup.find((item) => item.grp === group.group) || {};
+      const archived = archivedByGroup.find((item) => item.grp === group.group) || {};
       return {
         group: group.group,
         label: group.label,
         campaigns: Number(row.campaigns || 0),
         active: Number(row.active || 0),
-        budget: Number(row.budget || 0),
-        spent: Number(row.spent || 0),
+        budget: Number(row.budget || 0) + Number(archived.budget || 0),
+        spent: Number(row.spent || 0) + Number(archived.spent || 0),
       };
     }),
   };
