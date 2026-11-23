@@ -168,6 +168,10 @@ test('missing ad migrations produce actionable errors and owner diagnostics', as
   assert.equal(report.migrations.contentViewReceipts,true);
   assert.equal(report.migrations.adSoftDelete,true);
   assert.equal(report.migrations.adPageBidding,true);
+  assert.equal(report.migrations.pauseBannerDownloadVideo,true);
+  await query("DELETE FROM ad_placement_prices WHERE placement='video_download'");
+  try { report = await diagnostics(); assert.equal(report.migrations.pauseBannerDownloadVideo,false); assert.ok(report.checks.some(c => !c.ok && /2026-11-pause-banner-download-video/.test(c.detail || ''))); }
+  finally { await query("INSERT INTO ad_placement_prices (placement,slot_group,display_name_fa,price_per_thousand,minimum_budget) VALUES ('video_download','video','ویدیو قبل از دانلود',50000,50000)"); }
   await query('ALTER TABLE ads DROP COLUMN telegram_click_mode');
   try {
     const result = await request('/api/advertiser/profile');

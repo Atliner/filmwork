@@ -1787,6 +1787,10 @@ app.get('/api/admin/diagnostics', requireAdmin, asyncRoute(async (_req, res) => 
     const multiplePlacements = await tableExists('ad_campaign_placements') && await columnExists('ads', 'landing_mode') && await columnExists('ad_events', 'placement');
     report.migrations.adMultiplePlacements = multiplePlacements;
     check('جایگاه‌های چندگانه و صفحهٔ واسط اختیاری', multiplePlacements, multiplePlacements ? null : 'پس از پشتیبان‌گیری و اجرای migrationهای قبلی، فایل 2026-11-ad-multiple-placements.sql را اجرا کنید.');
+    const downloadVideoEnums = ['ads','ad_placement_prices'].every((table) => adColumns.some((column) => column.tableName === table && column.columnName === 'placement' && String(column.columnType).includes("'video_download'")));
+    const downloadVideoRow = downloadVideoEnums && (await query("SELECT COUNT(*) AS found FROM ad_placement_prices WHERE placement='video_download'"))[0]?.found > 0;
+    report.migrations.pauseBannerDownloadVideo = Boolean(downloadVideoEnums && downloadVideoRow);
+    check('بنر توقف و ویدیوی قبل از دانلود', report.migrations.pauseBannerDownloadVideo, report.migrations.pauseBannerDownloadVideo ? null : 'پس از پشتیبان‌گیری و اجرای migrationهای قبلی، فایل 2026-11-pause-banner-download-video.sql را اجرا کنید.');
 
   } catch (error) {
     check('بررسی ساختار دیتابیس', false, error.message);
