@@ -59,7 +59,12 @@ jobs:
           done
           result=$(mysql -N -B -h 127.0.0.1 -u root filmwork_test -e "SELECT COUNT(*) FROM ads a JOIN ad_campaign_placements ap ON ap.ad_id=a.id WHERE a.public_id='00000000-0000-4000-8000-000000000001' AND ap.placement='text_home' AND ap.unit_price=123.45 AND ap.bid_multiplier=2 AND a.spent=4 AND a.budget=50 AND a.landing_mode='intermediate'")
           test "$result" = 1
+          mysql -h 127.0.0.1 -u root filmwork_test -e "SET @u=(SELECT id FROM users WHERE tg_user_id=900001); INSERT INTO ads (public_id,advertiser_id,campaign_name,headline,placement,asset_type,creative_url,unit_price,bid_multiplier,budget,spent,starts_at,ends_at,status) VALUES ('00000000-0000-4000-8000-000000000002',@u,'old pause','old pause','pause_overlay','video','https://example.com/ad.mp4',50000,1,50,4,UTC_TIMESTAMP()-INTERVAL 1 DAY,UTC_TIMESTAMP()+INTERVAL 1 DAY,'active'); INSERT INTO ad_campaign_placements (ad_id,placement,unit_price,bid_multiplier) SELECT id,'pause_overlay',unit_price,bid_multiplier FROM ads WHERE public_id='00000000-0000-4000-8000-000000000002';"
           for iteration in 1 2; do mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-pause-banner-download-video.sql; done
+          result=$(mysql -N -B -h 127.0.0.1 -u root filmwork_test -e "SELECT COUNT(*) FROM ads a JOIN ad_campaign_placements p ON p.ad_id=a.id WHERE a.public_id='00000000-0000-4000-8000-000000000002' AND a.status='paused' AND a.budget=50 AND a.spent=4 AND p.placement='pause_overlay' AND p.unit_price=50000")
+          test "$result" = 1
+          test "$(mysql -N -B -h 127.0.0.1 -u root filmwork_test -e "SELECT COUNT(*) FROM ad_placement_prices WHERE placement='video_download' AND is_enabled=0")" = 1
+          mysql -h 127.0.0.1 -u root filmwork_test -e "DELETE FROM ads WHERE public_id='00000000-0000-4000-8000-000000000002'"
           mysql -h 127.0.0.1 -u root filmwork_test -e "DELETE FROM ads WHERE public_id='00000000-0000-4000-8000-000000000001'; DELETE FROM users WHERE tg_user_id=900001"
       - name: Exercise transactions and delivery against MySQL
         shell: bash
