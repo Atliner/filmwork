@@ -18,17 +18,17 @@ for line in interesting[-25:]:
 PY
   python3 - <<'PYREPORT'
 import glob, xml.etree.ElementTree as ET
-for path in glob.glob('app/build/outputs/androidTest-results/**/*.xml', recursive=True):
+for path in glob.glob('app/build/**/*.xml', recursive=True):
     try:
         root=ET.parse(path).getroot()
         for case in root.iter('testcase'):
-            for failure in case.findall('failure'):
+            for failure in list(case.findall('failure')) + list(case.findall('error')):
                 detail=(case.get('classname','')+'.'+case.get('name','')+': '+(failure.get('message',''))+' '+(failure.text or ''))[:5000]
                 print('::error::'+detail.replace('%','%25').replace('\r','%0D').replace('\n','%0A'))
-    except ET.ParseError:
+    except (ET.ParseError, OSError):
         pass
 PYREPORT
-  adb logcat -d -s AndroidRuntime:E TestRunner:I | grep -E 'FATAL EXCEPTION|Caused by:|Exception|JNI_ERR|UnsatisfiedLinkError|NoSuchMethodError|FAILURE|Process: com.filmwork' | tail -20 | while IFS= read -r line; do
+  adb logcat -d -s AndroidRuntime:E TestRunner:I | grep -E 'FATAL EXCEPTION|Caused by:|Exception|AssertionError|at com\.filmwork|JNI_ERR|UnsatisfiedLinkError|NoSuchMethodError|FAILURE|Process: com.filmwork' | tail -20 | while IFS= read -r line; do
     safe=$(printf '%s' "$line" | sed -E 's@https?://[^ ]+@<url>@g; s/%/%25/g')
     printf '::error::%s\n' "$safe"
   done

@@ -202,6 +202,8 @@ public final class NativePlaybackTest {
           Field phase = activity.getClass().getDeclaredField("phase"); phase.setAccessible(true);
           @SuppressWarnings({"rawtypes", "unchecked"}) Object content = Enum.valueOf((Class) phase.getType(), "CONTENT");
           phase.set(activity, content);
+          // The real ad transition hides its full-screen layer before content.
+          ((View) field(activity, "adLayer")).setVisibility(View.GONE);
           Method play = activity.getClass().getDeclaredMethod("playStream", Uri.class); play.setAccessible(true); play.invoke(activity, Uri.fromFile(video));
         } catch (Exception e) { throw new AssertionError(e); }
       });
