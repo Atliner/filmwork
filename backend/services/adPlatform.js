@@ -69,21 +69,6 @@ async function updatePlacement(placement, patch = {}) {
   const meta = placementMeta(placement);
   assert(meta, 422, 'INVALID_PLACEMENT', 'جایگاه نامعتبر است.');
   if (patch.enabled !== undefined) assert(typeof patch.enabled === 'boolean', 422, 'INVALID_PLACEMENT_STATE', 'وضعیت جایگاه معتبر نیست.');
-  // If an older installation has a missing catalogue row, create only that
-  // row with safe configured defaults; never overwrite an existing price.
-  const existsBefore = await query('SELECT placement FROM ad_placement_prices WHERE placement = :placement', { placement });
-  if (!existsBefore.length) {
-    const policy = adPolicy(await readSettings());
-    await query(`INSERT INTO ad_placement_prices
-      (placement,slot_group,display_name_fa,price_per_thousand,default_duration_seconds,minimum_budget,currency,is_enabled,is_active,display_order)
-      VALUES (:placement,:groupName,:label,:cpm,:duration,:minimum,'IRR',FALSE,FALSE,:orderValue)
-      ON DUPLICATE KEY UPDATE placement=VALUES(placement)`, {
-      placement, groupName:meta.group, label:meta.label,
-      cpm:Math.max(1, policy.cpm[meta.group] || 50000), minimum:Math.max(1000, policy.minBudget),
-      duration:meta.group === 'video' ? policy.defaultVideoDuration : meta.group === 'banner' ? policy.defaultBannerDuration : 0,
-      orderValue:meta.order,
-    });
-  }
   const fields = [];
   const params = { placement };
   if (patch.enabled !== undefined) {
@@ -107,6 +92,21 @@ async function updatePlacement(placement, patch = {}) {
     fields.push('display_name_fa = :label');
   }
   assert(fields.length, 422, 'NO_PLACEMENT_CHANGES', 'تغییری برای ذخیره وجود ندارد.');
+  // If an older installation has a missing catalogue row, create only that
+  // row with safe configured defaults; never overwrite an existing price.
+  const existsBefore = await query('SELECT placement FROM ad_placement_prices WHERE placement = :placement', { placement });
+  if (!existsBefore.length) {
+    const policy = adPolicy(await readSettings());
+    await query(`INSERT INTO ad_placement_prices
+      (placement,slot_group,display_name_fa,price_per_thousand,default_duration_seconds,minimum_budget,currency,is_enabled,is_active,display_order)
+      VALUES (:placement,:groupName,:label,:cpm,:duration,:minimum,'IRR',FALSE,FALSE,:orderValue)
+      ON DUPLICATE KEY UPDATE placement=VALUES(placement)`, {
+      placement, groupName:meta.group, label:meta.label,
+      cpm:Math.max(1, policy.cpm[meta.group] || 50000), minimum:Math.max(1000, policy.minBudget),
+      duration:meta.group === 'video' ? policy.defaultVideoDuration : meta.group === 'banner' ? policy.defaultBannerDuration : 0,
+      orderValue:meta.order,
+    });
+  }
   const result = await query(`UPDATE ad_placement_prices SET ${fields.join(', ')} WHERE placement = :placement`, params);
   // An absent placement row must not silently produce a success toast.
   const placements = await readPlacements();

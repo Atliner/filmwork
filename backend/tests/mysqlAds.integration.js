@@ -100,6 +100,9 @@ test('admin can remove own and advertiser campaigns, preserving ledger and refun
 
   const paidId = await createCampaign('text_home','10');
   await query('UPDATE ads SET spent=2 WHERE public_id=:id',{id:paidId});
+  const internalId=(await query('SELECT id FROM ads WHERE public_id=:id',{id:paidId}))[0].id;
+  await query("INSERT INTO ad_events (ad_id,event_type,session_key) VALUES (:adId,'impression',:session)",{adId:internalId,session:'a'.repeat(64)});
+  await query("INSERT INTO admin_events (kind,title,ad_public_id) VALUES ('ad','کمپین بررسی شد',:id)",{id:paidId});
   const paidRemoved = await admin(`/api/admin/ads/campaigns/${paidId}`,'DELETE');
   assert.equal(paidRemoved.response.status,200,JSON.stringify(paidRemoved.data)); assert.equal(paidRemoved.data.refunded,8);
   assert.equal(Number((await query('SELECT balance FROM advertiser_wallets WHERE user_id=:userId',{userId}))[0].balance),balanceBefore-2);
@@ -107,6 +110,9 @@ test('admin can remove own and advertiser campaigns, preserving ledger and refun
   assert.ok(ledger.every(row=>row.ad_id === null));
   const archived=await query('SELECT budget,spent FROM ad_financial_archive WHERE campaign_public_id=:id',{id:paidId}); assert.equal(Number(archived[0].budget),10); assert.equal(Number(archived[0].spent),2);
   assert.equal((await query('SELECT id FROM ads WHERE public_id=:id',{id:paidId})).length,0);
+  assert.equal((await query('SELECT id FROM ad_events WHERE ad_id=:id',{id:internalId})).length,0);
+  assert.equal((await query('SELECT ad_id FROM ad_campaign_placements WHERE ad_id=:id',{id:internalId})).length,0);
+  assert.equal((await query('SELECT id FROM admin_events WHERE ad_public_id=:id',{id:paidId})).length,0);
   const rates=await query('SELECT placement,unit_price FROM ad_financial_placement_rates WHERE campaign_public_id=:id',{id:paidId}); assert.equal(rates[0].placement,'text_home');
   assert.ok(ledger.some(x=>x.transaction_type==='campaign_reserve' && Number(x.amount)===10));
   assert.ok(ledger.some(x=>x.transaction_type==='refund' && Number(x.amount)===8));
@@ -159,6 +165,16 @@ test('financial failure rolls back refund and permanent campaign deletion', asyn
   assert.equal((await query('SELECT id FROM ads WHERE public_id=:id',{id})).length,1);
   assert.equal((await query("SELECT id FROM wallet_transactions WHERE reference=:reference",{reference:`campaign-refund:${id}`})).length,0);
   await query('DELETE FROM ad_financial_archive WHERE campaign_public_id=:id',{id});
+  assert.equal((await request(`/api/advertiser/campaigns/${id}`,'DELETE')).response.status,200);
+});
+
+test('legacy maintenance refuses unverifiable refunds without deleting anything', async () => {
+  const id=await createCampaign('text_home','10');
+  await query('UPDATE ads SET deleted_at=UTC_TIMESTAMP(3) WHERE public_id=:id',{id});
+  const script=path.join(__dirname,'../scripts/purge-legacy-deletions.js');
+  assert.throws(()=>execFileSync(process.execPath,[script,'--execute'],{encoding:'utf8',env:process.env,stdio:'pipe'}));
+  assert.equal((await query('SELECT id FROM ads WHERE public_id=:id',{id})).length,1);
+  await query('UPDATE ads SET deleted_at=NULL WHERE public_id=:id',{id});
   assert.equal((await request(`/api/advertiser/campaigns/${id}`,'DELETE')).response.status,200);
 });
 
