@@ -1714,7 +1714,7 @@ app.get('/api/admin/diagnostics', requireAdmin, asyncRoute(async (_req, res) => 
   const report = {
     mode: store.kind,
     node: process.version,
-    migrations: { contentVersions: false, mediaLinkColumn: false },
+    migrations: { contentVersions: false, ownerConsoleV2: false },
     database: { version: null, engine: null, ok: false, error: null },
     checks: [],
   };
@@ -1753,9 +1753,23 @@ app.get('/api/admin/diagnostics', requireAdmin, asyncRoute(async (_req, res) => 
       check(`جدول ${table}`, await tableExists(table), null);
     }
     report.migrations.contentVersions = await tableExists('content_versions') && await tableExists('content_version_links');
-    report.migrations.mediaLinkColumn = await columnExists('media_links', 'content_version_link_id');
-    check('مهاجرت پنل نسخه ۲', report.migrations.contentVersions && report.migrations.mediaLinkColumn,
-      report.migrations.mediaLinkColumn ? null : 'فایل database/migrations/2026-11-owner-console-v2.sql اجرا نشده است.');
+    // The version relation lives in content_version_links.media_link_id; no
+    // content_version_link_id column exists in either schema or migration.
+    // Check actual columns rather than claim to know whether a file was run.
+    const ownerRequired = {
+      contents: ['last_air_year','series_running','current_season','broadcast_note','episode_count','season_count','directors','cast_members','network','has_dub','has_sub','poster_gallery','featured_hero','view_count','last_viewed_at','hero_slot'],
+      content_versions: ['id','content_id','kind','title','resolution','sort_order','created_at','updated_at'],
+      content_version_links: ['id','version_id','season_number','episode_number','episode_title','label','size_text','stream_url','subtitle_url','dub_url','telegram_url','media_link_id','source','created_at','updated_at'],
+      admin_events: ['id','kind','title','detail','created_at'],
+    };
+    const ownerColumns = await query(`SELECT table_name AS tableName, column_name AS columnName
+      FROM information_schema.columns WHERE table_schema = DATABASE()
+        AND table_name IN ('contents','content_versions','content_version_links','admin_events')`);
+    const existingOwnerColumns = new Set(ownerColumns.map((row) => `${row.tableName}.${row.columnName}`));
+    const ownerMissing = Object.entries(ownerRequired).flatMap(([table, columns]) => columns.map((column) => `${table}.${column}`).filter((key) => !existingOwnerColumns.has(key)));
+    report.migrations.ownerConsoleV2 = ownerMissing.length === 0;
+    check('ساختار پنل نسخه ۲', report.migrations.ownerConsoleV2,
+      ownerMissing.length ? `ستون‌های موجودنشده: ${ownerMissing.join('، ')}. فایل قدیمی migration را دوباره کامل اجرا نکنید؛ ابتدا از دیتابیس پشتیبان بگیرید و ساختار را بررسی کنید.` : null);
     check('ستون ژانر', await columnExists('contents', 'genres'), null);
     // A GitHub update copies SQL files but does not run them. Check the features
     // separately so an owner can identify a partially applied upgrade.

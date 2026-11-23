@@ -165,6 +165,14 @@ test('missing ad migrations produce actionable errors and owner diagnostics', as
     assert.equal(response.status,200); return response.json();
   }
   let report = await diagnostics();
+  assert.equal(report.migrations.contentVersions,true);
+  assert.equal(report.migrations.ownerConsoleV2,true);
+  assert.ok(report.checks.some(c => c.ok && c.name === 'ساختار پنل نسخه ۲'));
+  await query('ALTER TABLE contents DROP COLUMN broadcast_note');
+  try {
+    report = await diagnostics(); assert.equal(report.migrations.ownerConsoleV2,false);
+    assert.ok(report.checks.some(c => !c.ok && (c.detail || '').includes('contents.broadcast_note')));
+  } finally { await query('ALTER TABLE contents ADD COLUMN broadcast_note VARCHAR(120) NULL'); }
   assert.equal(report.migrations.contentViewReceipts,true);
   assert.equal(report.migrations.adSoftDelete,true);
   assert.equal(report.migrations.adPageBidding,true);

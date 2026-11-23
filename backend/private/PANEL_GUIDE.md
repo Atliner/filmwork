@@ -173,7 +173,7 @@ API: `POST /api/admin/contents/:assetId/sync-media`.
 
 نصب تازه: `database/schema.sql`.
 
-نصب موجود (فقط مایگریشن را اجرا کنید؛ فقط ستون اضافه می‌کند و دو جدول می‌سازد):
+برای نصب قدیمی که ساختار پنل نسخه ۲ را ندارد، پس از بکاپ و بررسی جدول‌ها، migration زیر را اجرا کنید. این فایل قدیمی تکرارپذیر نیست؛ در دیتابیس جدید یا ارتقای ناقص دوباره کامل اجرا نشود، چون خطای ستون تکراری می‌دهد. پیش از هر تغییر، ستون‌های واقعاً موجود و جدول‌های `content_versions` و `content_version_links` را بررسی کنید:
 
 ```bash
 mysql -u USER -p DATABASE < database/migrations/2026-11-owner-console-v2.sql
