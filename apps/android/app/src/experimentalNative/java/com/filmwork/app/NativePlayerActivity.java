@@ -85,6 +85,9 @@ public final class NativePlayerActivity extends Activity {
   private NativeAdClient.Ad activeAd;
   private FrameLayout adLayer;
   private FrameLayout bannerHost;
+  private FrameLayout pauseBannerHost;
+  private TextView playerTitle;
+  private int bannerGeneration;
   private boolean bannerPlayerScheduled;
   private boolean waitingPauseBanner;
   private String sessionToken;
@@ -353,10 +356,14 @@ public final class NativePlayerActivity extends Activity {
     Button back = button("‹", this::finish); back.setContentDescription("بازگشت");
     back.setTextSize(24); top.addView(back, new LinearLayout.LayoutParams(dp(48), dp(48)));
     TextView title = label(getIntent().getStringExtra("title") == null ? "ویزوستن" : getIntent().getStringExtra("title"), 16);
+    playerTitle = title;
     title.setSingleLine(true); title.setEllipsize(android.text.TextUtils.TruncateAt.END);
     title.setPadding(dp(10), 0, dp(10), 0);
     title.setTypeface(null, android.graphics.Typeface.BOLD);
     top.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+    pauseBannerHost = new FrameLayout(this);
+    top.addView(pauseBannerHost, new LinearLayout.LayoutParams(0, dp(48), 1));
+    pauseBannerHost.setVisibility(View.GONE);
     if (versions.size() > 1) {
       Button quality = button("نسخه ▾", this::showVersions);
       quality.setContentDescription("انتخاب نسخه پخش"); top.addView(quality, new LinearLayout.LayoutParams(dp(72), dp(48)));
@@ -384,7 +391,7 @@ public final class NativePlayerActivity extends Activity {
       if (player.isPlaying()) {
         player.pause();
         saveContentProgress(true);
-        if (player.getTime() > 1000) requestInterstitial("pause_overlay", false, false);
+        if (player.getTime() > 1000) handler.postDelayed(() -> showBanner("banner_pause"), 300);
       } else { clearBanner(); player.play(); }
     });
     play.setTextSize(23); play.setContentDescription("پخش یا مکث");
@@ -674,7 +681,7 @@ public final class NativePlayerActivity extends Activity {
     adLayer.setVisibility(View.GONE);
     adLayer.removeAllViews();
     if ("pre_roll".equals(pendingPlacement)) preRollDone = true;
-    waitingPauseBanner = !resumeAfterAd && "pause_overlay".equals(pendingPlacement);
+    waitingPauseBanner = false;
     pendingPlacement = null;
     if (finishAfterAd) {
       if (player != null) player.stop();
@@ -746,21 +753,22 @@ public final class NativePlayerActivity extends Activity {
   }
 
   private void clearBanner() {
-    if (bannerHost == null) return;
-    bannerHost.setVisibility(View.GONE);
-    bannerHost.removeAllViews();
-    bannerHost.setTag(null);
+    bannerGeneration++;
+    if (bannerHost != null) { bannerHost.setVisibility(View.GONE); bannerHost.removeAllViews(); bannerHost.setTag(null); }
+    if (pauseBannerHost != null) { pauseBannerHost.setVisibility(View.GONE); pauseBannerHost.removeAllViews(); pauseBannerHost.setTag(null); }
+    if (playerTitle != null) playerTitle.setVisibility(View.VISIBLE);
   }
 
   private void showBanner(String placement) {
     if (!visible || phase != Phase.CONTENT || player == null || isFinishing()) return;
     final boolean pausePlacement = "banner_pause".equals(placement);
     if (pausePlacement == player.isPlaying()) return;
+    final int generation = ++bannerGeneration;
     adClient.requestAd(placement, ad -> {
-      if (ad == null || !"image".equals(ad.assetType) || !visible || phase != Phase.CONTENT
+      if (generation != bannerGeneration || ad == null || !"image".equals(ad.assetType) || !visible || phase != Phase.CONTENT
           || player == null || pausePlacement == player.isPlaying()) return;
       adClient.loadImage(ad, bitmap -> {
-        if (bitmap == null || !visible || phase != Phase.CONTENT || player == null || pausePlacement == player.isPlaying()) return;
+        if (generation != bannerGeneration || bitmap == null || !visible || phase != Phase.CONTENT || player == null || pausePlacement == player.isPlaying()) return;
         renderBanner(ad, bitmap);
       });
     });
@@ -768,37 +776,41 @@ public final class NativePlayerActivity extends Activity {
 
   private void renderBanner(NativeAdClient.Ad ad, Bitmap bitmap) {
     clearBanner();
+    final boolean pausePlacement = "banner_pause".equals(ad.placement);
+    final FrameLayout host = pausePlacement ? pauseBannerHost : bannerHost;
     final String displayId = ad.id + ":" + ad.session;
-    bannerHost.setTag(displayId);
+    host.setTag(displayId);
     LinearLayout card = new LinearLayout(this);
     card.setGravity(Gravity.CENTER_VERTICAL);
-    card.setPadding(dp(8), dp(6), dp(8), dp(6));
+    card.setPadding(dp(4), dp(3), dp(4), dp(3));
     card.setBackgroundColor(0xee17171b);
     ImageView image = new ImageView(this);
     image.setImageBitmap(bitmap); image.setScaleType(ImageView.ScaleType.CENTER_CROP);
-    card.addView(image, new LinearLayout.LayoutParams(dp(100), -1));
+    card.addView(image, new LinearLayout.LayoutParams(dp(pausePlacement ? 48 : 100), -1));
     TextView caption = label("تبلیغ · " + ad.headline, 12);
-    caption.setPadding(dp(10), 0, dp(10), 0); caption.setMaxLines(3);
+    caption.setPadding(dp(6), 0, dp(6), 0); caption.setMaxLines(pausePlacement ? 1 : 3);
+    caption.setEllipsize(android.text.TextUtils.TruncateAt.END);
     card.addView(caption, new LinearLayout.LayoutParams(0, -2, 1));
     card.setOnClickListener(view -> {
       adClient.record(ad, "click");
       try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(adClient.tunnelUrl(ad)))); }
       catch (Exception ignored) { Toast.makeText(this, "باز کردن تبلیغ ممکن نشد.", Toast.LENGTH_SHORT).show(); }
     });
-    bannerHost.addView(card, new FrameLayout.LayoutParams(-1, -1));
-    bannerHost.setVisibility(View.VISIBLE);
-    bannerHost.post(new Runnable() {
+    host.addView(card, new FrameLayout.LayoutParams(-1, -1));
+    if (pausePlacement) { playerTitle.setVisibility(View.GONE); setControlsVisible(true); }
+    host.setVisibility(View.VISIBLE);
+    host.post(new Runnable() {
       @Override public void run() {
-        if (!displayId.equals(bannerHost.getTag())) return;
+        if (!displayId.equals(host.getTag())) return;
         Rect visibleRect = new Rect();
-        long area = (long) bannerHost.getWidth() * bannerHost.getHeight();
-        long visibleArea = bannerHost.getGlobalVisibleRect(visibleRect) ? (long) visibleRect.width() * visibleRect.height() : 0;
-        if (visible && hasWindowFocus() && phase == Phase.CONTENT && bannerHost.isShown()
+        long area = (long) host.getWidth() * host.getHeight();
+        long visibleArea = host.getGlobalVisibleRect(visibleRect) ? (long) visibleRect.width() * visibleRect.height() : 0;
+        if (visible && hasWindowFocus() && phase == Phase.CONTENT && host.isShown()
             && area > 0 && visibleArea * 2 >= area) adClient.record(ad, "impression");
-        else bannerHost.postDelayed(this, 250);
+        else host.postDelayed(this, 250);
       }
     });
-    handler.postDelayed(() -> { if (displayId.equals(bannerHost.getTag())) clearBanner(); }, ad.durationSeconds * 1000L);
+    if (!pausePlacement) handler.postDelayed(() -> { if (displayId.equals(host.getTag())) clearBanner(); }, ad.durationSeconds * 1000L);
   }
 
   private void saveContentProgress(boolean force) {
@@ -998,6 +1010,7 @@ public final class NativePlayerActivity extends Activity {
     new AlertDialog.Builder(this, R.style.PlayerDialog).setTitle("صدای پخش").setView(panel).setPositiveButton("انجام", null).show();
   }
   private void setControlsVisible(boolean show) {
+    if (!show && pauseBannerHost != null && pauseBannerHost.getVisibility() == View.VISIBLE && player != null && !player.isPlaying()) show = true;
     controlsVisible = show;
     int visibility = show ? View.VISIBLE : View.INVISIBLE;
     if (topControls != null) topControls.setVisibility(visibility);
@@ -1058,7 +1071,7 @@ public final class NativePlayerActivity extends Activity {
   }
   @Override protected void onStop() {
     visible = false;
-    clearBanner();
+    if (pauseBannerHost == null || pauseBannerHost.getVisibility() != View.VISIBLE) clearBanner();
     saveContentProgress(true);
     pausedForBackground = player != null && player.isPlaying();
     if (pausedForBackground) player.pause();

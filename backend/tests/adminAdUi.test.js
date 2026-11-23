@@ -81,6 +81,7 @@ test('owner selects creative type first, multiple slots and optional intermediat
   assert.equal(form.querySelector('[data-owner-slot-type=text]').hidden,false);
   assert.equal(form.querySelector('[data-owner-slot-type=video]').hidden,true);
   form.querySelector('[value=text_home]').checked=true; form.querySelector('[value=text_search]').checked=true;
+  const bid=form.querySelector('[name=bidMultiplier]'); assert.equal(bid.type,'range'); bid.value='2.5'; bid.dispatchEvent(new w.Event('input',{bubbles:true})); assert.match(form.querySelector('[data-owner-bid-value]').textContent,/۲٫۵/);
   const landing=form.querySelector('[name=landingMode]'); landing.value='intermediate'; landing.dispatchEvent(new w.Event('change',{bubbles:true}));
   assert.equal(form.querySelector('[data-owner-landing-fields]').hidden,false);
   form.querySelector('[name=telegramPostText]').value='توضیح واسط';

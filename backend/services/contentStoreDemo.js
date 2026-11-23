@@ -195,7 +195,7 @@ function buildState() {
   const ads = [
     { id: 'ad-1', campaign: 'اسپانسر پخش زنده', advertiser: 'دیجی‌مارکت', placement: 'pre_roll', budget: 320_000_000, spent: 180_000_000, status: 'active', createdAt: iso(6) },
     { id: 'ad-2', campaign: 'تخفیف پاییزه', advertiser: 'کتاب‌راز', placement: 'timed_banner', budget: 90_000_000, spent: 12_000_000, status: 'pending', createdAt: iso(2) },
-    { id: 'ad-3', campaign: 'اپلیکیشن سفر', advertiser: 'علی‌بابا', placement: 'pause_overlay', budget: 210_000_000, spent: 60_000_000, status: 'active', createdAt: iso(14) },
+    { id: 'ad-3', campaign: 'اپلیکیشن سفر', advertiser: 'علی‌بابا', placement: 'banner_pause', budget: 210_000_000, spent: 60_000_000, status: 'active', createdAt: iso(14) },
     { id: 'ad-4', campaign: 'کمپین پایان‌یافته', advertiser: 'اسنپ', placement: 'pre_roll', budget: 150_000_000, spent: 150_000_000, status: 'completed', createdAt: iso(45) },
   ];
 
@@ -642,7 +642,7 @@ const demoAdState = () => {
       { placement: 'pre_roll', group: 'video', label: 'پیش از پخش (Pre-roll)', asset: 'video', order: 1, enabled: true, cpm: 50000, minBudget: 50000, durationSeconds: 15, currency: 'IRR' },
       { placement: 'mid_roll', group: 'video', label: 'میان‌پخش (Mid-roll)', asset: 'video', order: 2, enabled: true, cpm: 45000, minBudget: 50000, durationSeconds: 15, currency: 'IRR' },
       { placement: 'timed_banner', group: 'video', label: 'پس از پخش (Post-roll)', asset: 'video', order: 3, enabled: true, cpm: 45000, minBudget: 50000, durationSeconds: 10, currency: 'IRR' },
-      { placement: 'pause_overlay', group: 'video', label: 'لایه هنگام توقف (Pause)', asset: 'video', order: 4, enabled: true, cpm: 32000, minBudget: 50000, durationSeconds: 15, currency: 'IRR' },
+      { placement: 'video_download', group: 'video', label: 'ویدیو قبل از دانلود', asset: 'video', order: 4, enabled: false, active: true, cpm: 50000, minBudget: 50000, durationSeconds: 15, currency: 'IRR' },
       { placement: 'banner_player', group: 'banner', label: 'بنر روی پلیر (۷۲۸×۹۰)', asset: 'image', order: 5, enabled: true, cpm: 50000, minBudget: 50000, durationSeconds: 8, currency: 'IRR' },
       { placement: 'banner_pause', group: 'banner', label: 'بنر توقف (۳۰۰×۲۵۰)', asset: 'image', order: 6, enabled: true, cpm: 40000, minBudget: 50000, durationSeconds: 8, currency: 'IRR' },
       { placement: 'banner_download', group: 'banner', label: 'بنر قبل از دانلود (۱۰۸۰×۱۹۲۰)', asset: 'image', order: 7, enabled: false, cpm: 60000, minBudget: 50000, durationSeconds: 8, currency: 'IRR' },

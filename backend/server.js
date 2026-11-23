@@ -980,6 +980,8 @@ app.post('/api/download', requireUser, asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/ads/serve', optionalUser, asyncRoute(async (req, res) => {
+  // Old clients can still ask for the retired video pause slot. Never serve it.
+  if (req.query.placement === 'pause_overlay') return res.json({ ad: null });
   const placement = asEnum(req.query.placement, 'جایگاه', adSettingsLib.PLACEMENT_KEYS);
   if (placement === 'link_file_button') return res.json({ ad:null }); // Served only with Telegram deliveries.
   const settings = await adPlatform.readSettings().catch(() => ({ ...adSettingsLib.DEFAULTS }));

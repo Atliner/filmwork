@@ -227,7 +227,7 @@ CREATE TABLE IF NOT EXISTS advertiser_wallets (
 
 CREATE TABLE IF NOT EXISTS ad_placement_prices (
   placement ENUM('pre_roll', 'mid_roll', 'timed_banner', 'post_play', 'pause_overlay',
-                 'banner_player', 'banner_pause', 'banner_download', 'link_file_button',
+                 'banner_player', 'banner_pause', 'banner_download', 'video_download', 'link_file_button',
                  'banner_home', 'text_home', 'banner_detail', 'text_detail', 'banner_search', 'text_search') NOT NULL,
   slot_group ENUM('video', 'banner', 'link') NOT NULL DEFAULT 'video',
   display_name_fa VARCHAR(80) NOT NULL,
@@ -250,7 +250,8 @@ VALUES
   ('pre_roll', 'video', 'پیش از پخش (Pre-roll)', 50000.00, 15, 50000.00, 'IRR', TRUE, 1),
   ('mid_roll', 'video', 'میان‌پخش (Mid-roll)', 45000.00, 15, 50000.00, 'IRR', TRUE, 2),
   ('timed_banner', 'video', 'پس از پخش (Post-roll)', 45000.00, 10, 50000.00, 'IRR', TRUE, 3),
-  ('pause_overlay', 'video', 'لایه هنگام توقف (Pause)', 32000.00, 15, 50000.00, 'IRR', TRUE, 4),
+  ('pause_overlay', 'video', 'توقف ویدیویی بازنشسته', 32000.00, 15, 50000.00, 'IRR', FALSE, 4),
+  ('video_download', 'video', 'ویدیو قبل از دانلود', 50000.00, 15, 50000.00, 'IRR', FALSE, 4),
   ('banner_player', 'banner', 'بنر روی پلیر (۷۲۸×۹۰)', 50000.00, 8, 50000.00, 'IRR', TRUE, 5),
   ('banner_pause', 'banner', 'بنر توقف (۳۰۰×۲۵۰)', 40000.00, 8, 50000.00, 'IRR', TRUE, 6),
   ('banner_download', 'banner', 'بنر قبل از دانلود (۱۰۸۰×۱۹۲۰)', 60000.00, 8, 50000.00, 'IRR', TRUE, 7),
@@ -275,7 +276,7 @@ CREATE TABLE IF NOT EXISTS ads (
   headline VARCHAR(180) NOT NULL,
   body VARCHAR(1000) NULL,
   placement ENUM('pre_roll', 'mid_roll', 'timed_banner', 'post_play', 'pause_overlay',
-                 'banner_player', 'banner_pause', 'banner_download', 'link_file_button',
+                 'banner_player', 'banner_pause', 'banner_download', 'video_download', 'link_file_button',
                  'banner_home', 'text_home', 'banner_detail', 'text_detail', 'banner_search', 'text_search') NOT NULL,
   asset_type ENUM('video', 'image') NOT NULL,
   creative_url VARCHAR(2048) NOT NULL,

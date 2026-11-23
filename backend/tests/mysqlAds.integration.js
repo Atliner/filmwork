@@ -143,6 +143,20 @@ test('invalid multi-slot submissions do not reserve funds; owner can publish sev
   const land=await request(`/api/ad-tunnel/${data.campaign.id}`,'GET',undefined,''); assert.equal(land.response.status,200);
 });
 
+test('pause only serves image and download video has its own selectable placement', async () => {
+  await query("UPDATE ad_placement_prices SET is_enabled=1,is_active=1,price_per_thousand=1000,minimum_budget=1 WHERE placement IN ('banner_pause','video_download','banner_download')");
+  const video=await createCampaign('video_download','10',{assetType:'video',creativeUrl:'https://example.com/ad.mp4',bidMultiplier:10});
+  const image=await createCampaign('banner_pause','10',{assetType:'image',creativeUrl:'https://example.com/ad.jpg'});
+  const banner=await createCampaign('banner_download','10',{assetType:'image',creativeUrl:'https://example.com/download.jpg'});
+  for (const [slot,id,type] of [['video_download',video,'video'],['banner_pause',image,'image'],['banner_download',banner,'image']]) {
+    const response=await request(`/api/ads/serve?placement=${slot}`,'GET',undefined,''); assert.equal(response.data.ad.id,id); assert.equal(response.data.ad.assetType,type);
+  }
+  assert.equal((await request('/api/ads/serve?placement=pause_overlay','GET',undefined,'')).data.ad,null);
+  const dates={startsAt:new Date(Date.now()-1000).toISOString(),endsAt:new Date(Date.now()+3600000).toISOString()};
+  const bad=await request('/api/advertiser/campaigns','POST',{placement:'banner_pause',campaignName:'Invalid pause',headline:'Invalid',budget:'10',assetType:'video',creativeUrl:'https://example.com/ad.mp4',...dates});
+  assert.equal(bad.response.status,422);
+});
+
 // An old deployment that copied JS without applying SQL must be identifiable.
 test('missing ad migrations produce actionable errors and owner diagnostics', async () => {
   const cookie = `filmwork_admin=${signAdminToken('123456789', 'integration-csrf')}`;

@@ -762,3 +762,5 @@ table.data .muted { color: var(--muted); font-size: 10.5px; }
 .owner-ad-placements p { color:var(--muted);font-size:11px; }
 .owner-ad-slot { display:flex;gap:9px;align-items:center;padding:8px;border-bottom:1px solid var(--line);font-size:12px; }
 .owner-ad-slot input { accent-color:#a855f7; }
+
+[data-owner-bid] input[type=range] { width:100%; accent-color:#a855f7; }

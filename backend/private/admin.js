@@ -1729,7 +1729,7 @@
                 <label class="field"><span>فایل تبلیغ (آپلود)</span><input class="input" type="file" name="creative" accept="video/mp4,video/webm,image/jpeg,image/png,image/webp"></label>
                 <label class="field"><span>یا لینک فایل</span><input class="input" dir="ltr" name="creativeUrl" placeholder="https://cdn.example.com/ad.mp4"></label>
               </div>
-              <label class="field" data-owner-bid hidden><span>ضریب پیشنهاد</span><input class="input" type="number" name="bidMultiplier" min="1" max="${esc(data.policy?.maxPriorityMultiplier || 5)}" step="0.01" value="1"><small>ضریب بیشتر، احتمال انتخاب را بیشتر می‌کند. کمپین مالک هزینه ندارد.</small></label>
+              <label class="field" data-owner-bid hidden><span>ضریب پیشنهاد</span><input class="input" type="range" name="bidMultiplier" min="1" max="${esc(data.policy?.maxPriorityMultiplier || 10)}" step="0.01" value="1"><output data-owner-bid-value>۱×</output><small>ضریب بیشتر، احتمال انتخاب را بیشتر می‌کند. کمپین مالک هزینه ندارد.</small></label>
               <div class="grid-2">
                 <label class="field"><span>لینک مقصد</span><input class="input" dir="ltr" name="targetUrl" placeholder="https://example.com"></label>
                 <label class="field"><span>مدت نمایش (ثانیه)</span><input class="input" type="number" name="durationSeconds" min="0" max="120" value="${esc(data.policy?.defaultVideoDuration || 15)}"></label>
@@ -1937,7 +1937,7 @@
     file.accept = type === 'video' ? 'video/mp4,video/webm' : 'image/jpeg,image/png,image/webp';
     $('[name="creativeUrl"]', form).disabled = file.disabled;
     $('[data-owner-bid]', form).hidden = !type || type === 'link';
-    if (type === 'link') $('[name="bidMultiplier"]', form).value = '1';
+    if (type === 'link') { $('[name="bidMultiplier"]', form).value = '1'; $('[data-owner-bid-value]', form).textContent = '۱×'; }
     $('[data-owner-telegram]', form).hidden = type !== 'link';
     $('[data-owner-landing]', form).hidden = !type || type === 'link';
     const intermediate = type && type !== 'link' && $('[name="landingMode"]', form).value === 'intermediate';
@@ -1945,6 +1945,9 @@
     $('[name="targetUrl"]', form).required = type === 'link' || (Boolean(type) && !intermediate);
     $('[name="headline"]', form).maxLength = type === 'link' ? 64 : 180;
   }
+  document.addEventListener('input', (event) => {
+    if (event.target.matches('#owner-ad-form [name=bidMultiplier]')) $('[data-owner-bid-value]', event.target.form).textContent = `${Number(event.target.value).toLocaleString('fa-IR')}×`;
+  });
   document.addEventListener('change', (event) => {
     if (event.target.closest('#owner-ad-form') && event.target.matches('[name=creativeType], [name=landingMode]')) updateOwnerAdForm(event.target.form);
   });

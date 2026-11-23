@@ -9,7 +9,7 @@ const script = fs.readFileSync(path.join(root, 'frontend/app.js'), 'utf8');
 const html = fs.readFileSync(path.join(root, 'frontend/index.html'), 'utf8');
 const delay = (ms = 10) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function setup({ ad = null, midAd = null, downloadAd = null, sources = [], stored = 0, signedIn = false, mediaItems = [], prices = [], native = false, noNativeBridge = false, streamUrl = 'https://media.example/video.mp4' } = {}) {
+async function setup({ ad = null, midAd = null, downloadAd = null, downloadVideo = null, pauseAd = null, sources = [], stored = 0, signedIn = false, mediaItems = [], prices = [], native = false, noNativeBridge = false, streamUrl = 'https://media.example/video.mp4' } = {}) {
   const dom = new JSDOM(html, { url: 'https://example.com/#/player/asset', runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
   const requests = [];
@@ -38,7 +38,7 @@ async function setup({ ad = null, midAd = null, downloadAd = null, sources = [],
     else if (url === '/api/contents/asset') data = { content: { id: 'asset', title: 'فیلم', type: 'movie', genres: [], imdbScore: null, streamUrl } };
     else if (url === '/api/contents/asset/media-options') data = { items: mediaItems };
     else if (url === '/api/contents/asset/player-sources') data = { sources };
-    else if (String(url).startsWith('/api/ads/serve')) data = { ad: String(url).includes('pre_roll') ? ad : String(url).includes('mid_roll') ? midAd : String(url).includes('banner_download') ? downloadAd : null };
+    else if (String(url).startsWith('/api/ads/serve')) data = { ad: String(url).includes('pre_roll') ? ad : String(url).includes('mid_roll') ? midAd : String(url).includes('banner_download') ? downloadAd : String(url).includes('video_download') ? downloadVideo : String(url).includes('banner_pause') ? pauseAd : null };
     else if (String(url).startsWith('/api/ads/')) data = { ok: true };
     else if (String(url).includes('subtitle')) return { ok: true, text: async () => String(url).includes('named.vtt') ? 'WEBVTT\n\ncue-name\n00:00:01.000 --> 00:00:04.000 align:start\nمتن وب\n' : '1\n00:00:01,000 --> 00:00:04,000\nسلام\n' };
     else throw new Error(`Unexpected URL ${url}`);
@@ -353,5 +353,37 @@ test('Android bridge receives named admin versions with associated tracks, not d
     assert.match(nativeMessages[0].versions[1].label, /Valamovie/);
     assert.deepEqual(nativeMessages[0].versions[1].audioUrls, ['https://media.example/audio2.mp3']);
     assert.ok(!d.querySelector('#native-player-status').textContent.includes('https://'));
+  } finally { dom.window.close(); }
+});
+
+test('pause banner stays until resume and is separate from both play buttons', async () => {
+  const pauseAd={id:'pause1',session:'pausesession',assetType:'image',creativeUrl:'https://media.example/banner.jpg',headline:'بنر',tunnelUrl:'/go',durationSeconds:1};
+  const {dom,w,d,requests}=await setup({pauseAd});
+  try {
+    const video=d.querySelector('#video'); d.querySelector('#center-play').click(); await delay(); video.currentTime=8;
+    d.querySelector('#center-play').click(); await delay();
+    assert.equal(video.paused,true); const banner=d.querySelector('#pause-ad-slot a'); assert.ok(banner);
+    assert.ok(d.querySelector('.player-topbar').contains(banner)); assert.equal(banner.contains(d.querySelector('#center-play')),false);
+    assert.equal(banner.querySelector('button'),null); assert.equal(banner.querySelector('video'),null);
+    banner.querySelector('img').dispatchEvent(new w.Event('load')); await delay();
+    banner.addEventListener('click',e=>e.preventDefault()); banner.click(); await delay();
+    assert.equal(video.paused,true);
+    assert.ok(requests.filter(r=>r.url.includes('/events')).some(r=>JSON.parse(r.options.body).eventType==='click'));
+    await delay(1100); assert.ok(d.querySelector('#pause-ad-slot a'));
+    d.querySelector('#center-play').click(); await delay(); assert.equal(video.paused,false); assert.equal(d.querySelector('#pause-ad-slot a'),null);
+    assert.ok(!requests.some(r=>r.url.includes('pause_overlay')));
+  } finally { dom.window.close(); }
+});
+
+test('before download requests its own video placement followed by the image banner', async () => {
+  const downloadVideo={id:'vid',session:'d',assetType:'video',creativeUrl:'https://media.example/ad.mp4',headline:'ویدیو',tunnelUrl:'/go',skipAfterSeconds:0};
+  const downloadAd={id:'img',session:'b',assetType:'image',creativeUrl:'https://media.example/ad.jpg',headline:'بنر',tunnelUrl:'/go'};
+  const mediaItems=[{id:'m1',audioLabel:'اصلی',resolution:'720p',version:'720p',fileSizeBytes:100}];
+  const {dom,d,requests}=await setup({signedIn:true,downloadVideo,downloadAd,mediaItems});
+  try {
+    d.querySelector('[data-open-download]').click(); await delay(); d.querySelector('[data-download-media="m1"]').click(); await delay();
+    assert.ok(d.querySelector('#preroll-video')); assert.ok(requests.some(r=>r.url==='/api/ads/serve?placement=video_download'));
+    d.querySelector('#skip-ad').click(); await delay(); assert.ok(d.querySelector('#download-banner-slot img'));
+    assert.ok(!requests.some(r=>r.url==='/api/ads/serve?placement=pre_roll'));
   } finally { dom.window.close(); }
 });

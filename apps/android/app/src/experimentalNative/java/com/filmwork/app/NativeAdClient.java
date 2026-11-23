@@ -40,7 +40,7 @@ final class NativeAdClient {
     }
   }
   private static final Set<String> PLACEMENTS = new HashSet<>(Arrays.asList(
-      "pre_roll", "mid_roll", "timed_banner", "pause_overlay", "banner_player", "banner_pause"));
+      "pre_roll", "mid_roll", "timed_banner", "banner_player", "banner_pause"));
   private static final Set<String> EVENTS = new HashSet<>(Arrays.asList("impression", "click", "skip", "complete"));
   private static final String UUID_PATTERN = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
   private final ExecutorService executor = Executors.newSingleThreadExecutor();

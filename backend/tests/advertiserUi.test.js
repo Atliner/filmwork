@@ -43,7 +43,8 @@ test('advertiser chooses text without a creative URL and can delete their campai
   assert.equal(w.document.querySelector('[data-slot-type="video"]').hidden, true);
   assert.equal(w.document.querySelector('[data-creative-field]').hidden, true);
   assert.equal(w.document.querySelector('[name="creativeUrl"]').required, false);
-  assert.equal(w.document.querySelector('[name="bidMultiplier"]').max, '4');
+  const bid=w.document.querySelector('[name="bidMultiplier"]'); assert.equal(bid.type,'range'); assert.equal(bid.min,'1'); assert.equal(bid.max,'4');
+  bid.value='2.5'; bid.dispatchEvent(new w.Event('input',{bubbles:true})); assert.match(w.document.querySelector('[data-bid-value]').textContent,/۲٫۵/);
   type.value = 'link'; type.dispatchEvent(new w.Event('change', {bubbles:true}));
   assert.equal(w.document.querySelector('[data-telegram-mode]').hidden, false);
   assert.equal(w.document.querySelector('[data-bid-field]').hidden, true);
@@ -73,10 +74,10 @@ test('one form submits multiple compatible placements and a single shared budget
   landing.value='intermediate'; landing.dispatchEvent(new w.Event('change',{bubbles:true}));
   assert.equal(form.querySelector('[data-landing-fields]').hidden, false);
   form.querySelector('[name=campaignName]').value='کمپین آزمایش'; form.querySelector('[name=headline]').value='آگهی آزمایش';
-  form.querySelector('[name=budget]').value='100000'; form.querySelector('[name=telegramPostText]').value='صفحهٔ واسط';
+  form.querySelector('[name=bidMultiplier]').value='2.25'; form.querySelector('[name=budget]').value='100000'; form.querySelector('[name=telegramPostText]').value='صفحهٔ واسط';
   form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
   const req = await wait(()=>requests.find(r=>r.url==='/api/advertiser/campaigns' && r.options.method==='POST'));
   const body=JSON.parse(req.options.body); assert.deepEqual(body.placements,['text_home','text_search']);
-  assert.equal(body.budget,'100000'); assert.equal(body.landingMode,'intermediate'); assert.equal(body.telegramPostText,'صفحهٔ واسط');
+  assert.equal(body.budget,'100000'); assert.equal(body.bidMultiplier,'2.25'); assert.equal(body.landingMode,'intermediate'); assert.equal(body.telegramPostText,'صفحهٔ واسط');
   await new Promise(resolve=>setTimeout(resolve,30)); dom.window.close();
 });
