@@ -542,6 +542,7 @@ CREATE TABLE IF NOT EXISTS ad_financial_archive (
   campaign_public_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   advertiser_id BIGINT UNSIGNED NOT NULL, owner_campaign BOOLEAN NOT NULL,
   primary_placement VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  currency CHAR(3) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'IRR',
   budget DECIMAL(20,5) NOT NULL, spent DECIMAL(20,5) NOT NULL,
   status_at_deletion VARCHAR(24) NOT NULL, created_at TIMESTAMP(3) NOT NULL,
   deleted_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),

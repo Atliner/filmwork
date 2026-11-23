@@ -112,8 +112,8 @@ async function deleteCampaignLocked(connection, publicId, advertiserId = null, {
   const ad = rows[0];
   assert(ad && (advertiserId === null || (!Number(ad.owner_campaign || 0) && String(ad.advertiser_id) === String(advertiserId))), 404, 'AD_NOT_FOUND', 'کمپین پیدا نشد.');
   const refund = await refundUnspent(connection, ad, 'campaign_deleted');
-  await connection.execute(`INSERT INTO ad_financial_archive (campaign_public_id,advertiser_id,owner_campaign,primary_placement,budget,spent,status_at_deletion,created_at)
-    SELECT public_id,advertiser_id,owner_campaign,placement,budget,spent,status,created_at FROM ads WHERE id=:id`, { id:ad.id });
+  await connection.execute(`INSERT INTO ad_financial_archive (campaign_public_id,advertiser_id,owner_campaign,primary_placement,currency,budget,spent,status_at_deletion,created_at,deleted_at)
+    SELECT public_id,advertiser_id,owner_campaign,placement,COALESCE((SELECT currency FROM advertiser_wallets WHERE user_id=ads.advertiser_id),(SELECT currency FROM ad_placement_prices WHERE placement=ads.placement),'IRR'),budget,spent,status,created_at,COALESCE(deleted_at,UTC_TIMESTAMP(3)) FROM ads WHERE id=:id`, { id:ad.id });
   await connection.execute(`INSERT INTO ad_financial_placement_rates (campaign_public_id,placement,unit_price,bid_multiplier)
     SELECT :publicId,placement,unit_price,bid_multiplier FROM ad_campaign_placements WHERE ad_id=:id`, { id:ad.id, publicId });
   await connection.execute('UPDATE wallet_transactions SET campaign_public_id=:publicId, ad_id=NULL WHERE ad_id=:id', { id:ad.id, publicId });
