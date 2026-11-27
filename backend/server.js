@@ -853,7 +853,7 @@ app.get('/api/contents/:assetId/player-sources', asyncRoute(async (req, res) => 
     sources.push({ id: item.public_id, season: item.season_number, episode: item.episode_number,
       episodeTitle: item.episode_title, version: item.version_label, resolution: item.resolution,
       quality: item.quality_label, audioLabel: item.audio_type === 'dubbed' ? 'دوبله' : 'زیرنویس',
-      streamUrl: item.stream_url, subtitleUrl: null, audioUrl: null });
+      streamUrl: item.stream_url, subtitleUrl: item.playback_subtitle_url || null, audioUrl: item.playback_audio_url || null });
   }
   res.setHeader('Cache-Control', 'no-store');
   res.json({ sources });

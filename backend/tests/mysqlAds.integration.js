@@ -472,7 +472,7 @@ test('bot media edits update the delivery source, preserve linked/manual rows, d
     'https://t.me/c/456/20',-100456,20,'https://t.me/c/789/30',-100789,30,'https://t.me/c/123/11',11)`, {mediaId,content:content.insertId});
   await query("INSERT INTO media_links (public_id,content_id,version_label,resolution,file_size_bytes,tg_link_primary) VALUES (:id,:content,'second','1080p',100,'https://t.me/c/234/3')", {id:second,content:content.insertId});
   const v = await query("INSERT INTO content_versions (content_id,kind,title,resolution) VALUES (:content,'sub','720p','720p')", {content:content.insertId});
-  await query("INSERT INTO content_version_links (version_id,media_link_id,telegram_url,stream_url,source) VALUES (:v,:m,'https://t.me/c/123/10','https://example.com/old.mp4','telegram_bot')", {v:v.insertId,m:first.insertId});
+  await query("INSERT INTO content_version_links (version_id,media_link_id,telegram_url,stream_url,subtitle_url,dub_url,source) VALUES (:v,:m,'https://t.me/c/123/10','https://example.com/old.mp4','https://example.com/old.vtt','https://example.com/old.mp3','telegram_bot')", {v:v.insertId,m:first.insertId});
   await query("INSERT INTO content_version_links (version_id,stream_url,source) VALUES (:v,'https://example.com/manual.mp4','manual')", {v:v.insertId});
   const csrf='media-edit-csrf', cookie=`filmwork_admin=${signAdminToken('123456789',csrf)}`;
   async function admin(path, method='GET', body, token=csrf) {
@@ -488,7 +488,7 @@ test('bot media edits update the delivery source, preserve linked/manual rows, d
     assert.equal((await admin(url,'PATCH',{revision:firstView.revision,changes:{version_label:'No'}},'wrong')).status,403);
     assert.equal((await request(url,'PATCH',{revision:firstView.revision,changes:{version_label:'No'}},'')).response.status,404);
     const edited=await admin(url,'PATCH',{revision:firstView.revision,changes:{
-      version_label:'Edited',episode_number:7,stream_url:'https://example.com/new.mp4',
+      version_label:'Edited',episode_number:7,stream_url:'https://example.com/new.mp4',playback_subtitle_url:'https://example.com/play.vtt',playback_audio_url:'https://example.com/play.mp3',
       tg_link_primary:'https://t.me/c/999/50',subtitle_link_primary:'https://t.me/c/999/51',
       tg_link_fallback_1:'https://t.me/c/456/22',
     }});
@@ -504,7 +504,8 @@ test('bot media edits update the delivery source, preserve linked/manual rows, d
     const publicMedia=await request(`/api/contents/${id}/media-options`,'GET',undefined,'');
     assert.ok(publicMedia.data.items.some(m=>m.id===mediaId && m.version==='Edited' && m.episode===7));
     const publicSources=await request(`/api/contents/${id}/player-sources`,'GET',undefined,'');
-    assert.ok(publicSources.data.sources.some(s=>s.id===mediaId && s.streamUrl==='https://example.com/new.mp4'));
+    assert.ok(publicSources.data.sources.some(s=>s.id===mediaId && s.streamUrl==='https://example.com/new.mp4' && s.subtitleUrl==='https://example.com/play.vtt' && s.audioUrl==='https://example.com/play.mp3'));
+    assert.equal(projection.subtitle_url,'https://example.com/old.vtt'); assert.equal(projection.dub_url,'https://example.com/old.mp3');
     assert.ok(!JSON.stringify(publicSources.data).includes('t.me/c/'));
     detail=(await admin(`/api/admin/contents/${id}`)).data;
     const saved=await admin(`/api/admin/contents/${id}`,'PATCH',{titleFa:'media editor',versions:detail.versions,manualRevision:detail.manualRevision});

@@ -9,7 +9,7 @@ const { downloadBotService } = require('../bots/downloadBot');
 const FIELDS = [
   'public_id', 'season_number', 'episode_number', 'episode_title', 'version_label',
   'audio_type', 'subtitle_type', 'resolution', 'quality_label', 'encoder',
-  'file_size_bytes', 'mime_type', 'stream_url', 'is_active',
+  'file_size_bytes', 'mime_type', 'stream_url', 'playback_subtitle_url', 'playback_audio_url', 'is_active',
   'tg_link_primary', 'tg_link_fallback_1', 'tg_link_fallback_2', 'tg_link_fallback_3',
   'primary_chat_id', 'primary_message_id', 'fallback_1_chat_id', 'fallback_1_message_id',
   'fallback_2_chat_id', 'fallback_2_message_id', 'fallback_3_chat_id', 'fallback_3_message_id', 'subtitle_link_primary',
@@ -24,7 +24,7 @@ const REPLICAS = [
 ];
 const TEXT = { version_label: [120, true], resolution: [24, true], episode_title: [255, false], quality_label: [80, false], encoder: [100, false], mime_type: [120, false] };
 const INTS = { season_number: [1, 65535], episode_number: [1, 65535], file_size_bytes: [1, Number.MAX_SAFE_INTEGER], subtitle_file_size_bytes: [1, Number.MAX_SAFE_INTEGER] };
-const EDITABLE = new Set([...Object.keys(TEXT), ...Object.keys(INTS), 'stream_url', 'audio_type', 'subtitle_type', 'is_active', ...REPLICAS.flatMap(r => [r.link, r.sub])]);
+const EDITABLE = new Set([...Object.keys(TEXT), ...Object.keys(INTS), 'stream_url', 'playback_subtitle_url', 'playback_audio_url', 'audio_type', 'subtitle_type', 'is_active', ...REPLICAS.flatMap(r => [r.link, r.sub])]);
 function revision(row) {
   return crypto.createHash('sha256').update(JSON.stringify(FIELDS.map(key => row[key] == null ? null : String(row[key])))).digest('hex');
 }
@@ -81,7 +81,7 @@ function cleanPatch(raw) {
       const options = key === 'audio_type' ? ['dubbed', 'hard_sub', 'soft_sub', 'original'] : ['embedded', 'separate', 'none'];
       assert(options.includes(value), 422, 'VALIDATION_ERROR', 'نوع صدا یا زیرنویس معتبر نیست.'); patch[key] = value;
     } else if (key === 'is_active') { assert(typeof value === 'boolean', 422, 'VALIDATION_ERROR', 'وضعیت فایل نامعتبر است.'); patch[key] = value ? 1 : 0; }
-    else if (key === 'stream_url') patch[key] = value ? asHttpUrl(value, 'لینک پخش') : null;
+    else if (['stream_url', 'playback_subtitle_url', 'playback_audio_url'].includes(key)) patch[key] = value ? asHttpUrl(value, 'لینک پخش') : null;
     else { assert(value == null || typeof value === 'string', 422, 'VALIDATION_ERROR', 'لینک نامعتبر است.'); patch[key] = String(value || '').trim() || null; }
   }
   return patch;
@@ -137,11 +137,10 @@ async function update(assetId, mediaId, expected, rawPatch, deps = {}) {
       // Keep old linked projections coherent without touching unrelated manual rows.
       const updated = { ...row, ...changed };
       await connection.execute(`UPDATE content_version_links SET season_number=:season, episode_number=:episode, episode_title=:title,
-        stream_url=:streamUrl, subtitle_url=:subtitleUrl, telegram_url=:telegramUrl,
-        dub_url=IF(:audioType = 'dubbed', :telegramUrl, NULL)
+        stream_url=IF(:streamChanged, :streamUrl, stream_url), telegram_url=IF(:telegramChanged, :telegramUrl, telegram_url)
         WHERE media_link_id=:id`, { id: row.id, season: updated.season_number, episode: updated.episode_number,
-        title: updated.episode_title, streamUrl: updated.stream_url, subtitleUrl: updated.subtitle_link_primary,
-        telegramUrl: updated.tg_link_primary, audioType: updated.audio_type });
+        title: updated.episode_title, streamChanged: Object.hasOwn(changed, 'stream_url') ? 1 : 0, streamUrl: updated.stream_url,
+        telegramChanged: Object.hasOwn(changed, 'tg_link_primary') ? 1 : 0, telegramUrl: updated.tg_link_primary });
     }
     return dto(await find(assetId, mediaId, connection));
   });

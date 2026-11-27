@@ -50,3 +50,11 @@ test('fourth replica can be edited together with its subtitle', async () => {
   assert.equal(changed.changed.subtitle_fallback_3_message_id,51);
   await assert.rejects(prepareChanges(row,{tg_link_fallback_2:''}),{code:'INVALID_REPLICAS'});
 });
+test('online playback tracks are independent from Telegram subtitles and validated', async () => {
+  const row = sample();
+  const changed = await prepareChanges(row, {playback_subtitle_url:'https://cdn.example/sub.vtt', playback_audio_url:'https://cdn.example/audio.mp3'});
+  assert.deepEqual(changed.changed, {playback_subtitle_url:'https://cdn.example/sub.vtt',playback_audio_url:'https://cdn.example/audio.mp3'});
+  assert.equal(changed.replicaChanged,false);
+  assert.notEqual(revision(row),revision({...row,playback_audio_url:'https://cdn.example/audio.mp3'}));
+  await assert.rejects(prepareChanges(row, {playback_subtitle_url:'javascript:alert(1)'}));
+});

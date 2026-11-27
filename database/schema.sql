@@ -105,6 +105,8 @@ CREATE TABLE IF NOT EXISTS media_links (
   file_size_bytes BIGINT UNSIGNED NOT NULL,
   mime_type VARCHAR(120) NULL,
   stream_url VARCHAR(2048) NULL,
+  playback_subtitle_url TEXT NULL,
+  playback_audio_url TEXT NULL,
 
   tg_link_primary TEXT NULL,
   tg_link_fallback_1 TEXT NULL,

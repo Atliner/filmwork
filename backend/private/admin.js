@@ -1056,6 +1056,8 @@
             ${input(index, item, 'subtitle_file_size_bytes', 'حجم زیرنویس (بایت)', 'type="number" min="1" dir="ltr"')}
             ${input(index, item, 'mime_type', 'نوع فایل (MIME)', 'maxlength="120" dir="ltr"')}
             ${input(index, item, 'stream_url', 'لینک پخش آنلاین', 'type="url" dir="ltr"')}
+            ${input(index, item, 'playback_subtitle_url', 'لینک زیرنویس پخش آنلاین', 'type="url" dir="ltr"')}
+            ${input(index, item, 'playback_audio_url', 'لینک صوت دوبله پخش آنلاین', 'type="url" dir="ltr"')}
             <label class="setting-check"><input type="checkbox" data-bot-index="${index}" data-bot-field="is_active" ${item.is_active ? 'checked' : ''}><span>فایل فعال برای دانلود</span></label>
           </div>
           ${replicas.map(([label, link, chat, message, sub, subMessage]) => `<h4>${esc(label)}</h4><div class="field-grid">
@@ -1069,7 +1071,7 @@
   }
 
   function botMediaChanges(item) {
-    const keys = ['version_label','resolution','audio_type','subtitle_type','season_number','episode_number','episode_title','quality_label','encoder','file_size_bytes','subtitle_file_size_bytes','mime_type','stream_url','is_active','tg_link_primary','tg_link_fallback_1','tg_link_fallback_2','tg_link_fallback_3','subtitle_link_primary','subtitle_link_fallback_1','subtitle_link_fallback_2','subtitle_link_fallback_3'];
+    const keys = ['version_label','resolution','audio_type','subtitle_type','season_number','episode_number','episode_title','quality_label','encoder','file_size_bytes','subtitle_file_size_bytes','mime_type','stream_url','playback_subtitle_url','playback_audio_url','is_active','tg_link_primary','tg_link_fallback_1','tg_link_fallback_2','tg_link_fallback_3','subtitle_link_primary','subtitle_link_fallback_1','subtitle_link_fallback_2','subtitle_link_fallback_3'];
     const normalize = (value) => value == null ? '' : String(value);
     return Object.fromEntries(keys.filter((key) => key === 'is_active' ? Boolean(item[key]) !== Boolean(item._saved[key]) : normalize(item[key]) !== normalize(item._saved[key])).map((key) => [key, key === 'is_active' ? Boolean(item[key]) : item[key]]));
   }

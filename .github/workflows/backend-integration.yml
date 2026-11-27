@@ -85,6 +85,7 @@ jobs:
       - name: Simulate legacy media schema and retain existing data
         run: |
           mysql -h 127.0.0.1 -u root filmwork_test <<'SQL'
+          ALTER TABLE media_links DROP COLUMN playback_subtitle_url, DROP COLUMN playback_audio_url;
           ALTER TABLE media_links DROP COLUMN tg_link_fallback_3, DROP COLUMN fallback_3_chat_id, DROP COLUMN fallback_3_message_id, DROP COLUMN subtitle_link_fallback_3, DROP COLUMN subtitle_fallback_3_message_id;
           ALTER TABLE media_links MODIFY COLUMN tg_link_primary VARCHAR(2048) NULL, MODIFY COLUMN tg_link_fallback_1 VARCHAR(2048) NULL, MODIFY COLUMN tg_link_fallback_2 VARCHAR(2048) NULL, MODIFY COLUMN subtitle_link_primary VARCHAR(2048) NULL, MODIFY COLUMN subtitle_link_fallback_1 VARCHAR(2048) NULL, MODIFY COLUMN subtitle_link_fallback_2 VARCHAR(2048) NULL;
           ALTER TABLE download_history DROP FOREIGN KEY fk_download_history_manual, DROP KEY idx_download_history_manual, DROP COLUMN manual_version_link_id, MODIFY COLUMN media_link_id BIGINT UNSIGNED NOT NULL;
@@ -101,6 +102,7 @@ jobs:
           for i in 1 2; do
             mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-fourth-telegram-replica.sql
             mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-manual-telegram-downloads.sql
+            mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-media-playback-tracks.sql
           done
           mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-fourth-telegram-procedure-optional.sql
           test "$(mysql -N -B -h 127.0.0.1 -u root filmwork_test -e "SELECT COUNT(*) FROM media_links WHERE public_id='00000000-0000-4000-8000-000000000011' AND tg_link_primary='https://t.me/c/123/5' AND tg_link_fallback_2='https://t.me/c/456/6' AND tg_link_fallback_3 IS NULL")" = 1
