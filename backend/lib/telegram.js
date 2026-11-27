@@ -1,5 +1,10 @@
 'use strict';
 
+function telegramBotUrl(username) {
+  const name = String(username || '').trim().replace(/^@/, '');
+  return /^[A-Za-z0-9_]{5,32}$/.test(name) ? `https://t.me/${name}` : null;
+}
+
 function normalizedChatId(chatId) {
   const value = String(chatId || '').trim();
   if (!/^-?\d+$/.test(value)) throw new Error(`Invalid Telegram chat id: ${value}`);
@@ -42,6 +47,12 @@ function isSubtitleMessage(message) {
   const name = String(document.file_name || '').toLowerCase();
   const mime = String(document.mime_type || '').toLowerCase();
   return name.endsWith('.srt') || name.endsWith('.vtt') || mime.includes('subrip') || mime === 'text/vtt';
+}
+
+function isAudioMessage(message) {
+  if (message?.audio) return true;
+  const doc = message?.document;
+  return Boolean(doc && (/^audio\//i.test(String(doc.mime_type || '')) || /\.(?:mp3|m4a|aac|ac3|eac3|dts|flac|ogg|opus|wav)$/i.test(String(doc.file_name || ''))));
 }
 
 function telegramErrorDescription(error) {
@@ -119,11 +130,13 @@ async function probeTelegramLink(url, timeoutMs = 5000) {
 }
 
 module.exports = {
+  telegramBotUrl,
   normalizedChatId,
   privateChannelPath,
   buildTelegramMessageLink,
   mediaFromMessage,
   isSubtitleMessage,
+  isAudioMessage,
   telegramErrorDescription,
   isTelegramDeletionError,
   probeTelegramLink,

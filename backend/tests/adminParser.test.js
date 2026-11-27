@@ -50,6 +50,7 @@ test('parses all hashtag directives including a separate subtitle bundle', () =>
     sourceType: 'سافتساب',
     audioType: 'soft_sub',
     subtitleType: 'separate',
+    separateAudio: false,
     resolution: '1080p',
     quality: 'WEB-DL',
     encoder: 'x265',

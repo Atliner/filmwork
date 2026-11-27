@@ -142,6 +142,14 @@ function normalizeContentPayload(body = {}, options = {}) {
   };
 }
 
+function databaseId(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const id = String(value);
+  if (process.env.DEMO_DATA === '1' && /^(?:v|l)-[0-9-]+$/.test(id)) return id;
+  if (!/^[1-9]\d{0,14}$/.test(id) || !Number.isSafeInteger(Number(id))) fail('شناسه نسخه');
+  return id;
+}
+
 function normalizeVersions(raw, contentType) {
   if (!Array.isArray(raw)) return [];
   return raw.slice(0, 40).map((version, index) => {
@@ -149,6 +157,7 @@ function normalizeVersions(raw, contentType) {
     const title = optionalText(version?.title, 120, 'عنوان نسخه') || 'نسخه';
     const resolution = optionalText(version?.resolution, 24, 'کیفیت');
     const links = (Array.isArray(version?.links) ? version.links : []).slice(0, 600).map((link) => ({
+      id: databaseId(link?.id),
       season: optionalInt(link?.season, 'فصل', 1, 100),
       episode: optionalInt(link?.episode, 'قسمت', 1, 5000),
       title: optionalText(link?.title, 255, 'عنوان قسمت'),
@@ -163,7 +172,7 @@ function normalizeVersions(raw, contentType) {
     if (contentType === 'movie' && links.length > 8) {
       throw new AppError(422, 'VALIDATION_ERROR', 'برای فیلم حداکثر ۸ لینک در هر نسخه مجاز است.');
     }
-    return { kind, title, resolution, sortOrder: index, links };
+    return { id: databaseId(version?.id), kind, title, resolution, sortOrder: index, links };
   });
 }
 

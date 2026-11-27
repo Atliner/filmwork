@@ -1,4 +1,5 @@
 'use strict';
+const { countInventory } = require('../lib/mediaCounts');
 
 /**
  * In-memory content store used **only** when `DEMO_DATA=1`.
@@ -268,7 +269,7 @@ function summary(item) {
     genres: item.genres, countries: item.countries, network: item.network, ageRating: item.ageRating,
     hasDub: item.hasDub,
     hasSub: item.hasSub,
-    mediaCount: item.mediaCount,
+    mediaCount: countInventory([], item.versions).links,
   };
 }
 
@@ -418,7 +419,7 @@ const store = {
   async getContent(assetId) {
     const item = findContent(assetId);
     return { counts: { seasons: item.seasonCount, episodes: item.episodeCount,
-      mediaLinks: item.versions.reduce((sum, version) => sum + version.links.length, 0) },
+      mediaLinks: countInventory([], item.versions).versions, ...countInventory([], item.versions) },
       content: { ...summary(item), description: item.description, genres: item.genres,
       directors: item.directors, cast: item.cast, countries: item.countries, network: item.network,
       ageRating: item.ageRating, runtimeMinutes: item.runtimeMinutes, broadcastNote: item.broadcastNote,
@@ -526,7 +527,7 @@ const store = {
     } else {
       item.featuredHero = payload.featuredHero;
     }
-    if (payload.versions.length) {
+    if (Array.isArray(payload.versions)) {
       item.versions = payload.versions.map((version, index) => ({
         id: `v-${index}`,
         kind: version.kind,

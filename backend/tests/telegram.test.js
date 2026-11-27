@@ -34,3 +34,9 @@ test('distinguishes deleted messages from channel permission failures', () => {
   assert.equal(isTelegramDeletionError({ response: { description: 'Bad Request: message to copy not found' } }), true);
   assert.equal(isTelegramDeletionError({ response: { description: 'Forbidden: bot is not a member of the channel chat' } }), false);
 });
+
+test('download bot links accept usernames only, never channel paths or unsafe URLs', () => {
+  const { telegramBotUrl } = require('../lib/telegram');
+  assert.equal(telegramBotUrl(' @filmwork_files_bot '), 'https://t.me/filmwork_files_bot');
+  for (const value of ['', 'https://t.me/c/123/456', 'c/123/456', 'evil.example', 'foo?x=1', 'a']) assert.equal(telegramBotUrl(value), null);
+});

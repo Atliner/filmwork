@@ -75,3 +75,32 @@ test('caption directives process the attached video only after successful sessio
   await service.updateQueues.get('12345');
   assert.deepEqual(seen, ['directives']);
 });
+
+test('optional fourth configured channel receives a copy and link', async () => {
+  const names = ['TELEGRAM_PRIMARY_CHAT_ID','TELEGRAM_FALLBACK_1_CHAT_ID','TELEGRAM_FALLBACK_2_CHAT_ID','TELEGRAM_FALLBACK_3_CHAT_ID'];
+  const old = names.map(name => process.env[name]);
+  names.forEach((name, index) => { process.env[name] = `-100${100+index}`; });
+  try {
+    const targets=[];
+    const result=await new AdminBotService().replicateMessage({chat:{id:-100999},telegram:{copyMessage:async chatId=>{targets.push(chatId);return {message_id:55};}}},{message_id:7});
+    assert.equal(targets.length,4);
+    assert.equal(result.fallback3.chatId,'-100103');
+    assert.equal(result.fallback3.link,'https://t.me/c/103/55');
+  } finally { names.forEach((name,index) => old[index] === undefined ? delete process.env[name] : process.env[name]=old[index]); }
+});
+
+test('separate audio directive and audio attachment are distinct from video and subtitle', async () => {
+  const d = parseDirectives(`#اثر ${uuid} #نسخه A #نوع دوبله #صوت مجزا #زیرنویس مجزا`);
+  assert.equal(d.separateAudio, true); assert.equal(d.subtitleType, 'separate'); assert.equal(d.sourceType, 'دوبله');
+  const { isAudioMessage, isSubtitleMessage } = require('../lib/telegram');
+  assert.equal(isAudioMessage({audio:{file_name:'x.mp3'}}),true);
+  assert.equal(isAudioMessage({document:{file_name:'x.ac3'}}),true);
+  assert.equal(isAudioMessage({document:{file_name:'x.mkv'}}),false);
+  assert.equal(isSubtitleMessage({document:{file_name:'x.srt'}}),true);
+  calls.length = 0;
+  const copy = { chatId:'-100123', messageId: 77, link:'https://t.me/c/123/77' };
+  const service = setupService();
+  await service.insertMediaLink({content_id:12,directives:d},{metadata:{fileName,fileSize:100},copies:{primary:copy,fallback1:copy,fallback2:copy}},null,'bundle:audio',{metadata:{fileSize:12},copies:{primary:copy,fallback1:copy,fallback2:copy}});
+  const params=calls.find(c=>c.sql.includes('INSERT INTO media_links')).params;
+  assert.equal(params.audioPrimaryMessageId,77); assert.equal(params.audioPrimaryLink,'https://t.me/c/123/77'); assert.equal(params.audioFileSize,12);
+});

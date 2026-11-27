@@ -2,16 +2,19 @@
 
 const crypto = require('crypto');
 const { Telegraf } = require('telegraf');
+const { startPolling, stopPolling } = require('../lib/botPolling');
 const { query, withTransaction } = require('../config/db');
 const { hmacHex, generateOpaqueToken } = require('../lib/security');
 const {
   buildTelegramMessageLink,
   mediaFromMessage,
   isSubtitleMessage,
+  isAudioMessage,
   telegramErrorDescription,
 } = require('../lib/telegram');
 const { ownerIds } = require('../middleware/auth');
 const { AppError } = require('../lib/errors');
+const siteSettings = require('../services/siteSettings');
 
 const {
   normalizeDigits,
@@ -49,7 +52,7 @@ function cleanLabelValue(value) {
 }
 
 function directiveValue(text, name) {
-  const expression = new RegExp(`#${name}(?=\\s|$)([\\s\\S]*?)(?=#(?:اثر|نسخه|نوع|زیرنویس|رزولوشن|سریال|کیفیت|انکودر)(?=\\s|$)|$)`, 'iu');
+  const expression = new RegExp(`#${name}(?=\\s|$)([\\s\\S]*?)(?=#(?:اثر|نسخه|نوع|زیرنویس|صوت|رزولوشن|سریال|کیفیت|انکودر)(?=\\s|$)|$)`, 'iu');
   return cleanLabelValue(text.match(expression)?.[1] || '');
 }
 
@@ -60,6 +63,7 @@ function parseDirectives(rawText) {
   const version = directiveValue(text, 'نسخه');
   const typeRaw = directiveValue(text, 'نوع');
   const subtitleRaw = directiveValue(text, 'زیرنویس');
+  const audioRaw = directiveValue(text, 'صوت');
   const resolution = directiveValue(text, 'رزولوشن');
   const seriesRaw = directiveValue(text, 'سریال');
   const quality = directiveValue(text, 'کیفیت');
@@ -96,6 +100,7 @@ function parseDirectives(rawText) {
     sourceType: typeRaw.slice(0, 80),
     audioType,
     subtitleType,
+    separateAudio: /مجزا|جدا/u.test(audioRaw),
     resolution: resolution ? resolution.slice(0, 24) : null,
     quality: quality ? quality.slice(0, 80) : null,
     encoder: encoder ? encoder.slice(0, 100) : null,
@@ -190,6 +195,7 @@ function storageTargets() {
     ['fallback1', process.env.TELEGRAM_FALLBACK_1_CHAT_ID, process.env.TELEGRAM_FALLBACK_1_USERNAME],
     ['fallback2', process.env.TELEGRAM_FALLBACK_2_CHAT_ID, process.env.TELEGRAM_FALLBACK_2_USERNAME],
   ];
+  if (process.env.TELEGRAM_FALLBACK_3_CHAT_ID) values.push(['fallback3', process.env.TELEGRAM_FALLBACK_3_CHAT_ID, process.env.TELEGRAM_FALLBACK_3_USERNAME]);
   for (const [name, chatId] of values) {
     if (!chatId || !/^-?\d+$/.test(String(chatId))) {
       throw new Error(`Telegram storage target ${name} is not configured with a numeric chat id`);
@@ -252,10 +258,7 @@ class AdminBotService {
     this.bot = new Telegraf(token);
     this.registerHandlers();
     try {
-      await this.bot.launch({
-        dropPendingUpdates: false,
-        allowedUpdates: ['message', 'channel_post'],
-      });
+      if (!await startPolling(this, this.bot, ['message', 'channel_post'])) return false;
     } catch (error) {
       // A second polling instance yields "409 Conflict"; a revoked token yields 401.
       safeStop(this.bot, 'startup-failure');
@@ -266,7 +269,7 @@ class AdminBotService {
         ? 'Private admin bot cannot poll: another process is already polling ADMIN_BOT_TOKEN (Telegram 409). Run a single instance or use a webhook.'
         : `Private admin bot could not start: ${telegramErrorDescription(error)}`);
     }
-    this.started = true;
+    if (!this.started) return false;
     this.sweeper = setInterval(() => this.finalizeDueBundles().catch((error) => {
       console.error('Bundle sweeper failed', error);
     }), 5000);
@@ -287,7 +290,8 @@ class AdminBotService {
     });
     this.bot.command('start', detach(async (ctx) => {
       if (!authorized(ctx) || !ctx.from || !ownerIds().has(String(ctx.from.id))) return;
-      await safeReply(ctx, 'ربات خصوصی مدیریت Filmwork فعال است. برای ورود امن /panel را ارسال کنید.');
+      const siteName = await siteSettings.getSiteName();
+      await safeReply(ctx, `ربات خصوصی مدیریت ${siteName} فعال است. برای ورود امن /panel را ارسال کنید.`);
     }, 'start'));
 
     this.bot.command('panel', detach(async (ctx) => {
@@ -424,24 +428,28 @@ class AdminBotService {
           ownerId,
           sourceChatId,
           contentId: contentRows[0].id,
-          directives: JSON.stringify(directives),
+          // Persistent sessions are opt-in, so expired sessions from older releases
+          // are not accidentally revived. The legacy expiry column remains populated.
+          directives: JSON.stringify({ ...directives, persistent: true }),
         },
       );
     });
-    await safeReply(ctx, `دستور ${contentRows[0].title} ثبت شد؛ فایل رسانه را تا ۳۰ دقیقه آینده ارسال کنید.`);
+    await safeReply(ctx, `دستور ${contentRows[0].title} ثبت شد؛ فایل‌ها را ارسال کنید. این دستور تا ثبت دستور جدید فعال می‌ماند.`);
     return true;
   }
 
   async activeSession(chatId) {
     const rows = await query(
-      `SELECT id, content_id, directives
+      `SELECT id, content_id, directives, expires_at > UTC_TIMESTAMP(3) AS unexpired
        FROM bot_ingest_sessions
-       WHERE source_chat_id = :chatId AND status = 'waiting_media' AND expires_at > UTC_TIMESTAMP(3)
+       WHERE source_chat_id = :chatId AND status = 'waiting_media'
        ORDER BY id DESC LIMIT 1`,
       { chatId: String(chatId) },
     );
     if (!rows[0]) return null;
-    return { ...rows[0], directives: jsonValue(rows[0].directives) };
+    const directives = jsonValue(rows[0].directives);
+    if (directives?.persistent !== true && !Number(rows[0].unexpired)) return null;
+    return { ...rows[0], directives };
   }
 
   async replicateMessage(ctx, message) {
@@ -460,7 +468,7 @@ class AdminBotService {
         link: buildTelegramMessageLink(target.chatId, messageId, target.username),
       };
     }));
-    return { primary: copies[0], fallback1: copies[1], fallback2: copies[2] };
+    return { primary: copies[0], fallback1: copies[1], fallback2: copies[2], ...(copies[3] ? { fallback3: copies[3] } : {}) };
   }
 
   async handleMedia(ctx, message) {
@@ -476,35 +484,41 @@ class AdminBotService {
       return;
     }
 
-    if (isSubtitleMessage(message)) {
-      if (session.directives.subtitleType !== 'separate') {
-        await safeReply(ctx, 'این دستور برای زیرنویس مجزا تنظیم نشده است.');
+    const subtitle = isSubtitleMessage(message);
+    const audio = isAudioMessage(message);
+    if (subtitle || audio) {
+      const kind = subtitle ? 'subtitle' : 'audio';
+      if (subtitle ? session.directives.subtitleType !== 'separate' : !session.directives.separateAudio) {
+        await safeReply(ctx, `این دستور برای ${subtitle ? 'زیرنویس' : 'صوت'} مجزا تنظیم نشده است.`);
         return;
       }
-      const pending = await query(
-        `SELECT id FROM bot_media_bundles
-         WHERE session_id = :sessionId AND status = 'waiting_subtitle'
-         ORDER BY id DESC LIMIT 1`,
-        { sessionId: session.id },
-      );
+      // Strict FIFO per session and track type; never attach a track to a later
+      // unrelated session or an already finalized video.
+      const column = kind === 'subtitle' ? 'subtitle_payload' : 'audio_payload';
+      const pending = await query(`SELECT id FROM bot_media_bundles
+        WHERE session_id = :sessionId AND status = 'waiting_subtitle'
+          AND ${column} IS NULL AND finalize_after > UTC_TIMESTAMP(3)
+        ORDER BY id ASC LIMIT 1`, { sessionId: session.id });
       if (!pending[0]) {
-        await safeReply(ctx, 'ابتدا فایل ویدیو را بفرستید؛ مهلت اتصال زیرنویس ده ثانیه است.');
+        await safeReply(ctx, 'ابتدا فایل ویدیو را بفرستید؛ مهلت اتصال فایل مجزا ده ثانیه است.');
         return;
       }
       const copies = await this.replicateMessage(ctx, message);
-      const subtitlePayload = { metadata, copies };
-      await query(
-        'UPDATE bot_media_bundles SET subtitle_payload = :payload WHERE id = :id AND status = \'waiting_subtitle\'',
-        { payload: JSON.stringify(subtitlePayload), id: pending[0].id },
-      );
-      await safeReply(ctx, 'زیرنویس دریافت شد و در همان کارت دانلود قرار می‌گیرد.');
+      const attached = await query(`UPDATE bot_media_bundles SET ${column} = :payload
+        WHERE id = :id AND status = 'waiting_subtitle' AND ${column} IS NULL AND finalize_after > UTC_TIMESTAMP(3)`,
+      { payload: JSON.stringify({ metadata, copies }), id: pending[0].id });
+      if (!attached.affectedRows) {
+        await safeReply(ctx, 'مهلت اتصال فایل هنگام ذخیره پایان یافت؛ اتصال آن را در پنل بررسی کنید.');
+        return;
+      }
+      await safeReply(ctx, `${subtitle ? 'زیرنویس' : 'صوت'} دریافت شد و در همان کارت دانلود قرار می‌گیرد.`);
       return;
     }
 
     session.directives = resolveMediaDirectives(session.directives, metadata.fileName);
     const copies = await this.replicateMessage(ctx, message);
     const videoPayload = { metadata, copies };
-    if (session.directives.subtitleType === 'separate') {
+    if (session.directives.subtitleType === 'separate' || session.directives.separateAudio) {
       const bundleKey = crypto.randomUUID();
       const result = await query(
         `INSERT INTO bot_media_bundles
@@ -514,7 +528,7 @@ class AdminBotService {
         { sessionId: session.id, bundleKey, videoPayload: JSON.stringify(videoPayload) },
       );
       this.scheduleFinalize(result.insertId, 10_100);
-      await safeReply(ctx, 'ویدیو ذخیره شد؛ ۱۰ ثانیه برای ارسال فایل SRT/VTT فرصت دارید.');
+      await safeReply(ctx, 'ویدیو ذخیره شد؛ ۱۰ ثانیه برای ارسال زیرنویس یا صوت مجزای مشخص‌شده فرصت دارید.');
       return;
     }
 
@@ -525,8 +539,7 @@ class AdminBotService {
       null,
       `tg:${session.content_id}:${session.directives.seasonNumber || 0}:${session.directives.episodeNumber || 0}:${ingestIdentity}`.slice(0, 190),
     );
-    await query('UPDATE bot_ingest_sessions SET status = \'complete\' WHERE id = :id', { id: session.id });
-    await safeReply(ctx, 'فایل در هر سه کانال ذخیره و کارت دانلود ایجاد شد ✅');
+    await safeReply(ctx, `فایل در ${copies.fallback3 ? 'چهار' : 'سه'} کانال ذخیره و کارت دانلود ایجاد شد ✅`);
   }
 
   scheduleFinalize(bundleId, delayMs) {
@@ -577,15 +590,12 @@ class AdminBotService {
     try {
       const videoPayload = jsonValue(work.bundle.video_payload);
       const subtitlePayload = jsonValue(work.bundle.subtitle_payload);
-      await this.insertMediaLink(work.session, videoPayload, subtitlePayload, `bundle:${work.bundle.bundle_key}`);
+      const audioPayload = jsonValue(work.bundle.audio_payload);
+      await this.insertMediaLink(work.session, videoPayload, subtitlePayload, `bundle:${work.bundle.bundle_key}`, audioPayload);
       await withTransaction(async (connection) => {
         await connection.execute(
           'UPDATE bot_media_bundles SET status = \'complete\', last_error = NULL WHERE id = :id',
           { id: bundleId },
-        );
-        await connection.execute(
-          'UPDATE bot_ingest_sessions SET status = \'complete\' WHERE id = :id',
-          { id: work.session.id },
         );
       });
     } catch (error) {
@@ -597,31 +607,34 @@ class AdminBotService {
     }
   }
 
-  async insertMediaLink(session, videoPayload, subtitlePayload, ingestKey) {
+  async insertMediaLink(session, videoPayload, subtitlePayload, ingestKey, audioPayload = null) {
     const d = resolveMediaDirectives(session.directives, videoPayload.metadata.fileName);
     const v = videoPayload;
     const s = subtitlePayload;
+    const a = audioPayload;
     await query(
       `INSERT INTO media_links (
          public_id, content_id, season_number, episode_number, version_label,
          audio_type, subtitle_type, resolution, quality_label, encoder,
          file_size_bytes, mime_type,
-         tg_link_primary, tg_link_fallback_1, tg_link_fallback_2,
+         tg_link_primary, tg_link_fallback_1, tg_link_fallback_2, tg_link_fallback_3,
          primary_chat_id, primary_message_id, fallback_1_chat_id, fallback_1_message_id,
-         fallback_2_chat_id, fallback_2_message_id,
-         subtitle_link_primary, subtitle_link_fallback_1, subtitle_link_fallback_2,
-         subtitle_primary_message_id, subtitle_fallback_1_message_id, subtitle_fallback_2_message_id,
-         subtitle_file_size_bytes, ingest_key
+         fallback_2_chat_id, fallback_2_message_id, fallback_3_chat_id, fallback_3_message_id,
+         subtitle_link_primary, subtitle_link_fallback_1, subtitle_link_fallback_2, subtitle_link_fallback_3,
+         subtitle_primary_message_id, subtitle_fallback_1_message_id, subtitle_fallback_2_message_id, subtitle_fallback_3_message_id,
+         subtitle_file_size_bytes, audio_link_primary, audio_link_fallback_1, audio_link_fallback_2, audio_link_fallback_3,
+         audio_primary_message_id, audio_fallback_1_message_id, audio_fallback_2_message_id, audio_fallback_3_message_id, audio_file_size_bytes, ingest_key
        ) VALUES (
          :publicId, :contentId, :season, :episode, :version,
          :audioType, :subtitleType, :resolution, :quality, :encoder,
          :fileSize, :mimeType,
-         :primaryLink, :fallback1Link, :fallback2Link,
+         :primaryLink, :fallback1Link, :fallback2Link, :fallback3Link,
          :primaryChatId, :primaryMessageId, :fallback1ChatId, :fallback1MessageId,
-         :fallback2ChatId, :fallback2MessageId,
-         :subtitlePrimaryLink, :subtitleFallback1Link, :subtitleFallback2Link,
-         :subtitlePrimaryMessageId, :subtitleFallback1MessageId, :subtitleFallback2MessageId,
-         :subtitleFileSize, :ingestKey
+         :fallback2ChatId, :fallback2MessageId, :fallback3ChatId, :fallback3MessageId,
+         :subtitlePrimaryLink, :subtitleFallback1Link, :subtitleFallback2Link, :subtitleFallback3Link,
+         :subtitlePrimaryMessageId, :subtitleFallback1MessageId, :subtitleFallback2MessageId, :subtitleFallback3MessageId,
+         :subtitleFileSize, :audioPrimaryLink, :audioFallback1Link, :audioFallback2Link, :audioFallback3Link,
+         :audioPrimaryMessageId, :audioFallback1MessageId, :audioFallback2MessageId, :audioFallback3MessageId, :audioFileSize, :ingestKey
        )`,
       {
         publicId: crypto.randomUUID(),
@@ -639,19 +652,33 @@ class AdminBotService {
         primaryLink: v.copies.primary.link,
         fallback1Link: v.copies.fallback1.link,
         fallback2Link: v.copies.fallback2.link,
+        fallback3Link: v.copies.fallback3?.link || null,
         primaryChatId: v.copies.primary.chatId,
         primaryMessageId: v.copies.primary.messageId,
         fallback1ChatId: v.copies.fallback1.chatId,
         fallback1MessageId: v.copies.fallback1.messageId,
         fallback2ChatId: v.copies.fallback2.chatId,
         fallback2MessageId: v.copies.fallback2.messageId,
+        fallback3ChatId: v.copies.fallback3?.chatId || null,
+        fallback3MessageId: v.copies.fallback3?.messageId || null,
         subtitlePrimaryLink: s?.copies?.primary?.link || null,
         subtitleFallback1Link: s?.copies?.fallback1?.link || null,
         subtitleFallback2Link: s?.copies?.fallback2?.link || null,
+        subtitleFallback3Link: s?.copies?.fallback3?.link || null,
         subtitlePrimaryMessageId: s?.copies?.primary?.messageId || null,
         subtitleFallback1MessageId: s?.copies?.fallback1?.messageId || null,
         subtitleFallback2MessageId: s?.copies?.fallback2?.messageId || null,
+        subtitleFallback3MessageId: s?.copies?.fallback3?.messageId || null,
         subtitleFileSize: s?.metadata?.fileSize || null,
+        audioPrimaryLink: a?.copies?.primary?.link || null,
+        audioFallback1Link: a?.copies?.fallback1?.link || null,
+        audioFallback2Link: a?.copies?.fallback2?.link || null,
+        audioFallback3Link: a?.copies?.fallback3?.link || null,
+        audioPrimaryMessageId: a?.copies?.primary?.messageId || null,
+        audioFallback1MessageId: a?.copies?.fallback1?.messageId || null,
+        audioFallback2MessageId: a?.copies?.fallback2?.messageId || null,
+        audioFallback3MessageId: a?.copies?.fallback3?.messageId || null,
+        audioFileSize: a?.metadata?.fileSize || null,
         ingestKey,
       },
     );
@@ -661,10 +688,7 @@ class AdminBotService {
     if (this.sweeper) clearInterval(this.sweeper);
     for (const timer of this.finalizeTimers.values()) clearTimeout(timer);
     this.finalizeTimers.clear();
-    if (this.bot && this.started) {
-      this.bot.stop(reason);
-      this.started = false;
-    }
+    await stopPolling(this, reason);
   }
 }
 

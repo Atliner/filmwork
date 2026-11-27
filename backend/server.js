@@ -6,6 +6,16 @@ const os = require('os');
 const fsp = fs.promises;
 const { spawn } = require('child_process');
 const crypto = require('crypto');
+const botRuntimeFiles = ['server.js', 'bots/authBot.js', 'bots/adminBot.js', 'bots/downloadBot.js', 'lib/botPolling.js', 'lib/botLeader.js', 'lib/botBranding.js', 'lib/telegram.js', 'services/siteSettings.js', 'services/mediaDelivery.js'];
+function botSourceFingerprint() {
+  const hash = crypto.createHash('sha256');
+  for (const file of botRuntimeFiles) {
+    hash.update(file);
+    try { hash.update(fs.readFileSync(path.join(__dirname, file))); } catch { hash.update('<missing>'); }
+  }
+  return hash.digest('hex');
+}
+const runningBotFingerprint = botSourceFingerprint();
 const dotenv = require('dotenv');
 
 // `DOTENV_CONFIG_PATH` lets a host (or a test) point at another env file.
@@ -22,7 +32,10 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 
-const { query, withTransaction, healthCheck, closePool } = require('./config/db');
+const { pool, query, withTransaction, healthCheck, closePool } = require('./config/db');
+const { BotLeader } = require('./lib/botLeader');
+const { telegramBotUrl } = require('./lib/telegram');
+const { requestPassengerRestart } = require('./lib/deployRestart');
 const { AppError, assert, asyncRoute } = require('./lib/errors');
 const { parseCatalogFilters, catalogFacets } = require('./lib/catalogFilters');
 const { createAliasIndex, expandAliases, displayCredits } = require('./lib/peopleAliases');
@@ -56,6 +69,9 @@ const {
   ownerIds,
 } = require('./middleware/auth');
 const { deliverMedia } = require('./services/mediaDelivery');
+const { deliverManual } = require('./services/manualDelivery');
+const mediaAdmin = require('./services/mediaAdmin');
+const { processDeletions } = require('./services/telegramDeletion');
 const { checkDownloadAllowance } = require('./services/downloadPolicy');
 const { changeCampaignStatus, settleExpiredCampaigns, deleteCampaign } = require('./services/adAccounting');
 const { eventDecision, shouldChargeImpression } = require('./services/adEventRules');
@@ -141,6 +157,7 @@ function validateRuntimeConfiguration() {
       'TELEGRAM_PRIMARY_CHAT_ID',
       'TELEGRAM_FALLBACK_1_CHAT_ID',
       'TELEGRAM_FALLBACK_2_CHAT_ID',
+      'TELEGRAM_FALLBACK_3_CHAT_ID',
     ]) {
       const value = String(process.env[name] || '');
       if (value && !/^-?\d+$/.test(value)) {
@@ -396,14 +413,13 @@ app.get('/api/config', asyncRoute(async (_req, res) => {
      ORDER BY display_order, placement`,
   ).catch(() => []);
   const username = String(process.env.AUTH_BOT_USERNAME || '').replace(/^@/, '');
-  const downloadUsername = String(process.env.DOWNLOAD_BOT_USERNAME || '').replace(/^@/, '');
   const publicSettings = await siteSettings.read().catch(() => siteSettings.DEFAULTS);
   res.setHeader('Cache-Control', 'public, max-age=60');
   res.json({
     site: { name: publicSettings['site.name'], tagline: publicSettings['site.tagline'] },
     player: { enabled: publicSettings['player.enabled'] === '1', buttonVisible: publicSettings['player.button_visible'] === '1' },
     authBotUrl: username ? `https://t.me/${encodeURIComponent(username)}` : null,
-    downloadBotUrl: downloadUsername ? `https://t.me/${encodeURIComponent(downloadUsername)}` : null,
+    downloadBotUrl: telegramBotUrl(process.env.DOWNLOAD_BOT_USERNAME),
     maxPriorityMultiplier: adSettingsLib.adPolicy(await adPlatform.readSettings().catch(() => ({ ...adSettingsLib.DEFAULTS }))).maxPriorityMultiplier,
     placementPrices: adSettingsLib.publicPlacementPrices(prices).map((price) => ({
       placement: price.placement,
@@ -562,12 +578,16 @@ app.post('/api/contents/:assetId/progress', requireUser, asyncRoute(async (req, 
 app.get('/api/downloads', requireUser, asyncRoute(async (req, res) => {
   const rows = await query(
     `SELECT dh.id AS download_id, dh.delivery_method, dh.created_at AS downloaded_at,
-            ml.public_id AS media_public_id, ml.resolution, ml.version_label, ml.file_size_bytes,
-            ml.audio_type, ml.season_number, ml.episode_number, c.*
+            COALESCE(ml.public_id,vcl.public_id) AS media_public_id,
+            COALESCE(ml.resolution,cv.resolution) AS resolution, COALESCE(ml.version_label,cv.title) AS version_label,
+            ml.file_size_bytes, COALESCE(ml.audio_type, IF(cv.kind='dub','dubbed','soft_sub')) AS audio_type,
+            COALESCE(ml.season_number,vcl.season_number) AS season_number, COALESCE(ml.episode_number,vcl.episode_number) AS episode_number, c.*
      FROM download_history dh
-     JOIN media_links ml ON ml.id = dh.media_link_id
-     JOIN contents c ON c.id = ml.content_id
-     WHERE dh.user_id = :userId AND c.status = 'published'
+     LEFT JOIN media_links ml ON ml.id=dh.media_link_id
+     LEFT JOIN content_version_links vcl ON vcl.id=dh.manual_version_link_id
+     LEFT JOIN content_versions cv ON cv.id=vcl.version_id
+     JOIN contents c ON c.id=COALESCE(ml.content_id,cv.content_id)
+     WHERE dh.user_id=:userId AND c.status='published'
      ORDER BY dh.created_at DESC LIMIT 100`,
     { userId: req.user.id },
   );
@@ -828,6 +848,13 @@ app.get('/api/contents/:assetId/player-sources', asyncRoute(async (req, res) => 
       audioLabel: version.kind === 'dub' ? 'دوبله' : 'سافت‌ساب',
       streamUrl: link.streamUrl, subtitleUrl: link.subtitleUrl || null, audioUrl: link.dubUrl || null,
     })));
+  for (const item of detail.botMedia || []) {
+    if (!item.is_active || !item.stream_url) continue;
+    sources.push({ id: item.public_id, season: item.season_number, episode: item.episode_number,
+      episodeTitle: item.episode_title, version: item.version_label, resolution: item.resolution,
+      quality: item.quality_label, audioLabel: item.audio_type === 'dubbed' ? 'دوبله' : 'زیرنویس',
+      streamUrl: item.stream_url, subtitleUrl: item.playback_subtitle_url || null, audioUrl: item.playback_audio_url || null });
+  }
   res.setHeader('Cache-Control', 'no-store');
   res.json({ sources });
 }));
@@ -866,8 +893,22 @@ app.get('/api/contents/:assetId/media-options', asyncRoute(async (req, res) => {
               ml.file_size_bytes ASC`,
     { assetId: req.params.assetId },
   );
-  res.setHeader('Cache-Control', 'public, max-age=20');
-  res.json({ items: rows.map(mediaDto) });
+  const manualRows = await query(`SELECT vcl.*, cv.title AS version_title, cv.kind, cv.resolution
+    FROM content_version_links vcl JOIN content_versions cv ON cv.id=vcl.version_id
+    JOIN contents c ON c.id=cv.content_id
+    WHERE c.asset_uuid=:assetId AND c.status='published' AND vcl.media_link_id IS NULL
+      AND vcl.public_id IS NOT NULL AND vcl.telegram_url IS NOT NULL`, { assetId:req.params.assetId });
+  const knownLinks = new Set(rows.flatMap(row => [row.tg_link_primary, row.tg_link_fallback_1, row.tg_link_fallback_2, row.tg_link_fallback_3]).filter(Boolean));
+  const manual = manualRows.filter(row => {
+    if (knownLinks.has(row.telegram_url)) return false;
+    try { mediaAdmin.parseTelegramMessage(row.telegram_url); return true; } catch { return false; }
+  }).map(row => ({ id:row.public_id, season:row.season_number, episode:row.episode_number,
+    episodeTitle:row.episode_title, version:row.version_title, audioType:row.kind === 'dub' ? 'dubbed' : 'soft_sub',
+    audioLabel:row.kind === 'dub' ? 'دوبله' : 'سافت‌ساب', subtitleType:row.subtitle_url ? 'separate' : 'none',
+    resolution:row.resolution || row.version_title, quality:row.label, encoder:null, fileSizeBytes:0,
+    sizeText:row.size_text, subtitleFileSizeBytes:null, streamUrl:row.stream_url }));
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ items: [...rows.map(mediaDto), ...manual] });
 }));
 
 app.get('/api/contents/:assetId/comments', asyncRoute(async (req, res) => {
@@ -954,28 +995,31 @@ app.delete('/api/contents/:assetId/favorite', requireUser, asyncRoute(async (req
 app.post('/api/download', requireUser, asyncRoute(async (req, res) => {
   const mediaId = asString(req.body?.mediaId, 'شناسه فایل', { min: 36, max: 36 });
   const mediaRows = await query(
-    `SELECT ml.id FROM media_links ml
-     JOIN contents c ON c.id = ml.content_id
-     WHERE ml.public_id = :mediaId AND ml.is_active = TRUE AND c.status = 'published' LIMIT 1`,
-    { mediaId },
-  );
-  assert(mediaRows[0], 404, 'MEDIA_NOT_FOUND', 'فایل پیدا نشد.');
+    `SELECT ml.id FROM media_links ml JOIN contents c ON c.id = ml.content_id
+     WHERE ml.public_id = :mediaId AND ml.is_active = TRUE AND c.status = 'published' LIMIT 1`, { mediaId });
+  const manualRows = mediaRows.length ? [] : await query(
+    `SELECT vcl.*, cv.title AS version_title, c.title AS content_title FROM content_version_links vcl
+     JOIN content_versions cv ON cv.id=vcl.version_id JOIN contents c ON c.id=cv.content_id
+     WHERE vcl.public_id=:mediaId AND vcl.media_link_id IS NULL AND vcl.telegram_url IS NOT NULL AND c.status='published' LIMIT 1`, { mediaId });
+  assert(mediaRows[0] || manualRows[0], 404, 'MEDIA_NOT_FOUND', 'فایل پیدا نشد.');
   const isOwner = new Set(String(process.env.ADMIN_OWNER_IDS || '').split(',').map((id) => id.trim()).filter(Boolean)).has(String(req.user.tg_user_id));
   const settings = isOwner ? await siteSettings.read() : (await checkDownloadAllowance(req.user.id)).settings;
-  const result = await deliverMedia(mediaId, req.user, settings);
+  const result = mediaRows[0] ? await deliverMedia(mediaId, req.user, settings) : await deliverManual(manualRows[0], req.user, settings);
   await query(
-    `INSERT INTO download_history (user_id, media_link_id, delivery_method)
-     VALUES (:userId, :mediaLinkId, :deliveryMethod)`,
-    {
-      userId: req.user.id,
-      mediaLinkId: mediaRows[0].id,
-      deliveryMethod: result.deliveryMethod,
-    },
+    `INSERT INTO download_history (user_id, media_link_id, manual_version_link_id, delivery_method)
+     VALUES (:userId, :mediaLinkId, :manualLinkId, :deliveryMethod)`,
+    { userId:req.user.id, mediaLinkId:mediaRows[0]?.id || null, manualLinkId:manualRows[0]?.id || null, deliveryMethod:result.deliveryMethod },
   ).catch((error) => console.error('Download was delivered but history logging failed', error));
   res.setHeader('Cache-Control', 'no-store');
   res.json({
     ...result,
-    message: 'فایل به گفت‌وگوی شما با ربات Filmwork ارسال شد.',
+    // Never send the storage-channel URL as the UI's open-in-Telegram link.
+    // Keep the old field for cached clients, but make it point to the bot too.
+    telegramLink: telegramBotUrl(process.env.DOWNLOAD_BOT_USERNAME),
+    downloadBotUrl: telegramBotUrl(process.env.DOWNLOAD_BOT_USERNAME),
+    message: result.deliveryMethod === 'telegram_link'
+      ? `لینک فایل به گفت‌وگوی شما با ربات ${settings['site.name'] || 'سایت'} ارسال شد.`
+      : `فایل به گفت‌وگوی شما با ربات ${settings['site.name'] || 'سایت'} ارسال شد.`,
   });
 }));
 
@@ -1612,6 +1656,7 @@ app.get('/api/admin/deploy/status', requireAdmin, asyncRoute(async (_req, res) =
     appRoot: path.resolve(__dirname, '..'),
     lastRunAt: deployState.lastRunAt,
     lastResult: deployState.lastResult,
+    botRuntime: { matchesDisk: runningBotFingerprint === botSourceFingerprint(), fingerprint: runningBotFingerprint.slice(0, 12), processId: process.pid, leader: botStatus.leader, status: { ...botStatus } },
   };
   if (!repo) {
     res.json(base);
@@ -1691,6 +1736,13 @@ app.post('/api/admin/deploy/github', requireAdmin, requireAdminCsrf, asyncRoute(
     await walk('');
     // Keep the prebuilt CSS in step with the Tailwind sources when they changed.
     const cssChanged = written.some((file) => file.path === 'frontend/tailwind.css' || file.path === 'backend/tailwind.config.js');
+    // Passenger observes this marker on the next request. It cannot restart a
+    // separately launched process or replace a systemd/PM2 restart policy.
+    let restartRequested = false;
+    if (!dryRun) {
+      await requestPassengerRestart(__dirname);
+      restartRequested = true;
+    }
     deployState.lastRunAt = new Date().toISOString();
     deployState.lastResult = { sha, branch, dryRun, files: written.length, cssNeedsBuild: cssChanged };
     res.json({
@@ -1701,7 +1753,8 @@ app.post('/api/admin/deploy/github', requireAdmin, requireAdminCsrf, asyncRoute(
       files: written,
       skipped: skipped.slice(0, 50),
       cssNeedsBuild: cssChanged,
-      restartRequired: written.length > 0,
+      restartRequired: !dryRun,
+      restartRequested,
     });
   } finally {
     await fsp.rm(staging, { recursive: true, force: true }).catch(() => {});
@@ -1850,12 +1903,15 @@ app.patch('/api/admin/contents/:assetId', requireAdmin, requireAdminCsrf, asyncR
   if (req.body?.status && Object.keys(req.body).length === 1) {
     const status = asEnum(req.body.status, 'وضعیت', ['draft', 'published', 'archived']);
     const payload = updateContentPayload(await contentStore().getContent(req.params.assetId), { status });
+    payload.versions = undefined;
     const updated = await contentStore().updateContent(req.params.assetId, payload);
     invalidatePeopleCache();
     res.json(updated);
     return;
   }
   const payload = updateContentPayload(await contentStore().getContent(req.params.assetId), req.body || {});
+  if (!Object.hasOwn(req.body || {}, 'versions')) payload.versions = undefined;
+  else payload.manualRevision = req.body?.manualRevision;
   const updated = await contentStore().updateContent(req.params.assetId, payload);
   invalidatePeopleCache();
   res.json(updated);
@@ -1864,6 +1920,16 @@ app.patch('/api/admin/contents/:assetId', requireAdmin, requireAdminCsrf, asyncR
 app.post('/api/admin/contents/:assetId/hero', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
   const enabled = Boolean(req.body?.enabled);
   res.json(await contentStore().setHero(req.params.assetId, enabled));
+}));
+
+app.patch('/api/admin/contents/:assetId/media/:mediaId', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  assert(contentStore().kind !== 'demo', 404, 'MEDIA_NOT_FOUND', 'فایل پیدا نشد.');
+  res.json({ media: await mediaAdmin.update(req.params.assetId, req.params.mediaId, req.body?.revision, req.body?.changes) });
+}));
+
+app.delete('/api/admin/contents/:assetId/media/:mediaId', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  assert(contentStore().kind !== 'demo', 404, 'MEDIA_NOT_FOUND', 'فایل پیدا نشد.');
+  res.json(await mediaAdmin.remove(req.params.assetId, req.params.mediaId, req.body?.revision));
 }));
 
 app.post('/api/admin/contents/:assetId/sync-media', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
@@ -2355,13 +2421,33 @@ app.use((error, req, res, next) => {
 
 let httpServer;
 let campaignSettlementTimer;
+let deletionTimer;
+let deletionRunning = false;
 // Set by the hosting entry point (app.js) when it already owns the listening port.
 const hooks = { listenOnceReady: null };
 let botRetryTimer;
 let processGuardsInstalled = false;
 let shuttingDown = false;
 let botsStarting = false;
-const botStatus = { authentication: 'pending', administration: 'pending', download: 'pending', lastError: null };
+const botStatus = { authentication: 'pending', administration: 'pending', download: 'pending', lastError: null, leader: false };
+const botServices = [authBotService, adminBotService, downloadBotService];
+const botLeader = new BotLeader(pool, async (error) => {
+  botStatus.leader = false;
+  botStatus.lastError = `Telegram leader lock lost: ${error.message}`;
+  console.error(botStatus.lastError);
+  await Promise.allSettled(botServices.map((service) => service.stop('leader-lock-lost')));
+  if (!shuttingDown) scheduleBotRetry();
+});
+for (const [index, service] of botServices.entries()) {
+  const key = ['authentication', 'administration', 'download'][index];
+  service.onPollingStopped = (error) => {
+    botStatus[key] = 'failed';
+    botStatus.lastError = String(error?.message || error).slice(0, 500);
+    console.error(`Telegram bot (${key}) polling stopped:`, error);
+    service.stop('polling-stopped').catch((stopError) => console.error('Bot cleanup failed:', stopError));
+    if (!shuttingDown) scheduleBotRetry();
+  };
+}
 
 /**
  * Bots are started *after* HTTP is already serving, and their failure never takes the
@@ -2379,6 +2465,14 @@ async function startBots() {
     if (botStatus[key] === 'pending') botStatus[key] = 'starting';
   }
   try {
+    if (!await botLeader.acquire()) {
+      botStatus.leader = false;
+      for (const key of ['authentication', 'administration', 'download']) botStatus[key] = 'standby';
+      if (!shuttingDown) scheduleBotRetry();
+      return;
+    }
+    if (shuttingDown) return;
+    botStatus.leader = true;
     // Only start what is not already polling: launching the same token twice makes
     // Telegram answer 409 Conflict and kills the bot that was working.
     const pending = [];
@@ -2406,6 +2500,10 @@ async function startBots() {
       console.error(`Telegram bot (${key}) failed to start; the website stays online:`, result.reason);
     });
     if (failed) scheduleBotRetry();
+  } catch (error) {
+    botStatus.lastError = `Telegram coordination error: ${error.message}`;
+    console.error(botStatus.lastError);
+    if (!shuttingDown) scheduleBotRetry();
   } finally {
     botsStarting = false;
   }
@@ -2413,7 +2511,8 @@ async function startBots() {
 
 function scheduleBotRetry() {
   if (botRetryTimer || shuttingDown) return;
-  const delayMs = Math.max(60_000, Number(process.env.BOT_RETRY_SECONDS || 300) * 1000);
+  const retrySeconds = Number(process.env.BOT_RETRY_SECONDS || 10);
+  const delayMs = Math.max(5, Math.min(30, Number.isFinite(retrySeconds) ? retrySeconds : 10)) * 1000;
   botRetryTimer = setTimeout(() => {
     botRetryTimer = null;
     startBots().catch((error) => console.error('Telegram bot retry failed:', error));
@@ -2449,6 +2548,18 @@ async function start({ listen = true } = {}) {
       }
     }, 5 * 60_000);
     campaignSettlementTimer.unref?.();
+  }
+  if (process.env.DEMO_DATA !== '1' && !deletionTimer) {
+    const runDeletions = async () => {
+      if (deletionRunning || shuttingDown) return;
+      deletionRunning = true;
+      try { await processDeletions(); }
+      catch (error) { console.error('Telegram deletion worker failed:', error.message); }
+      finally { deletionRunning = false; }
+    };
+    runDeletions();
+    deletionTimer = setInterval(runDeletions, 30_000);
+    deletionTimer.unref?.();
   }
   // Adopt a listener that was opened to show the startup diagnostic page, then hand
   // it the real app: this is how a retried boot takes over the port without a clash.
@@ -2488,12 +2599,14 @@ async function shutdown(signal) {
   const forceTimer = setTimeout(() => process.exit(1), 15_000);
   forceTimer.unref();
   if (campaignSettlementTimer) clearInterval(campaignSettlementTimer);
+  if (deletionTimer) clearInterval(deletionTimer);
   if (botRetryTimer) clearTimeout(botRetryTimer);
   await Promise.allSettled([
     authBotService.stop(signal),
     adminBotService.stop(signal),
     downloadBotService.stop(signal),
   ]);
+  await botLeader.close();
   if (httpServer) {
     await new Promise((resolve) => httpServer.close(resolve));
   }

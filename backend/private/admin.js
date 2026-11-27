@@ -758,17 +758,21 @@
         mode: 'edit',
         step: 2,
         draft: draftFromContent(data.content, data.versions),
+        manualRevision: data.manualRevision,
         versions: data.versions.map((version) => ({
+          id: version.id,
           kind: version.kind,
           title: version.title,
           resolution: version.resolution || '',
           links: (version.links || []).map((link) => ({
+            id: link.id,
             season: link.season ?? '', episode: link.episode ?? '', title: link.title || '',
             label: link.label || '', sizeText: link.sizeText || '',
             streamUrl: link.streamUrl || '', subtitleUrl: link.subtitleUrl || '',
             dubUrl: link.dubUrl || '', telegramUrl: link.telegramUrl || '',
           })),
         })),
+        botMedia: (data.botMedia || []).map((item) => ({ ...item, _saved: { ...item } })),
         meta: null,
         sourceText: '',
         sourceLink: '',
@@ -778,6 +782,23 @@
       };
     }
     paintEditor();
+  }
+
+  const INVENTORY_BOT_URLS = ['tg_link_primary','tg_link_fallback_1','tg_link_fallback_2','tg_link_fallback_3',
+    'subtitle_link_primary','subtitle_link_fallback_1','subtitle_link_fallback_2','subtitle_link_fallback_3',
+    'audio_link_primary','audio_link_fallback_1','audio_link_fallback_2','audio_link_fallback_3',
+    'stream_url','playback_subtitle_url','playback_audio_url'];
+  function editorInventory(editor) {
+    const media = editor.botMedia || [], manual = (editor.versions || []).flatMap(version => version.links || []);
+    const nonempty = value => String(value ?? '').trim() !== '';
+    return { versions:media.length + manual.length,
+      links:media.reduce((n, row) => n + INVENTORY_BOT_URLS.filter(key => nonempty(row[key])).length, 0)
+        + manual.reduce((n, row) => n + ['streamUrl','subtitleUrl','dubUrl','telegramUrl'].filter(key => nonempty(row[key])).length, 0) };
+  }
+  function updateInventoryStats(editor) {
+    const counts = editorInventory(editor);
+    document.querySelectorAll('[data-inventory-versions]').forEach(node => { node.textContent = faNum(counts.versions); });
+    document.querySelectorAll('[data-inventory-links]').forEach(node => { node.textContent = faNum(counts.links); });
   }
 
   function paintEditor() {
@@ -791,7 +812,7 @@
       { label: 'نوع، سال و ژانر', done: Boolean(draft.contentType && draft.releaseYear && draft.genres) },
       { label: 'پوستر', done: Boolean(draft.posterUrl) },
       { label: 'توضیحات', done: Boolean(draft.description) },
-      { label: 'حداقل یک نسخه با لینک', done: editor.versions.some((version) => version.links.length > 0) },
+      { label: 'حداقل یک نسخه با لینک', done: editorInventory(editor).links > 0 },
       { label: 'انتشار', done: draft.status === 'published' },
     ];
 
@@ -801,7 +822,7 @@
           <h1>${isCreate ? 'افزودن محتوای جدید' : `ویرایش ${esc(draft.titleFa || draft.titleEn || 'محتوا')}`}</h1>
           <p>${isCreate
     ? 'لینک پست تلگرام یا متن آن را وارد کنید تا فیلدها خودکار پر شوند، سپس بازبینی و ذخیره کنید.'
-    : 'تغییرات را اعمال کنید؛ لینک‌های رسانه و نسخه‌ها هم در همین صفحه به‌روزرسانی می‌شوند.'}</p>
+    : 'مشخصات، نسخه‌های دستی و فایل‌های ربات را در همین صفحه مدیریت کنید.'}</p>
         </div>
         <div class="page-head__actions">
           <button class="button button--ghost button--sm" type="button" data-view-nav="content">بازگشت به فهرست</button>
@@ -846,8 +867,8 @@
               <div><dt>نوع</dt><dd>${draft.contentType === 'series' ? 'سریال' : 'فیلم'}</dd></div>
               <div><dt>سال</dt><dd>${draft.releaseYear ? fa(draft.releaseYear) : '—'}${draft.lastAirYear ? ` – ${fa(draft.lastAirYear)}` : ''}</dd></div>
               <div><dt>وضعیت</dt><dd><span class="status-badge status-badge--${esc(draft.status)}">${statusLabel(draft.status)}</span></dd></div>
-              <div><dt>نسخه‌ها</dt><dd>${fa(editor.versions.length)}</dd></div>
-              <div><dt>لینک‌ها</dt><dd>${faNum(editor.versions.reduce((sum, version) => sum + version.links.length, 0))}</dd></div>
+              <div><dt>نسخه‌ها</dt><dd data-inventory-versions>${faNum(editorInventory(editor).versions)}</dd></div>
+              <div><dt>لینک‌ها</dt><dd data-inventory-links>${faNum(editorInventory(editor).links)}</dd></div>
             </dl>
             <div class="checklist">
               ${checklist.map((item) => `<span class="${item.done ? 'is-done' : ''}">${item.done ? ICONS.check : ICONS.info} ${item.label}</span>`).join('')}
@@ -1023,12 +1044,63 @@
     </article>`;
   }
 
+  function botMediaList(media) {
+    if (!media?.length) return '';
+    const input = (index, item, key, label, attrs = '') => `<label class="field"><span>${esc(label)}</span><input class="input" data-bot-index="${index}" data-bot-field="${key}" value="${esc(item[key])}" ${attrs}></label>`;
+    const select = (index, item, key, label, options) => `<label class="field"><span>${esc(label)}</span><select class="select" data-bot-index="${index}" data-bot-field="${key}">${options.map(([value, text]) => `<option value="${value}" ${item[key] === value ? 'selected' : ''}>${esc(text)}</option>`).join('')}</select></label>`;
+    const replicas = [
+      ['اصلی', 'tg_link_primary', 'primary_chat_id', 'primary_message_id', 'subtitle_link_primary', 'subtitle_primary_message_id', 'audio_link_primary', 'audio_primary_message_id'],
+      ['پشتیبان ۱', 'tg_link_fallback_1', 'fallback_1_chat_id', 'fallback_1_message_id', 'subtitle_link_fallback_1', 'subtitle_fallback_1_message_id', 'audio_link_fallback_1', 'audio_fallback_1_message_id'],
+      ['پشتیبان ۲', 'tg_link_fallback_2', 'fallback_2_chat_id', 'fallback_2_message_id', 'subtitle_link_fallback_2', 'subtitle_fallback_2_message_id', 'audio_link_fallback_2', 'audio_fallback_2_message_id'],
+      ['پشتیبان ۳', 'tg_link_fallback_3', 'fallback_3_chat_id', 'fallback_3_message_id', 'subtitle_link_fallback_3', 'subtitle_fallback_3_message_id', 'audio_link_fallback_3', 'audio_fallback_3_message_id'],
+    ];
+    return `<div class="callout">${ICONS.info}<span>فایل‌های ربات مستقیم از پایگاه داده نمایش داده می‌شوند. هر فایل دکمهٔ ذخیره و حذف مستقل دارد. تغییر لینک، شناسهٔ کانال و پیام را نیز برای ربات دریافت به‌روزرسانی می‌کند؛ نسخه‌های کانال‌ها حذف نمی‌شوند. لینک‌های زیرنویس باید در همان کانال فایل باشند.</span></div>
+      <div class="version-list"><h3>فایل‌های ثبت‌شده با ربات (${fa(media.length)})</h3>${media.map((item, index) => `<details class="version-card">
+        <summary class="version-card__head">${esc(item.version_label || item.resolution || 'فایل')} · ${esc(item.resolution || '')} ${item.episode_number ? `· قسمت ${esc(item.episode_number)}` : ''} ${item.is_active ? '' : '· غیرفعال'}</summary>
+        <div class="version-card__body"><fieldset style="border:0;padding:0;margin:0;min-width:0" ${item._pending ? 'disabled' : ''}>
+          <small dir="ltr">${esc(item.public_id)}</small>
+          <div class="field-grid">
+            ${input(index, item, 'version_label', 'نام نسخه', 'maxlength="120"')}
+            ${input(index, item, 'resolution', 'رزولوشن', 'maxlength="24" dir="ltr"')}
+            ${select(index, item, 'audio_type', 'نوع صدا', [['dubbed','دوبله'],['hard_sub','هاردساب'],['soft_sub','سافت‌ساب'],['original','زبان اصلی']])}
+            ${select(index, item, 'subtitle_type', 'نوع زیرنویس', [['none','ندارد'],['embedded','داخلی'],['separate','مجزا']])}
+            ${input(index, item, 'season_number', 'فصل', 'type="number" min="1" max="65535" dir="ltr"')}
+            ${input(index, item, 'episode_number', 'قسمت', 'type="number" min="1" max="65535" dir="ltr"')}
+            ${input(index, item, 'episode_title', 'عنوان قسمت', 'maxlength="255"')}
+            ${input(index, item, 'quality_label', 'کیفیت', 'maxlength="80"')}
+            ${input(index, item, 'encoder', 'انکودر', 'maxlength="100"')}
+            ${input(index, item, 'file_size_bytes', 'حجم فایل (بایت)', 'type="number" min="1" dir="ltr"')}
+            ${input(index, item, 'subtitle_file_size_bytes', 'حجم زیرنویس (بایت)', 'type="number" min="1" dir="ltr"')}
+            ${input(index, item, 'audio_file_size_bytes', 'حجم صوت (بایت)', 'type="number" min="1" dir="ltr"')}
+            ${input(index, item, 'mime_type', 'نوع فایل (MIME)', 'maxlength="120" dir="ltr"')}
+            ${input(index, item, 'stream_url', 'لینک پخش آنلاین', 'type="url" dir="ltr"')}
+            ${input(index, item, 'playback_subtitle_url', 'لینک زیرنویس پخش آنلاین', 'type="url" dir="ltr"')}
+            ${input(index, item, 'playback_audio_url', 'لینک صوت دوبله پخش آنلاین', 'type="url" dir="ltr"')}
+            <label class="setting-check"><input type="checkbox" data-bot-index="${index}" data-bot-field="is_active" ${item.is_active ? 'checked' : ''}><span>فایل فعال برای دانلود</span></label>
+          </div>
+          ${replicas.map(([label, link, chat, message, sub, subMessage, audio, audioMessage]) => `<h4>${esc(label)}</h4><div class="field-grid">
+            ${input(index, item, link, 'لینک فایل', 'type="url" dir="ltr" placeholder="https://t.me/c/…/…"')}
+            ${input(index, item, sub, 'لینک زیرنویس مجزا', 'type="url" dir="ltr" placeholder="اختیاری"')}
+            ${input(index, item, audio, 'لینک صوت مجزای دانلود', 'type="url" dir="ltr" placeholder="اختیاری"')}
+            <small dir="ltr">Chat: ${esc(item[chat] ?? '—')} · Message: ${esc(item[message] ?? '—')} · Subtitle: ${esc(item[subMessage] ?? '—')} · Audio: ${esc(item[audioMessage] ?? '—')}</small>
+          </div>`).join('')}
+          <p class="muted">سلامت: ${esc(item.health_status || '—')} · تعداد خطا: ${fa(item.failure_count || 0)} · آخرین بررسی: ${esc(faDateTime(item.last_checked_at))} · ثبت: ${esc(faDateTime(item.created_at))} · در صورت جایگزینی فایل با محتوای متفاوت، مشخصات و حجم را نیز اصلاح کنید. ربات دریافت باید به کانال دسترسی داشته باشد.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="button button--primary button--sm" type="button" data-save-bot-media="${index}">ذخیره این فایل</button><button class="button button--danger button--sm" type="button" data-delete-bot-media="${index}">حذف این فایل</button></div>
+        </fieldset></div></details>`).join('')}</div>`;
+  }
+
+  function botMediaChanges(item) {
+    const keys = ['version_label','resolution','audio_type','subtitle_type','season_number','episode_number','episode_title','quality_label','encoder','file_size_bytes','subtitle_file_size_bytes','audio_file_size_bytes','mime_type','stream_url','playback_subtitle_url','playback_audio_url','is_active','tg_link_primary','tg_link_fallback_1','tg_link_fallback_2','tg_link_fallback_3','subtitle_link_primary','subtitle_link_fallback_1','subtitle_link_fallback_2','subtitle_link_fallback_3','audio_link_primary','audio_link_fallback_1','audio_link_fallback_2','audio_link_fallback_3'];
+    const normalize = (value) => value == null ? '' : String(value);
+    return Object.fromEntries(keys.filter((key) => key === 'is_active' ? Boolean(item[key]) !== Boolean(item._saved[key]) : normalize(item[key]) !== normalize(item._saved[key])).map((key) => [key, key === 'is_active' ? Boolean(item[key]) : item[key]]));
+  }
+
   function versionsStep(editor) {
     return `<article class="section-card">
       <div class="section-card__head">
         <div><h2>${ICONS.layers} کیفیت‌ها و لینک‌ها</h2>
           <p>نوع فایل را انتخاب کنید، عنوان (مثلاً 720p) را بنویسید و نسخه‌ها را بسازید.</p></div>
-        <span class="tag">${fa(editor.versions.length)} نسخه</span>
+        <span class="tag"><span data-inventory-versions>${faNum(editorInventory(editor).versions)}</span> نسخه · <span data-inventory-links>${faNum(editorInventory(editor).links)}</span> لینک</span>
       </div>
       <div class="section-card__body">
         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
@@ -1041,8 +1113,10 @@
             <input class="input" dir="ltr" data-quality-input value="${esc(editor.qualities)}" placeholder="1080p، 720p، 480p"></label>
           <button class="button button--primary button--sm" type="button" data-create-versions>${ICONS.plus} ایجاد نسخه‌ها</button>
         </div>
-        <div class="callout">${ICONS.info}<span>لینک‌های پخش آنلاین، زیرنویس، دوبله و تلگرام را برای هر ردیف وارد کنید یا بگذارید ربات مدیریت آن‌ها را از تلگرام پر کند. برای سریال، فصل و شماره قسمت را مشخص کنید.</span></div>
+        <div class="callout">${ICONS.info}<span>فایل‌های ربات و نسخه‌های دستی جداگانه نگهداری می‌شوند؛ هر فایل ربات دکمه ذخیره و حذف مستقل دارد. برای سریال، فصل و شماره قسمت را مشخص کنید.</span></div>
 
+        ${botMediaList(editor.botMedia)}
+        <h3>نسخه‌های قابل ویرایش پنل</h3>
         <div class="version-list">
           ${editor.versions.length ? editor.versions.map((version, index) => versionCard(version, index, editor)).join('')
     : `<div class="version-empty">
@@ -1096,12 +1170,13 @@
   }
 
   function publishStep(draft, editor) {
-    const totalLinks = editor.versions.reduce((sum, version) => sum + version.links.length, 0);
+    const inventory = editorInventory(editor);
+    const totalLinks = inventory.links;
     const missing = [];
     if (!draft.titleFa && !draft.titleEn) missing.push('عنوان');
     if (!draft.posterUrl) missing.push('پوستر');
     if (!draft.releaseYear) missing.push('سال');
-    if (!editor.versions.length) missing.push('نسخه/لینک');
+    if (!inventory.links) missing.push('نسخه/لینک');
     return `<article class="section-card">
       <div class="section-card__head"><div><h2>${ICONS.check} انتشار</h2><p>وضعیت نهایی و جایگاه در صفحه اصلی</p></div></div>
       <div class="section-card__body">
@@ -1122,7 +1197,7 @@
           </div>
         </div>
         <dl class="summary-list">
-          <div><dt>تعداد نسخه</dt><dd>${fa(editor.versions.length)}</dd></div>
+          <div><dt>تعداد نسخه</dt><dd>${faNum(inventory.versions)}</dd></div>
           <div><dt>تعداد لینک</dt><dd>${faNum(totalLinks)}</dd></div>
           <div><dt>دوبله</dt><dd>${draft.hasDub ? 'دارد' : 'ندارد'}</dd></div>
           <div><dt>زیرنویس</dt><dd>${draft.hasSub ? 'دارد' : 'ندارد'}</dd></div>
@@ -1168,12 +1243,15 @@
       status: draft.status,
       sourceType: editor.meta ? editor.sourceKind : undefined,
       sourceUrl: editor.sourceLink || undefined,
+      manualRevision: editor.manualRevision,
       versions: editor.versions.map((version, index) => ({
+        id: version.id || undefined,
         kind: version.kind,
         title: version.title || version.resolution || `نسخه ${index + 1}`,
         resolution: version.resolution || version.title,
         sortOrder: index,
         links: version.links.map((link) => ({
+          id: link.id || undefined,
           season: link.season === '' ? null : Number(link.season),
           episode: link.episode === '' ? null : Number(link.episode),
           title: link.title || null,
@@ -1202,6 +1280,10 @@
   async function saveEditor() {
     const editor = state.editor;
     if (!editor || state.busy) return;
+    if ((editor.botMedia || []).some((item) => item._pending || Object.keys(botMediaChanges(item)).length)) {
+      toast('ابتدا تغییرات هر فایل ربات را با دکمهٔ ذخیره همان فایل ثبت کنید.', 'error');
+      editor.step = 3; paintEditor(); return;
+    }
     let payload = readEditorDraft();
     if (!payload.titleFa && !payload.titleEn) {
       toast('عنوان فارسی یا انگلیسی را وارد کنید.', 'error');
@@ -1319,7 +1401,7 @@
    * land on a usable versions table instead of an empty card.
    */
   function edgePrimeVersions(editor) {
-    if (!editor || editor.versions.length) return;
+    if (!editor || editor.mode === 'edit' || editor.versions.length) return;
     if (!editor.draft.titleFa && !editor.draft.titleEn) return;
     const qualities = listFrom(editor.qualities);
     const chosen = qualities.length ? qualities : ['1080p', '720p'];
@@ -2000,8 +2082,9 @@
           ${text('download.delay_minutes', 'زمان انتظار هر مرحله (دقیقه، جداشده با کاما)', 'مثال: 1,2,10,30')}
           ${text('download.reset_minutes', 'بازنشانی شمارش پس از چند دقیقه بی‌دانلود', '', 'type="number" min="1" max="1440"')}
           ${text('download.daily_cap', 'سقف دانلود روزانه (۰ = نامحدود)', '', 'type="number" min="0" max="10000"')}
+          ${text('download.delete_after_minutes', 'حذف پیام فایل بعد از چند دقیقه (۰ = خاموش)', 'فقط پیام‌های جدید در گفت‌وگوی کاربر؛ حداکثر ۲۷۶۰ دقیقه. حذف به اتصال و محدودیت تلگرام وابسته است.', 'type="number" min="0" max="2760"')}
         </div></article>
-        <article class="panel"><div class="panel__head"><div><h2>کپشن زیر فایل ارسالی</h2><p>متغیرهای قابل استفاده: {title} و {version}</p></div></div><div class="panel__body"><label class="field"><span>قالب کپشن</span><textarea class="input" data-site-setting="download.caption" maxlength="900" rows="5">${esc(s['download.caption'] || '')}</textarea><small class="muted">متغیرهای قابل استفاده: {title} و {version}</small></label></div></article>
+        <article class="panel"><div class="panel__head"><div><h2>کپشن زیر فایل ارسالی</h2><p>متغیرها: {title}، {version} و {site_name} (نام سایت از تنظیمات). نام قدیمی در متن کپشن به متغیر تبدیل می‌شود؛ آدرس‌ها و نام‌های کاربری تغییر نمی‌کنند.</p></div></div><div class="panel__body"><label class="field"><span>قالب کپشن</span><textarea class="input" data-site-setting="download.caption" maxlength="900" rows="5">${esc(s['download.caption'] || '')}</textarea><small class="muted">متغیرها: {title}، {version} و {site_name} (نام سایت از تنظیمات). نام قدیمی در متن کپشن به متغیر تبدیل می‌شود؛ آدرس‌ها و نام‌های کاربری تغییر نمی‌کنند.</small></label></div></article>
         <article class="panel"><div class="panel__head"><div><h2>پخش آنلاین</h2><p>گزینه‌های کنترل پلیر و محدودیت نشست</p></div></div><div class="panel__body setting-grid">
           ${check('player.enabled', 'فعال‌بودن پخش آنلاین', 'خاموش‌کردن کامل پخش آنلاین')}
           ${check('player.button_visible', 'نمایش دکمه پخش آنلاین', 'نمایش دکمه برای کاربران')}
@@ -2102,15 +2185,16 @@
     const changedFiles = (lastRun?.files || []);
     root.innerHTML = `<section class="view">
       <div class="page-head"><div><h1>به‌روزرسانی از گیت‌هاب</h1><p>هر تغییری که در گیت‌هاب می‌دهید، از همین صفحه روی هاست اعمال می‌شود؛ لازم نیست فایل‌ها را با File Manager عوض کنید</p></div></div>
-      <div class="callout callout--warn">${ICONS.warn}<span>این ابزار فقط فایل‌ها را کپی می‌کند و migrationهای پایگاه داده را اجرا نمی‌کند. پیش از اعمال نسخه‌های نیازمند migration از دیتابیس پشتیبان بگیرید و دستورهای راهنما را اجرا کنید. <button class="button button--ghost button--xs" type="button" data-diagnostics>بررسی ساختار دیتابیس</button></span></div>
+      <div class="callout callout--warn">${ICONS.warn}<span>وضعیت کد و ربات فقط مربوط به پردازشی است که به این صفحه پاسخ داده است؛ پردازش‌های مستقل قدیمی را جداگانه متوقف کنید. این ابزار فقط فایل‌ها را کپی می‌کند و migrationهای پایگاه داده را اجرا نمی‌کند. پیش از اعمال نسخه‌های نیازمند migration از دیتابیس پشتیبان بگیرید و دستورهای راهنما را اجرا کنید. <button class="button button--ghost button--xs" type="button" data-diagnostics>بررسی ساختار دیتابیس</button></span></div>
       ${status.configured ? '' : `<div class="callout callout--warn">${ICONS.warn}<span>برای فعال شدن این صفحه، در <code>.env</code> مقدار <code>GITHUB_REPO=Atliner/filmwork</code> را بگذارید (برای ریپوی خصوصی <code>GITHUB_TOKEN</code> هم لازم است) و سرویس Node را یک‌بار ری‌استارت کنید.</span></div>`}
       <div class="deploy-grid">
         <article class="panel"><div class="panel__head"><div><h2>وضعیت</h2><p>مخزن و شاخه‌ای که روی هاست اعمال می‌شود</p></div></div>
           <div class="panel__body deploy-meta">
             <div><span>ریپازیتوری</span><b dir="ltr">${esc(status.repo || '—')}</b></div>
-            <div><span>شاخه</span><b dir="ltr">${esc(status.branch || '—')}</b></div>
-            <div><span>آخرین دریافت</span><b>${status.lastRunAt ? faDate(status.lastRunAt) : 'هنوز اجرا نشده'}</b></div>
-            ${upstream ? `<div><span>آخرین کامیت گیت‌هاب</span><b dir="ltr" style="font-size:11px">${esc(upstream.sha.slice(0, 7))}</b></div>
+            <div><span>شاخه پیش‌فرض تنظیم‌شده</span><b dir="ltr">${esc(status.branch || '—')}</b></div>
+            <div><span>آخرین درخواست در این پردازش</span><b>${status.lastRunAt ? faDate(status.lastRunAt) : 'نامشخص / پس از راه‌اندازی'}</b></div>
+            ${status.botRuntime ? `<div><span>کد ربات این پردازش</span><b>${status.botRuntime.matchesDisk ? 'مطابق فایل‌ها' : 'قدیمی؛ نیازمند راه‌اندازی مجدد'}</b></div><div><span>وضعیت این پردازش</span><b>${status.botRuntime.leader ? 'پردازنده ربات‌ها' : 'در انتظار / غیرفعال'}</b></div>` : ''}
+            ${upstream ? `<div><span>آخرین کامیت شاخه پیش‌فرض در گیت‌هاب</span><b dir="ltr" style="font-size:11px">${esc(upstream.sha.slice(0, 7))}</b></div>
               <div style="grid-column:1/-1"><span>پیام کامیت</span><p style="margin:2px 0 0;font-size:12px;line-height:1.9">${esc(upstream.message.split('\n')[0])}</p></div>` : ''}
           </div>
         </article>
@@ -2139,7 +2223,7 @@
           ${CODE('mkdir -p ~/filmwork/backend/tmp && touch ~/filmwork/backend/tmp/restart.txt', 'deploy-restart')}
         </div>
       </details>
-      <div class="callout">${ICONS.info}<span>بعد از اعمال تغییرات، سرویس Node را از cPanel («Setup Node.js App» → Restart) ری‌استارت کنید تا نسخه جدید فعال شود.</span></div>
+      <div class="callout">${ICONS.info}<span>پس از اعمال، درخواست ری‌استارت Passenger ثبت می‌شود. تطابق کد این پردازش و عملکرد ربات‌ها را بررسی کنید؛ پردازش‌های مستقل و مدیرهای سرویس دیگر جداگانه ری‌استارت می‌شوند.</span></div>
     </section>`;
 
     const run = async (dryRun) => {
@@ -2156,7 +2240,7 @@
           <span class="muted" dir="ltr">${esc(result.sha.slice(0, 7))}</span>
           ${files.length ? `<div class="deploy-files">${files.slice(0, 80).map((file) => `<span class="deploy-file deploy-file--${file.status}"><i dir="ltr">${esc(file.path)}</i><b>${file.status === 'added' ? 'جدید' : 'به‌روز'}</b></span>`).join('')}</div>` : '<p class="muted" style="font-size:12px">همه فایل‌ها از قبل به‌روز بودند.</p>'}
           ${result.cssNeedsBuild ? '<p class="muted" style="font-size:12px">استایل‌ها تغییر کرده‌اند: روی هاست <code>cd backend &amp;&amp; npm run build:css</code> را اجرا کنید (یا <code>frontend/styles.css</code> را هم از گیت‌هاب بگیرید).</p>' : ''}
-          ${result.restartRequired && !dryRun ? '<p class="muted" style="font-size:12px">برای فعال شدن کد جدید، سرویس Node را ری‌استارت کنید.</p>' : ''}
+          ${result.restartRequested && !dryRun ? '<p class="muted" style="font-size:12px">درخواست راه‌اندازی مجدد Passenger ثبت شد. پس از چند لحظه صفحه را تازه و وضعیت ربات‌ها را بررسی کنید؛ پردازش‌های جداگانه باید مستقل متوقف شوند.</p>' : ''}
         </div>`;
       } catch (error) {
         box.innerHTML = `<p style="color:#fca5a5;font-size:12px;margin-top:12px">${esc(error.message)}</p>`;
@@ -2275,10 +2359,10 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
               <li><code>#زیرنویس</code>: مجزا (فایل SRT جدا) یا داخلی (چسبیده)</li>
               <li><code>#رزولوشن</code>: 480p / 720p / 1080p / 2160p</li>
               <li>در پست کانال، کلمه «اتمام پخش» یا «پایان یافته» وضعیت پخش را خاموش می‌کند و «در حال پخش/انتشار» روشن.</li>
-              <li>ابتدای متن یک دستور، یعنی ربات منتظر فایل ویدیو است (۳۰ دقیقه فرصت).</li>
+              <li>هر دستور تا ارسال دستور جدید در همان گفت‌وگو فعال است؛ برای هر فایل مشخصات از نام خودش استخراج می‌شود مگر آنکه هشتگ صریح داده باشید.</li>
             </ul>
             <ol start="3">
-              <li>فایل ویدیو را بفرستید. ربات آن را در سه کانال ذخیره (Copy) می‌کند و لینک‌ها را در کارت دانلود ثبت می‌کند.</li>
+              <li>فایل ویدیو را بفرستید. ربات آن را در کانال‌های تنظیم‌شده ذخیره (Copy) می‌کند و لینک‌ها را در کارت دانلود ثبت می‌کند.</li>
               <li>اگر زیرنویس «مجزا» باشد، بعد از ویدیو ۱۰ ثانیه فرصت دارید فایل SRT/VTT را بفرستید؛ خودکار به همان کارت وصل می‌شود.</li>
             </ol>
             <div class="callout">${ICONS.info}<span>لینک پخش آنلاین و لینک زیرنویس/دوبله در نسخه‌های پنل، از همین پیام‌های کانال خوانده می‌شوند؛ تا زمان دریافت فایل، می‌توانید آن‌ها را دستی هم وارد کنید.</span></div>
@@ -2374,7 +2458,7 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
             <ul>
               <li><b>۴۰۴ روی کنسول:</b> جلسه منقضی شده یا شناسه شما در <code>ADMIN_OWNER_IDS</code> نیست؛ دوباره <code>/panel</code> بزنید.</li>
               <li><b>پست خوانده نشد:</b> کانال خصوصی است؛ متن پست را در کادر دوم بچسبانید.</li>
-              <li><b>لینک‌ها خالی ماندند:</b> دستور <code>#اثر</code> را با UUID درست بفرستید و فایل را در ۳۰ دقیقه ارسال کنید.</li>
+              <li><b>لینک‌ها خالی ماندند:</b> دستور <code>#اثر</code> را با UUID درست بفرستید و نتیجه ثبت فایل را بررسی کنید.</li>
               <li><b>خطای ۵۰۳ روی دامنه:</b> فایل ورودی Passenger باید <code>app.js</code> باشد و کل مخزن (نه فقط backend) آپلود شود.</li>
             </ul>
           </div>
@@ -2412,6 +2496,12 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
           if (active) $(`[data-field="${active}"]`)?.focus();
           return;
         }
+        if (target.matches('[data-bot-field]')) {
+          const item = editor.botMedia[Number(target.dataset.botIndex)];
+          if (item) item[target.dataset.botField] = target.type === 'checkbox' ? target.checked : target.value;
+          updateInventoryStats(editor);
+          return;
+        }
         if (target.matches('[data-source-link]')) { editor.sourceLink = target.value; return; }
         if (target.matches('[data-source-text]')) { editor.sourceText = target.value; return; }
         if (target.matches('[data-quality-input]')) { editor.qualities = target.value; return; }
@@ -2424,6 +2514,7 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
           const versionIndex = Number(target.dataset.versionIndex);
           const linkIndex = Number(target.dataset.linkIndex);
           editor.versions[versionIndex].links[linkIndex][target.dataset.linkField] = target.value;
+          updateInventoryStats(editor);
           return;
         }
       }
@@ -2441,6 +2532,11 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
       const target = event.target;
       // Some browsers only fire `change` (not `input`) for <select>, so the same
       // field assignment runs here as a safety net.
+      if (state.editor && target.matches('[data-bot-field]')) {
+        const item = state.editor.botMedia[Number(target.dataset.botIndex)];
+        if (item) item[target.dataset.botField] = target.type === 'checkbox' ? target.checked : target.value;
+        return;
+      }
       if (state.editor && target.matches('[data-field]')) {
         state.editor.draft[target.dataset.field] = target.type === 'checkbox' ? target.checked : target.value;
         if (target.dataset.structural || target.dataset.field === 'status') paintEditor();
@@ -2603,6 +2699,35 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
       if (button.matches('[data-run-parse]')) { await runParse(); return; }
       if (button.matches('[data-skip-import]')) { state.editor.step = 2; paintEditor(); return; }
       if (button.matches('[data-save-content]')) { await saveEditor(); return; }
+      if (button.matches('[data-save-bot-media]')) {
+        const editor = state.editor, index = Number(button.dataset.saveBotMedia), item = editor?.botMedia[index];
+        if (!item) return;
+        const changes = botMediaChanges(item);
+        if (!Object.keys(changes).length) { toast('تغییری برای ذخیره وجود ندارد.'); return; }
+        item._pending = true;
+        const fieldset = button.closest('fieldset'); if (fieldset) fieldset.disabled = true;
+        try {
+          const result = await api(`/api/admin/contents/${encodeURIComponent(editor.assetId)}/media/${encodeURIComponent(item.public_id)}`, { method: 'PATCH', body: { revision: item._saved.revision, changes } });
+          if (state.editor !== editor) return;
+          editor.botMedia[index] = { ...result.media, _saved: { ...result.media } };
+          paintEditor(); toast('تغییرات فایل ربات ذخیره شد.');
+        } catch (error) { item._pending = false; if (state.editor === editor) paintEditor(); toast(error.message, 'error'); }
+        return;
+      }
+      if (button.matches('[data-delete-bot-media]')) {
+        const editor = state.editor, index = Number(button.dataset.deleteBotMedia), item = editor?.botMedia[index];
+        if (!item) return;
+        const confirmed = await confirmDialog({ title: 'حذف فایل ربات', message: 'این فایل، لینک‌های آن و سوابق دانلود و سلامت مربوط به آن از سایت و دیتابیس حذف می‌شوند و دیگر قابل دریافت نیستند. پیام‌های کانال‌های مخزن پاک نمی‌شوند. حذف برگشت‌ناپذیر است.', confirmLabel: 'حذف فایل' });
+        if (!confirmed) return;
+        item._pending = true;
+        const fieldset = button.closest('fieldset'); if (fieldset) fieldset.disabled = true;
+        try {
+          await api(`/api/admin/contents/${encodeURIComponent(editor.assetId)}/media/${encodeURIComponent(item.public_id)}`, { method: 'DELETE', body: { revision: item._saved.revision } });
+          if (state.editor !== editor) return;
+          editor.botMedia.splice(index, 1); paintEditor(); toast('فایل از سایت حذف شد؛ پیام‌های کانال دست‌نخورده‌اند.');
+        } catch (error) { item._pending = false; if (state.editor === editor) paintEditor(); toast(error.message, 'error'); }
+        return;
+      }
       if (button.matches('[data-create-versions]')) { createVersions(); return; }
       if (button.matches('[data-quick-quality]')) {
         state.editor.qualities = button.dataset.quickQuality;
