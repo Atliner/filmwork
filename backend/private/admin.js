@@ -1059,7 +1059,7 @@
             ${input(index, item, sub, 'لینک زیرنویس مجزا', 'type="url" dir="ltr" placeholder="اختیاری"')}
             <small dir="ltr">Chat: ${esc(item[chat] ?? '—')} · Message: ${esc(item[message] ?? '—')} · Subtitle: ${esc(item[subMessage] ?? '—')}</small>
           </div>`).join('')}
-          <p class="muted">سلامت: ${esc(item.health_status || '—')} · در صورت جایگزینی فایل با محتوای متفاوت، مشخصات و حجم را نیز اصلاح کنید. ربات دریافت باید به کانال دسترسی داشته باشد.</p>
+          <p class="muted">سلامت: ${esc(item.health_status || '—')} · تعداد خطا: ${fa(item.failure_count || 0)} · آخرین بررسی: ${esc(faDateTime(item.last_checked_at))} · ثبت: ${esc(faDateTime(item.created_at))} · در صورت جایگزینی فایل با محتوای متفاوت، مشخصات و حجم را نیز اصلاح کنید. ربات دریافت باید به کانال دسترسی داشته باشد.</p>
           <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="button button--primary button--sm" type="button" data-save-bot-media="${index}">ذخیره این فایل</button><button class="button button--danger button--sm" type="button" data-delete-bot-media="${index}">حذف این فایل</button></div>
         </fieldset></div></details>`).join('')}</div>`;
   }

@@ -28,7 +28,8 @@ function revision(row) {
   return crypto.createHash('sha256').update(JSON.stringify(FIELDS.map(key => row[key] == null ? null : String(row[key])))).digest('hex');
 }
 function dto(row) {
-  return { ...Object.fromEntries(FIELDS.map(key => [key, row[key] ?? null])), health_status: row.health_status, revision: revision(row) };
+  return { ...Object.fromEntries(FIELDS.map(key => [key, row[key] ?? null])), health_status: row.health_status,
+    failure_count: row.failure_count, last_checked_at: row.last_checked_at, created_at: row.created_at, updated_at: row.updated_at, revision: revision(row) };
 }
 function parseTelegramMessage(raw) {
   let url;
