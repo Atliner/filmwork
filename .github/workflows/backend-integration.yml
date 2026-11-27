@@ -53,7 +53,11 @@ jobs:
       - name: Install schema and verify old-campaign upgrade and repeatability
         run: |
           trap 'echo "::error::Migration verification failed at line $LINENO (status $?)"' ERR
-          mysql -h 127.0.0.1 -u root filmwork_test < database/schema.sql
+          if ! mysql -h 127.0.0.1 -u root filmwork_test < database/schema.sql 2>/tmp/schema-error; then
+            cat /tmp/schema-error
+            python3 -c 's=open("/tmp/schema-error").read(); print("::error::" + s.replace("%", "%25").replace(chr(13), "%0D").replace(chr(10), "%0A"))'
+            exit 1
+          fi
           # Simulate a pre-upgrade install; old enum migrations predate video_download.
           mysql -h 127.0.0.1 -u root filmwork_test -e "DELETE FROM ad_placement_prices WHERE placement='video_download'"
           for migration in database/migrations/2026-11-content-view-receipts.sql database/migrations/2026-11-soft-delete-campaigns.sql database/migrations/2026-11-page-ads-bidding.sql; do
