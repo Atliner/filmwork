@@ -94,3 +94,50 @@ test('Telegram link errors are actionable and pasted text never requires a netwo
     await assert.rejects(fetchPublicTelegramPost('https://t.me.evil.example/Vizosten/72'), (error) => error.status === 422);
   } finally { globalThis.fetch = old; }
 });
+
+test('only asset, version and type hashtags are required', () => {
+  const uuid = '550e8400-e29b-41d4-a716-446655440000';
+  const parsed = parseDirectives(`#اثر ${uuid} #نسخه DigiMovies #نوع دوبله`);
+  assert.equal(parsed.assetUuid, uuid);
+  assert.equal(parsed.audioType, 'dubbed');
+  assert.equal(parsed.resolution, null);
+  assert.equal(parsed.subtitleType, null);
+  assert.match(parseDirectives(`#اثر ${uuid} #نوع دوبله`).error, /#نسخه/);
+  assert.match(parseDirectives(`#اثر ${uuid} #نسخه DigiMovies`).error, /#نوع/);
+  assert.match(parseDirectives(`#اثر ${uuid} #نسخه #نوع دوبله`).error, /#نسخه/);
+});
+
+test('infers season, episode, resolution, quality and encoder from a Telegram filename', () => {
+  const { resolveMediaDirectives } = require('../bots/adminBot');
+  const d = parseDirectives('#اثر 550e8400-e29b-41d4-a716-446655440000 #نسخه DigiMovies #نوع دوبله');
+  const result = resolveMediaDirectives(d, 'The.Pitt.S02.E15.720p.WEB-DL.Doble.mp4');
+  assert.equal(result.seasonNumber, 2);
+  assert.equal(result.episodeNumber, 15);
+  assert.equal(result.resolution, '720p');
+  assert.equal(result.quality, 'WEB-DL');
+  assert.equal(result.audioType, 'dubbed');
+  assert.equal(result.subtitleType, 'none');
+  assert.equal(result.encoder, null);
+  const extra = resolveMediaDirectives(d, 'Show.S01E02.1080p.WEBRip.x265.SoftSub.mkv');
+  assert.equal(extra.episodeNumber, 2);
+  assert.equal(extra.subtitleType, 'embedded');
+  assert.equal(extra.encoder, 'x265');
+});
+
+test('explicit optional directives override the filename; unknown fields are not invented', () => {
+  const { resolveMediaDirectives } = require('../bots/adminBot');
+  const d = parseDirectives('#اثر 550e8400-e29b-41d4-a716-446655440000 #نسخه A #نوع سافتساب #سریال S03.E04 #رزولوشن 480p #زیرنویس مجزا #کیفیت Bluray #انکودر x264');
+  const parsed = resolveMediaDirectives(d, 'The.Pitt.S02.E15.720p.WEB-DL.x265.SoftSub.mp4');
+  assert.equal(parsed.seasonNumber, 3);
+  assert.equal(parsed.episodeNumber, 4);
+  assert.equal(parsed.resolution, '480p');
+  assert.equal(parsed.subtitleType, 'separate');
+  assert.equal(parsed.quality, 'Bluray');
+  assert.equal(parsed.encoder, 'x264');
+  const unknown = resolveMediaDirectives(parseDirectives('#اثر 550e8400-e29b-41d4-a716-446655440000 #نسخه A #نوع دوبله'), 'random-file.mp4');
+  assert.equal(unknown.resolution, 'نامشخص');
+  assert.equal(unknown.seasonNumber, null);
+  assert.equal(unknown.episodeNumber, null);
+  assert.equal(unknown.subtitleType, 'none');
+  assert.equal(resolveMediaDirectives(unknown, null).resolution, 'نامشخص');
+});

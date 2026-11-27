@@ -49,7 +49,7 @@ function cleanLabelValue(value) {
 }
 
 function directiveValue(text, name) {
-  const expression = new RegExp(`#${name}(?=\\s)\\s+([\\s\\S]*?)(?=\\s+#(?:اثر|نسخه|نوع|زیرنویس|رزولوشن|سریال|کیفیت|انکودر)(?=\\s|$)|$)`, 'iu');
+  const expression = new RegExp(`#${name}(?=\\s|$)([\\s\\S]*?)(?=#(?:اثر|نسخه|نوع|زیرنویس|رزولوشن|سریال|کیفیت|انکودر)(?=\\s|$)|$)`, 'iu');
   return cleanLabelValue(text.match(expression)?.[1] || '');
 }
 
@@ -68,8 +68,8 @@ function parseDirectives(rawText) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(assetUuid)) {
     return { error: 'شناسه #اثر باید یک UUID معتبر باشد.' };
   }
-  if (!version || !typeRaw || !subtitleRaw || !resolution) {
-    return { error: 'دستور باید شامل #نسخه، #نوع، #زیرنویس و #رزولوشن باشد.' };
+  if (!version || !typeRaw) {
+    return { error: 'دستور باید شامل #اثر، #نسخه و #نوع باشد.' };
   }
 
   let audioType = 'original';
@@ -77,7 +77,7 @@ function parseDirectives(rawText) {
   else if (/هارد\s*ساب|هاردساب/iu.test(typeRaw)) audioType = 'hard_sub';
   else if (/سافت\s*ساب|سافتساب/iu.test(typeRaw)) audioType = 'soft_sub';
 
-  let subtitleType = 'none';
+  let subtitleType = subtitleRaw ? 'none' : null;
   if (/مجزا|جدا/u.test(subtitleRaw)) subtitleType = 'separate';
   else if (/داخلی|چسبیده|embedded/iu.test(subtitleRaw)) subtitleType = 'embedded';
 
@@ -96,11 +96,31 @@ function parseDirectives(rawText) {
     sourceType: typeRaw.slice(0, 80),
     audioType,
     subtitleType,
-    resolution: resolution.slice(0, 24),
-    quality: (quality || typeRaw).slice(0, 80),
+    resolution: resolution ? resolution.slice(0, 24) : null,
+    quality: quality ? quality.slice(0, 80) : null,
     encoder: encoder ? encoder.slice(0, 100) : null,
     seasonNumber,
     episodeNumber,
+  };
+}
+
+// Hashtags take precedence; infer only recognizable, bounded filename tokens.
+// Telegram sometimes supplies no filename, so unknown fields remain explicitly unknown.
+function resolveMediaDirectives(directives, fileName) {
+  const name = normalizeDigits(String(fileName || ''));
+  const episode = name.match(/(?:^|[.\-_\s])S(?:eason)?\s*0*(\d{1,3})[.\-_\s]*E(?:pisode)?\s*0*(\d{1,4})(?=$|[.\-_\s])/iu);
+  const resolution = name.match(/(?:^|[.\-_\s])((?:2160|1080|720|576|480|360)p|4k)(?=$|[.\-_\s])/iu)?.[1];
+  const quality = name.match(/(?:^|[.\-_\s])(WEB[.\-_ ]?DL|WEB[.\-_ ]?Rip|Blu[.\-_ ]?Ray|BDRip|BRRip|HDTV)(?=$|[.\-_\s])/iu)?.[1];
+  const encoder = name.match(/(?:^|[.\-_\s])(x264|x265|h[.\-_]?264|h[.\-_]?265|HEVC|AV1)(?=$|[.\-_\s])/iu)?.[1];
+  const hasEmbeddedSubtitle = /(?:^|[.\-_\s])(?:soft[.\-_ ]?sub(?:bed)?|hard[.\-_ ]?sub(?:bed)?|embedded[.\-_ ]?sub(?:title)?s?)(?=$|[.\-_\s])/iu.test(name);
+  return {
+    ...directives,
+    resolution: directives.resolution || (resolution ? resolution.toLowerCase() : 'نامشخص'),
+    quality: directives.quality || (quality ? quality.replace(/[._ ]/g, '-').toUpperCase() : directives.sourceType || null),
+    encoder: directives.encoder || encoder || null,
+    seasonNumber: directives.seasonNumber ?? (episode ? Number(episode[1]) : null),
+    episodeNumber: directives.episodeNumber ?? (episode ? Number(episode[2]) : null),
+    subtitleType: directives.subtitleType || (hasEmbeddedSubtitle ? 'embedded' : 'none'),
   };
 }
 
@@ -299,7 +319,8 @@ class AdminBotService {
 
       const directives = parseDirectives(text);
       if (directives) {
-        await this.handleDirectives(ctx, directives);
+        const accepted = await this.handleDirectives(ctx, directives);
+        if (accepted && mediaFromMessage(message)) await this.handleMedia(ctx, message);
         return;
       }
 
@@ -376,7 +397,7 @@ class AdminBotService {
   async handleDirectives(ctx, directives) {
     if (directives.error) {
       await safeReply(ctx, directives.error);
-      return;
+      return false;
     }
     const contentRows = await query(
       'SELECT id, title FROM contents WHERE asset_uuid = :assetUuid LIMIT 1',
@@ -384,7 +405,7 @@ class AdminBotService {
     );
     if (!contentRows[0]) {
       await safeReply(ctx, 'اثری با این UUID پیدا نشد.');
-      return;
+      return false;
     }
     const sourceChatId = String(ctx.chat.id);
     const ownerId = ctx.from?.id || [...ownerIds()][0];
@@ -408,6 +429,7 @@ class AdminBotService {
       );
     });
     await safeReply(ctx, `دستور ${contentRows[0].title} ثبت شد؛ فایل رسانه را تا ۳۰ دقیقه آینده ارسال کنید.`);
+    return true;
   }
 
   async activeSession(chatId) {
@@ -479,6 +501,7 @@ class AdminBotService {
       return;
     }
 
+    session.directives = resolveMediaDirectives(session.directives, metadata.fileName);
     const copies = await this.replicateMessage(ctx, message);
     const videoPayload = { metadata, copies };
     if (session.directives.subtitleType === 'separate') {
@@ -575,7 +598,7 @@ class AdminBotService {
   }
 
   async insertMediaLink(session, videoPayload, subtitlePayload, ingestKey) {
-    const d = session.directives;
+    const d = resolveMediaDirectives(session.directives, videoPayload.metadata.fileName);
     const v = videoPayload;
     const s = subtitlePayload;
     await query(
@@ -651,6 +674,7 @@ module.exports = {
   normalizeDigits,
   parsePublicPost,
   parseDirectives,
+  resolveMediaDirectives,
   fetchPublicTelegramPost,
   AdminBotService,
   adminBotService,
