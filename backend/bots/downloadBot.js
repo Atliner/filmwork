@@ -3,6 +3,7 @@
 const { Telegraf } = require('telegraf');
 const { startPolling, stopPolling } = require('../lib/botPolling');
 const { telegramErrorDescription } = require('../lib/telegram');
+const siteSettings = require('../services/siteSettings');
 
 function safeStop(bot, reason) { try { bot?.stop(reason); } catch { /* not launched */ } }
 
@@ -13,8 +14,7 @@ class DownloadBotService {
     if (!token) { console.warn('DOWNLOAD_BOT_TOKEN is not configured; the download bot is disabled.'); return false; }
     if (!/^\d{6,}:[A-Za-z0-9_-]{30,}$/.test(token)) throw new Error('DOWNLOAD_BOT_TOKEN is invalid.');
     this.bot = new Telegraf(token);
-    this.bot.start((ctx) => ctx.reply('سلام! این ربات مخصوص دریافت فایل‌های Filmwork است. برای ورود به سایت از ربات ورود استفاده کنید.'));
-    this.bot.catch((error) => console.error('Download bot update failed:', telegramErrorDescription(error)));
+    this.registerHandlers();
     try {
       if (!await startPolling(this, this.bot, ['message'])) return false;
       console.log('Telegram download bot started.');
@@ -24,6 +24,13 @@ class DownloadBotService {
       const conflict = /409|terminated by other getUpdates request/i.test(telegramErrorDescription(error));
       throw new Error(conflict ? 'Download bot has another active polling process (Telegram 409).' : `Download bot could not start: ${telegramErrorDescription(error)}`);
     }
+  }
+  registerHandlers() {
+    this.bot.start(async (ctx) => {
+      const siteName = await siteSettings.getSiteName();
+      await ctx.reply(`سلام! این ربات مخصوص دریافت فایل‌های ${siteName} است. برای ورود به سایت از ربات ورود استفاده کنید.`);
+    });
+    this.bot.catch((error) => console.error('Download bot update failed:', telegramErrorDescription(error)));
   }
   ensureReady() {
     // API delivery works on standby HTTP workers too; only polling is exclusive.

@@ -6,7 +6,7 @@ const os = require('os');
 const fsp = fs.promises;
 const { spawn } = require('child_process');
 const crypto = require('crypto');
-const botRuntimeFiles = ['server.js', 'bots/authBot.js', 'bots/adminBot.js', 'bots/downloadBot.js', 'lib/botPolling.js', 'lib/botLeader.js'];
+const botRuntimeFiles = ['server.js', 'bots/authBot.js', 'bots/adminBot.js', 'bots/downloadBot.js', 'lib/botPolling.js', 'lib/botLeader.js', 'lib/botBranding.js', 'services/siteSettings.js'];
 function botSourceFingerprint() {
   const hash = crypto.createHash('sha256');
   for (const file of botRuntimeFiles) {
@@ -1018,8 +1018,8 @@ app.post('/api/download', requireUser, asyncRoute(async (req, res) => {
     telegramLink: telegramBotUrl(process.env.DOWNLOAD_BOT_USERNAME),
     downloadBotUrl: telegramBotUrl(process.env.DOWNLOAD_BOT_USERNAME),
     message: result.deliveryMethod === 'telegram_link'
-      ? 'لینک فایل به گفت‌وگوی شما با ربات Filmwork ارسال شد.'
-      : 'فایل به گفت‌وگوی شما با ربات Filmwork ارسال شد.',
+      ? `لینک فایل به گفت‌وگوی شما با ربات ${settings['site.name'] || 'سایت'} ارسال شد.`
+      : `فایل به گفت‌وگوی شما با ربات ${settings['site.name'] || 'سایت'} ارسال شد.`,
   });
 }));
 

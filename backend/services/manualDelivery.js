@@ -5,6 +5,7 @@ const { parseTelegramMessage, resolveLink } = require('./mediaAdmin');
 const { downloadBotService } = require('../bots/downloadBot');
 const { deliverWithTelegramAd } = require('./telegramAds');
 const { scheduleDeletion } = require('./telegramDeletion');
+const { formatDownloadCaption } = require('../lib/botBranding');
 
 async function deliverManual(row, user, settings = {}) {
   let bot;
@@ -12,7 +13,7 @@ async function deliverManual(row, user, settings = {}) {
   catch { throw new AppError(503, 'DELIVERY_BOT_UNAVAILABLE', 'ربات دریافت فایل روی هاست هنوز پیکربندی نشده است.'); }
   const resolve = (name) => bot.telegram.getChat(name);
   const target = await resolveLink(row.telegram_url, null, null, resolve);
-  const caption = String(settings['download.caption'] || '').replaceAll('{title}', row.content_title || '').replaceAll('{version}', row.version_title || '').slice(0, 900);
+  const caption = formatDownloadCaption(settings['download.caption'], { siteName:settings['site.name'], title:row.content_title, version:row.version_title });
   let sent;
   try {
     sent = await deliverWithTelegramAd(user.id, button => downloadBotService.copyMedia(user.tg_chat_id, target.chatId, target.messageId, caption, button));

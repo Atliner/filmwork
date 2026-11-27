@@ -13,6 +13,7 @@ const {
 } = require('../lib/telegram');
 const { ownerIds } = require('../middleware/auth');
 const { AppError } = require('../lib/errors');
+const siteSettings = require('../services/siteSettings');
 
 const {
   normalizeDigits,
@@ -286,7 +287,8 @@ class AdminBotService {
     });
     this.bot.command('start', detach(async (ctx) => {
       if (!authorized(ctx) || !ctx.from || !ownerIds().has(String(ctx.from.id))) return;
-      await safeReply(ctx, 'ربات خصوصی مدیریت Filmwork فعال است. برای ورود امن /panel را ارسال کنید.');
+      const siteName = await siteSettings.getSiteName();
+      await safeReply(ctx, `ربات خصوصی مدیریت ${siteName} فعال است. برای ورود امن /panel را ارسال کنید.`);
     }, 'start'));
 
     this.bot.command('panel', detach(async (ctx) => {

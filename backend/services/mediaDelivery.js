@@ -10,6 +10,7 @@ const {
 const { downloadBotService } = require('../bots/downloadBot');
 const { scheduleDeletion } = require('./telegramDeletion');
 const { deliverWithTelegramAd } = require('./telegramAds');
+const { formatDownloadCaption } = require('../lib/botBranding');
 
 async function getMedia(publicId) {
   const rows = await query(
@@ -117,12 +118,6 @@ async function deliverSubtitleBestEffort(user, media, settings) {
  * copy is the authoritative check for private channel messages; public links also
  * receive a lightweight HTTP deletion-marker probe before copying.
  */
-function buildCaption(template, media) {
-  return String(template || '')
-    .replaceAll('{title}', String(media.title || ''))
-    .replaceAll('{version}', String(media.version_label || ''));
-}
-
 async function deliverMedia(publicId, user, settings = {}) {
   try {
     downloadBotService.ensureReady();
@@ -148,7 +143,7 @@ async function deliverMedia(publicId, user, settings = {}) {
       continue;
     }
 
-    const caption = buildCaption(settings['download.caption'], media).slice(0, 900);
+    const caption = formatDownloadCaption(settings['download.caption'], { siteName:settings['site.name'], title:media.title, version:media.version_label });
     // Older/manual rows can contain only a link. Deliver that link without pretending
     // that Bot API copying was possible.
     if (!media.primary_chat_id || !media.primary_message_id) {

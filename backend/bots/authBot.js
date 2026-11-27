@@ -9,6 +9,7 @@ const {
   encryptPhone,
 } = require('../lib/security');
 const { telegramErrorDescription } = require('../lib/telegram');
+const siteSettings = require('../services/siteSettings');
 
 function normalizePhone(phone) {
   const cleaned = String(phone || '').replace(/[^\d+]/g, '');
@@ -78,8 +79,9 @@ class AuthBotService {
       });
     };
     this.bot.start(dispatch(async (ctx) => {
+      const siteName = await siteSettings.getSiteName();
       await ctx.reply(
-        'برای ورود امن به Filmwork، شماره تلگرام خودتان را با دکمه زیر به اشتراک بگذارید. کد ورود فقط پنج دقیقه معتبر است.',
+        `برای ورود امن به ${siteName}، شماره تلگرام خودتان را با دکمه زیر به اشتراک بگذارید. کد ورود فقط پنج دقیقه معتبر است.`,
         Markup.keyboard([
           Markup.button.contactRequest('اشتراک شماره و دریافت کد'),
         ]).resize().oneTime(),
@@ -184,8 +186,9 @@ class AuthBotService {
         }
         if (!code) throw new Error('ساخت کد یکتا ممکن نشد؛ دوباره تلاش کنید.');
 
+        const siteName = await siteSettings.getSiteName();
         await ctx.reply(
-          `کد ورود Filmwork شما:\n\n${code}\n\nاین کد را در وب‌سایت وارد کنید. کد را در اختیار دیگران نگذارید.`,
+          `کد ورود ${siteName} شما:\n\n${code}\n\nاین کد را در وب‌سایت وارد کنید. کد را در اختیار دیگران نگذارید.`,
           Markup.removeKeyboard(),
         );
       } catch (error) {

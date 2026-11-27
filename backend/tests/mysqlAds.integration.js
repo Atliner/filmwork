@@ -574,3 +574,43 @@ test('manual Telegram version appears and delivers, survives editing, and counts
     await query('DELETE FROM contents WHERE id=:id',{id:c.insertId});
   }
 });
+
+test('bot and manual deliveries use the current site name and preserve custom caption across renames', async () => {
+  const siteSettings = require('../services/siteSettings');
+  const { downloadBotService } = require('../bots/downloadBot');
+  const originals = { ensureReady:downloadBotService.ensureReady, copyMedia:downloadBotService.copyMedia };
+  const savedSettings = await query("SELECT setting_key,setting_value FROM app_settings WHERE setting_key IN ('site.name','download.caption','download.delete_after_minutes')");
+  const captured=[]; downloadBotService.ensureReady=()=>({telegram:{getChat:async()=>({id:-100123})}});
+  downloadBotService.copyMedia=async (...args)=>{ captured.push(args); return {message_id:123}; };
+  const contentId=crypto.randomUUID(), botId=crypto.randomUUID(), manualId=crypto.randomUUID();
+  const content=await query("INSERT INTO contents (asset_uuid,content_type,title,slug,status) VALUES (:id,'movie','تست عنوان',:id,'published')",{id:contentId});
+  try {
+    await siteSettings.write({'site.name':'برند قدیم','download.caption':'برند قدیم | Filmwork | @Filmwork | {title} | {version}', 'download.delete_after_minutes':'0'});
+    await siteSettings.write({'site.name':'برند جدید'});
+    const current=await siteSettings.read();
+    assert.equal(current['download.caption'],'{site_name} | {site_name} | @Filmwork | {title} | {version}');
+    const raw=(await query("SELECT setting_value FROM app_settings WHERE setting_key='download.caption'"))[0].setting_value;
+    assert.equal(raw,current['download.caption']);
+    await query("INSERT INTO media_links (public_id,content_id,version_label,resolution,file_size_bytes,tg_link_primary,primary_chat_id,primary_message_id) VALUES (:id,:content,'رباتی','720p',100,'https://t.me/c/123/1',-100123,1)",{id:botId,content:content.insertId});
+    const version=await query("INSERT INTO content_versions (content_id,kind,title,resolution) VALUES (:content,'sub','دستی','720p')",{content:content.insertId});
+    await query("INSERT INTO content_version_links (public_id,version_id,telegram_url) VALUES (:id,:version,'https://t.me/c/123/2')",{id:manualId,version:version.insertId});
+    for (const mediaId of [botId,manualId]) {
+      const result=await request('/api/download','POST',{mediaId});
+      assert.equal(result.response.status,200,JSON.stringify(result.data));
+      assert.match(result.data.message,/برند جدید/);
+    }
+    assert.equal(captured.length,2);
+    assert.equal(captured[0][3],'برند جدید | برند جدید | @Filmwork | تست عنوان | رباتی');
+    assert.equal(captured[1][3],'برند جدید | برند جدید | @Filmwork | تست عنوان | دستی');
+    const attempts=await Promise.allSettled([siteSettings.write({'site.name':'نام اول'}),siteSettings.write({'site.name':'نام دوم'})]);
+    assert.ok(attempts.every(item=>item.status==='fulfilled'));
+    const end=await siteSettings.read();
+    assert.ok(['نام اول','نام دوم'].includes(end['site.name']));
+    assert.equal(end['download.caption'],'{site_name} | {site_name} | @Filmwork | {title} | {version}');
+  } finally {
+    downloadBotService.ensureReady=originals.ensureReady; downloadBotService.copyMedia=originals.copyMedia;
+    await query('DELETE FROM contents WHERE id=:id',{id:content.insertId});
+    await query("DELETE FROM app_settings WHERE setting_key IN ('site.name','download.caption','download.delete_after_minutes')");
+    for (const row of savedSettings) await query('INSERT INTO app_settings (setting_key,setting_value) VALUES (:key,:value)',{key:row.setting_key,value:row.setting_value});
+  }
+});
