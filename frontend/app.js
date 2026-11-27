@@ -1528,7 +1528,7 @@
         if (!resolutions.has(item.resolution)) resolutions.set(item.resolution, []);
         resolutions.get(item.resolution).push(item);
       }
-      const renderVersions = (resolutions) => [...resolutions.entries()].map(([resolution, items]) => `<div class="resolution-label">${escapeHtml(resolution)}</div>${items.map((item) => `<button class="download-option" type="button" data-download-media="${escapeHtml(item.id)}"><span><strong>${item.episode ? `قسمت ${formatNumber(item.episode)} · ` : ''}${escapeHtml(item.version)}${item.encoder ? ` · ${escapeHtml(item.encoder)}` : ''}</strong><span>${escapeHtml(item.quality || item.subtitleType)}${item.episodeTitle ? ` · ${escapeHtml(item.episodeTitle)}` : ''}</span></span><b>${formatBytes(item.fileSizeBytes)}</b></button>`).join('')}`).join('');
+      const renderVersions = (resolutions) => [...resolutions.entries()].map(([resolution, items]) => `<div class="resolution-label">${escapeHtml(resolution)}</div>${items.map((item) => `<button class="download-option" type="button" data-download-media="${escapeHtml(item.id)}"><span><strong>${item.episode ? `قسمت ${formatNumber(item.episode)} · ` : ''}${escapeHtml(item.version)}${item.encoder ? ` · ${escapeHtml(item.encoder)}` : ''}</strong><span>${escapeHtml(item.quality || item.subtitleType)}${item.episodeTitle ? ` · ${escapeHtml(item.episodeTitle)}` : ''}</span></span><b>${item.sizeText ? escapeHtml(item.sizeText) : formatBytes(item.fileSizeBytes)}</b></button>`).join('')}`).join('');
       const renderAudioGroups = (audioGroups, openFirst = true) => [...audioGroups.entries()].map(([audioLabel, resolutions], index) => `<details class="tree-group ${seasons.size > 1 || !seasons.has('فیلم') ? 'nested' : ''}" ${openFirst && index === 0 ? 'open' : ''}><summary><span>${escapeHtml(audioLabel)}</span><small>${formatNumber([...resolutions.values()].flat().length)} نسخه</small></summary><div class="tree-children">${renderVersions(resolutions)}</div></details>`).join('');
       const isSeriesTree = seasons.size > 1 || !seasons.has('فیلم');
       const tree = isSeriesTree
@@ -1639,7 +1639,7 @@
 
   async function invokeDelivery(mediaId) {
     const button = $('#confirm-delivery');
-    if (button) { button.disabled = true; button.innerHTML = '<span class="spinner"></span> در حال بررسی سه نسخه'; }
+    if (button) { button.disabled = true; button.innerHTML = '<span class="spinner"></span> در حال بررسی نسخه‌های ذخیره‌شده'; }
     try {
       const result = await api('/download', { method: 'POST', body: JSON.stringify({ mediaId }) });
       const link = safeTelegramBotUrl(result.downloadBotUrl) || safeTelegramBotUrl(state.config.downloadBotUrl);

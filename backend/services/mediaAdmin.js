@@ -10,16 +10,17 @@ const FIELDS = [
   'public_id', 'season_number', 'episode_number', 'episode_title', 'version_label',
   'audio_type', 'subtitle_type', 'resolution', 'quality_label', 'encoder',
   'file_size_bytes', 'mime_type', 'stream_url', 'is_active',
-  'tg_link_primary', 'tg_link_fallback_1', 'tg_link_fallback_2',
+  'tg_link_primary', 'tg_link_fallback_1', 'tg_link_fallback_2', 'tg_link_fallback_3',
   'primary_chat_id', 'primary_message_id', 'fallback_1_chat_id', 'fallback_1_message_id',
-  'fallback_2_chat_id', 'fallback_2_message_id', 'subtitle_link_primary',
-  'subtitle_link_fallback_1', 'subtitle_link_fallback_2', 'subtitle_primary_message_id',
-  'subtitle_fallback_1_message_id', 'subtitle_fallback_2_message_id', 'subtitle_file_size_bytes',
+  'fallback_2_chat_id', 'fallback_2_message_id', 'fallback_3_chat_id', 'fallback_3_message_id', 'subtitle_link_primary',
+  'subtitle_link_fallback_1', 'subtitle_link_fallback_2', 'subtitle_link_fallback_3', 'subtitle_primary_message_id',
+  'subtitle_fallback_1_message_id', 'subtitle_fallback_2_message_id', 'subtitle_fallback_3_message_id', 'subtitle_file_size_bytes',
 ];
 const REPLICAS = [
   { link: 'tg_link_primary', chat: 'primary_chat_id', message: 'primary_message_id', sub: 'subtitle_link_primary', subMessage: 'subtitle_primary_message_id' },
   { link: 'tg_link_fallback_1', chat: 'fallback_1_chat_id', message: 'fallback_1_message_id', sub: 'subtitle_link_fallback_1', subMessage: 'subtitle_fallback_1_message_id' },
   { link: 'tg_link_fallback_2', chat: 'fallback_2_chat_id', message: 'fallback_2_message_id', sub: 'subtitle_link_fallback_2', subMessage: 'subtitle_fallback_2_message_id' },
+  { link: 'tg_link_fallback_3', chat: 'fallback_3_chat_id', message: 'fallback_3_message_id', sub: 'subtitle_link_fallback_3', subMessage: 'subtitle_fallback_3_message_id' },
 ];
 const TEXT = { version_label: [120, true], resolution: [24, true], episode_title: [255, false], quality_label: [80, false], encoder: [100, false], mime_type: [120, false] };
 const INTS = { season_number: [1, 65535], episode_number: [1, 65535], file_size_bytes: [1, Number.MAX_SAFE_INTEGER], subtitle_file_size_bytes: [1, Number.MAX_SAFE_INTEGER] };
@@ -51,7 +52,7 @@ async function resolveLink(raw, referenceUrl, referenceChat, resolveChat) {
   try { old = parseTelegramMessage(referenceUrl); } catch { /* old records may have legacy URLs */ }
   if (old?.username === parsed.username && referenceChat) parsed.chatId = String(referenceChat);
   else {
-    for (const prefix of ['TELEGRAM_PRIMARY', 'TELEGRAM_FALLBACK_1', 'TELEGRAM_FALLBACK_2']) {
+    for (const prefix of ['TELEGRAM_PRIMARY', 'TELEGRAM_FALLBACK_1', 'TELEGRAM_FALLBACK_2', 'TELEGRAM_FALLBACK_3']) {
       if (String(process.env[`${prefix}_USERNAME`] || '').replace(/^@/, '').toLowerCase() === parsed.username && process.env[`${prefix}_CHAT_ID`]) parsed.chatId = String(process.env[`${prefix}_CHAT_ID`]);
     }
     if (!parsed.chatId) {
@@ -108,6 +109,7 @@ async function prepareChanges(row, raw, resolveChat = (name) => downloadBotServi
     assert(!result[r.sub] || result[r.link], 422, 'SUBTITLE_CHANNEL_MISMATCH', 'زیرنویس بدون فایل همان کانال قابل ثبت نیست.');
   }
   if (replicaChanged) assert(!result.tg_link_fallback_2 || result.tg_link_fallback_1, 422, 'INVALID_REPLICAS', 'برای پشتیبان ۲، ابتدا پشتیبان ۱ را وارد کنید.');
+  if (replicaChanged) assert(!result.tg_link_fallback_3 || result.tg_link_fallback_2, 422, 'INVALID_REPLICAS', 'برای پشتیبان ۳، ابتدا پشتیبان ۲ را وارد کنید.');
   assert(!result.is_active || result.tg_link_primary, 422, 'INVALID_REPLICAS', 'فایل فعال باید لینک اصلی داشته باشد.');
   const changed = Object.fromEntries(FIELDS.filter(k => k !== 'public_id' && String(result[k] ?? '') !== String(row[k] ?? '')).map(k => [k, result[k]]));
   return { changed, replicaChanged };
@@ -159,4 +161,4 @@ async function remove(assetId, mediaId, expected) {
   });
   return { deleted: true };
 }
-module.exports = { FIELDS, REPLICAS, revision, dto, parseTelegramMessage, prepareChanges, update, remove };
+module.exports = { FIELDS, REPLICAS, revision, dto, parseTelegramMessage, resolveLink, prepareChanges, update, remove };

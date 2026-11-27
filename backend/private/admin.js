@@ -758,11 +758,14 @@
         mode: 'edit',
         step: 2,
         draft: draftFromContent(data.content, data.versions),
+        manualRevision: data.manualRevision,
         versions: data.versions.map((version) => ({
+          id: version.id,
           kind: version.kind,
           title: version.title,
           resolution: version.resolution || '',
           links: (version.links || []).map((link) => ({
+            id: link.id,
             season: link.season ?? '', episode: link.episode ?? '', title: link.title || '',
             label: link.label || '', sizeText: link.sizeText || '',
             streamUrl: link.streamUrl || '', subtitleUrl: link.subtitleUrl || '',
@@ -1032,6 +1035,7 @@
       ['اصلی', 'tg_link_primary', 'primary_chat_id', 'primary_message_id', 'subtitle_link_primary', 'subtitle_primary_message_id'],
       ['پشتیبان ۱', 'tg_link_fallback_1', 'fallback_1_chat_id', 'fallback_1_message_id', 'subtitle_link_fallback_1', 'subtitle_fallback_1_message_id'],
       ['پشتیبان ۲', 'tg_link_fallback_2', 'fallback_2_chat_id', 'fallback_2_message_id', 'subtitle_link_fallback_2', 'subtitle_fallback_2_message_id'],
+      ['پشتیبان ۳', 'tg_link_fallback_3', 'fallback_3_chat_id', 'fallback_3_message_id', 'subtitle_link_fallback_3', 'subtitle_fallback_3_message_id'],
     ];
     return `<div class="callout">${ICONS.info}<span>فایل‌های ربات مستقیم از پایگاه داده نمایش داده می‌شوند. هر فایل دکمهٔ ذخیره و حذف مستقل دارد. تغییر لینک، شناسهٔ کانال و پیام را نیز برای ربات دریافت به‌روزرسانی می‌کند؛ نسخه‌های کانال‌ها حذف نمی‌شوند. لینک‌های زیرنویس باید در همان کانال فایل باشند.</span></div>
       <div class="version-list"><h3>فایل‌های ثبت‌شده با ربات (${fa(media.length)})</h3>${media.map((item, index) => `<details class="version-card">
@@ -1065,7 +1069,7 @@
   }
 
   function botMediaChanges(item) {
-    const keys = ['version_label','resolution','audio_type','subtitle_type','season_number','episode_number','episode_title','quality_label','encoder','file_size_bytes','subtitle_file_size_bytes','mime_type','stream_url','is_active','tg_link_primary','tg_link_fallback_1','tg_link_fallback_2','subtitle_link_primary','subtitle_link_fallback_1','subtitle_link_fallback_2'];
+    const keys = ['version_label','resolution','audio_type','subtitle_type','season_number','episode_number','episode_title','quality_label','encoder','file_size_bytes','subtitle_file_size_bytes','mime_type','stream_url','is_active','tg_link_primary','tg_link_fallback_1','tg_link_fallback_2','tg_link_fallback_3','subtitle_link_primary','subtitle_link_fallback_1','subtitle_link_fallback_2','subtitle_link_fallback_3'];
     const normalize = (value) => value == null ? '' : String(value);
     return Object.fromEntries(keys.filter((key) => key === 'is_active' ? Boolean(item[key]) !== Boolean(item._saved[key]) : normalize(item[key]) !== normalize(item._saved[key])).map((key) => [key, key === 'is_active' ? Boolean(item[key]) : item[key]]));
   }
@@ -1217,12 +1221,15 @@
       status: draft.status,
       sourceType: editor.meta ? editor.sourceKind : undefined,
       sourceUrl: editor.sourceLink || undefined,
+      manualRevision: editor.manualRevision,
       versions: editor.versions.map((version, index) => ({
+        id: version.id || undefined,
         kind: version.kind,
         title: version.title || version.resolution || `نسخه ${index + 1}`,
         resolution: version.resolution || version.title,
         sortOrder: index,
         links: version.links.map((link) => ({
+          id: link.id || undefined,
           season: link.season === '' ? null : Number(link.season),
           episode: link.episode === '' ? null : Number(link.episode),
           title: link.title || null,
@@ -2333,7 +2340,7 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
               <li>هر دستور تا ارسال دستور جدید در همان گفت‌وگو فعال است؛ برای هر فایل مشخصات از نام خودش استخراج می‌شود مگر آنکه هشتگ صریح داده باشید.</li>
             </ul>
             <ol start="3">
-              <li>فایل ویدیو را بفرستید. ربات آن را در سه کانال ذخیره (Copy) می‌کند و لینک‌ها را در کارت دانلود ثبت می‌کند.</li>
+              <li>فایل ویدیو را بفرستید. ربات آن را در کانال‌های تنظیم‌شده ذخیره (Copy) می‌کند و لینک‌ها را در کارت دانلود ثبت می‌کند.</li>
               <li>اگر زیرنویس «مجزا» باشد، بعد از ویدیو ۱۰ ثانیه فرصت دارید فایل SRT/VTT را بفرستید؛ خودکار به همان کارت وصل می‌شود.</li>
             </ol>
             <div class="callout">${ICONS.info}<span>لینک پخش آنلاین و لینک زیرنویس/دوبله در نسخه‌های پنل، از همین پیام‌های کانال خوانده می‌شوند؛ تا زمان دریافت فایل، می‌توانید آن‌ها را دستی هم وارد کنید.</span></div>

@@ -102,6 +102,7 @@ function versionDto(version, links) {
     sortOrder: Number(version.sort_order),
     links: links.map((link) => ({
       id: String(link.id),
+      publicId: link.public_id,
       season: link.season_number,
       episode: link.episode_number,
       title: link.episode_title,
@@ -114,6 +115,23 @@ function versionDto(version, links) {
       source: link.source,
     })),
   };
+}
+
+function manualTree(versions, links) {
+  const byVersion = new Map();
+  for (const link of links) {
+    const key = String(link.version_id);
+    if (!byVersion.has(key)) byVersion.set(key, []);
+    byVersion.get(key).push(link);
+  }
+  return versions.map((version) => {
+    const all = byVersion.get(String(version.id)) || [];
+    const manual = all.filter((link) => !link.media_link_id);
+    return all.length && !manual.length ? null : versionDto(version, manual);
+  }).filter(Boolean);
+}
+function manualRevision(versions, links) {
+  return crypto.createHash('sha256').update(JSON.stringify(manualTree(versions, links))).digest('hex');
 }
 
 async function logEvent(kind, title, detail, connection = null, contentAssetId = null) {
@@ -307,19 +325,10 @@ const store = {
       : [];
     // Source records are shown independently of the legacy editable projection.
     const media = await query('SELECT * FROM media_links WHERE content_id = :id ORDER BY id', { id: rows[0].id });
-    const byVersion = new Map();
-    for (const link of links) {
-      const key = String(link.version_id);
-      if (!byVersion.has(key)) byVersion.set(key, []);
-      byVersion.get(key).push(link);
-    }
     return {
       content: detailRow(rows[0]),
-      versions: versions.map((version) => {
-        const all = byVersion.get(String(version.id)) || [];
-        const manual = all.filter((link) => !link.media_link_id);
-        return all.length && !manual.length ? null : versionDto(version, manual);
-      }).filter(Boolean),
+      versions: manualTree(versions, links),
+      manualRevision: manualRevision(versions, links),
       botMedia: media.map(mediaAdmin.dto),
       counts: {
         seasons: rows[0].season_count === null ? null : Number(rows[0].season_count),
@@ -445,14 +454,7 @@ const store = {
         },
       );
       if (Array.isArray(payload.versions)) {
-        // Legacy bot projections can share a version with manual links. Never
-        // cascade-delete them when saving the separate manual editor.
-        await connection.execute(`DELETE vcl FROM content_version_links vcl
-          JOIN content_versions cv ON cv.id = vcl.version_id
-          WHERE cv.content_id = :id AND vcl.media_link_id IS NULL`, { id: rows[0].id });
-        await connection.execute(`DELETE FROM content_versions WHERE content_id = :id
-          AND NOT EXISTS (SELECT 1 FROM content_version_links WHERE version_id = content_versions.id)`, { id: rows[0].id });
-        await store.writeVersions(connection, rows[0].id, payload.versions);
+        await store.updateManualVersions(connection, rows[0].id, payload.versions, payload.manualRevision);
       }
       await store.syncSeriesCounts(connection, rows[0].id, payload);
       await logEvent('content', `محتوا ویرایش شد: ${payload.titleFa}`, `وضعیت ${payload.status}`, connection, assetId);
@@ -505,13 +507,14 @@ const store = {
       for (const link of version.links || []) {
         await connection.execute(
           `INSERT INTO content_version_links
-            (version_id, season_number, episode_number, episode_title, label, size_text,
+            (version_id, public_id, season_number, episode_number, episode_title, label, size_text,
              stream_url, subtitle_url, dub_url, telegram_url, source)
            VALUES
-            (:versionId, :season, :episode, :title, :label, :sizeText,
+            (:versionId, :publicId, :season, :episode, :title, :label, :sizeText,
              :streamUrl, :subtitleUrl, :dubUrl, :telegramUrl, :source)`,
           {
             versionId: inserted.insertId,
+            publicId: crypto.randomUUID(),
             season: link.season,
             episode: link.episode,
             title: link.title,
@@ -526,6 +529,44 @@ const store = {
         );
       }
     }
+  },
+
+  async updateManualVersions(connection, contentId, versions, expectedRevision) {
+    const [oldVersions] = await connection.execute('SELECT * FROM content_versions WHERE content_id = :id ORDER BY kind, sort_order, id FOR UPDATE', { id: contentId });
+    const [oldLinks] = await connection.execute(`SELECT vcl.* FROM content_version_links vcl JOIN content_versions cv ON cv.id=vcl.version_id
+      WHERE cv.content_id=:id ORDER BY COALESCE(vcl.season_number,0), COALESCE(vcl.episode_number,0), vcl.id FOR UPDATE`, { id: contentId });
+    assert(typeof expectedRevision === 'string' && expectedRevision === manualRevision(oldVersions, oldLinks), 409, 'MANUAL_VERSIONS_CONFLICT', 'نسخه‌های دستی تغییر کرده‌اند؛ صفحه را بازخوانی و دوباره ویرایش کنید.');
+    const oldVersionIds = new Set(oldVersions.map(v => String(v.id)));
+    const oldManualIds = new Set(oldLinks.filter(l => !l.media_link_id).map(l => String(l.id)));
+    const usedVersions = new Set(), usedLinks = new Set();
+    for (const [index, version] of versions.entries()) {
+      let versionId = version.id;
+      const vParams = { contentId, kind: version.kind, title: version.title, resolution: version.resolution, sortOrder: version.sortOrder ?? index };
+      if (versionId) {
+        assert(oldVersionIds.has(versionId) && !usedVersions.has(versionId), 409, 'MANUAL_VERSIONS_CONFLICT', 'شناسه نسخه دستی معتبر نیست.');
+        await connection.execute('UPDATE content_versions SET kind=:kind,title=:title,resolution=:resolution,sort_order=:sortOrder WHERE id=:id AND content_id=:contentId', { ...vParams, id:versionId });
+        usedVersions.add(versionId);
+      } else {
+        const [created] = await connection.execute('INSERT INTO content_versions (content_id,kind,title,resolution,sort_order) VALUES (:contentId,:kind,:title,:resolution,:sortOrder)', vParams);
+        versionId = String(created.insertId); usedVersions.add(versionId);
+      }
+      for (const link of version.links || []) {
+        const params = { versionId, season:link.season, episode:link.episode, title:link.title, label:link.label,
+          sizeText:link.sizeText, streamUrl:link.streamUrl, subtitleUrl:link.subtitleUrl, dubUrl:link.dubUrl, telegramUrl:link.telegramUrl, source:link.source || 'manual' };
+        if (link.id) {
+          assert(oldManualIds.has(link.id) && !usedLinks.has(link.id), 409, 'MANUAL_VERSIONS_CONFLICT', 'شناسه لینک دستی معتبر نیست.');
+          await connection.execute(`UPDATE content_version_links SET version_id=:versionId,season_number=:season,episode_number=:episode,episode_title=:title,
+            label=:label,size_text=:sizeText,stream_url=:streamUrl,subtitle_url=:subtitleUrl,dub_url=:dubUrl,telegram_url=:telegramUrl,source=:source WHERE id=:id AND media_link_id IS NULL`, { ...params, id:link.id });
+          usedLinks.add(link.id);
+        } else {
+          await connection.execute(`INSERT INTO content_version_links (version_id,public_id,season_number,episode_number,episode_title,label,size_text,stream_url,subtitle_url,dub_url,telegram_url,source)
+            VALUES (:versionId,:publicId,:season,:episode,:title,:label,:sizeText,:streamUrl,:subtitleUrl,:dubUrl,:telegramUrl,:source)`, { ...params, publicId:crypto.randomUUID() });
+        }
+      }
+    }
+    for (const id of oldManualIds) if (!usedLinks.has(id)) await connection.execute('DELETE FROM content_version_links WHERE id=:id AND media_link_id IS NULL', { id });
+    for (const id of oldVersionIds) if (!usedVersions.has(id)) await connection.execute(`DELETE FROM content_versions WHERE id=:id AND content_id=:contentId
+      AND NOT EXISTS (SELECT 1 FROM content_version_links WHERE version_id=:id)`, { id, contentId });
   },
 
   /**

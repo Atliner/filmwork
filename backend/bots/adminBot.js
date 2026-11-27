@@ -191,6 +191,7 @@ function storageTargets() {
     ['fallback1', process.env.TELEGRAM_FALLBACK_1_CHAT_ID, process.env.TELEGRAM_FALLBACK_1_USERNAME],
     ['fallback2', process.env.TELEGRAM_FALLBACK_2_CHAT_ID, process.env.TELEGRAM_FALLBACK_2_USERNAME],
   ];
+  if (process.env.TELEGRAM_FALLBACK_3_CHAT_ID) values.push(['fallback3', process.env.TELEGRAM_FALLBACK_3_CHAT_ID, process.env.TELEGRAM_FALLBACK_3_USERNAME]);
   for (const [name, chatId] of values) {
     if (!chatId || !/^-?\d+$/.test(String(chatId))) {
       throw new Error(`Telegram storage target ${name} is not configured with a numeric chat id`);
@@ -462,7 +463,7 @@ class AdminBotService {
         link: buildTelegramMessageLink(target.chatId, messageId, target.username),
       };
     }));
-    return { primary: copies[0], fallback1: copies[1], fallback2: copies[2] };
+    return { primary: copies[0], fallback1: copies[1], fallback2: copies[2], ...(copies[3] ? { fallback3: copies[3] } : {}) };
   }
 
   async handleMedia(ctx, message) {
@@ -532,7 +533,7 @@ class AdminBotService {
       null,
       `tg:${session.content_id}:${session.directives.seasonNumber || 0}:${session.directives.episodeNumber || 0}:${ingestIdentity}`.slice(0, 190),
     );
-    await safeReply(ctx, 'فایل در هر سه کانال ذخیره و کارت دانلود ایجاد شد ✅');
+    await safeReply(ctx, `فایل در ${copies.fallback3 ? 'چهار' : 'سه'} کانال ذخیره و کارت دانلود ایجاد شد ✅`);
   }
 
   scheduleFinalize(bundleId, delayMs) {
@@ -608,21 +609,21 @@ class AdminBotService {
          public_id, content_id, season_number, episode_number, version_label,
          audio_type, subtitle_type, resolution, quality_label, encoder,
          file_size_bytes, mime_type,
-         tg_link_primary, tg_link_fallback_1, tg_link_fallback_2,
+         tg_link_primary, tg_link_fallback_1, tg_link_fallback_2, tg_link_fallback_3,
          primary_chat_id, primary_message_id, fallback_1_chat_id, fallback_1_message_id,
-         fallback_2_chat_id, fallback_2_message_id,
-         subtitle_link_primary, subtitle_link_fallback_1, subtitle_link_fallback_2,
-         subtitle_primary_message_id, subtitle_fallback_1_message_id, subtitle_fallback_2_message_id,
+         fallback_2_chat_id, fallback_2_message_id, fallback_3_chat_id, fallback_3_message_id,
+         subtitle_link_primary, subtitle_link_fallback_1, subtitle_link_fallback_2, subtitle_link_fallback_3,
+         subtitle_primary_message_id, subtitle_fallback_1_message_id, subtitle_fallback_2_message_id, subtitle_fallback_3_message_id,
          subtitle_file_size_bytes, ingest_key
        ) VALUES (
          :publicId, :contentId, :season, :episode, :version,
          :audioType, :subtitleType, :resolution, :quality, :encoder,
          :fileSize, :mimeType,
-         :primaryLink, :fallback1Link, :fallback2Link,
+         :primaryLink, :fallback1Link, :fallback2Link, :fallback3Link,
          :primaryChatId, :primaryMessageId, :fallback1ChatId, :fallback1MessageId,
-         :fallback2ChatId, :fallback2MessageId,
-         :subtitlePrimaryLink, :subtitleFallback1Link, :subtitleFallback2Link,
-         :subtitlePrimaryMessageId, :subtitleFallback1MessageId, :subtitleFallback2MessageId,
+         :fallback2ChatId, :fallback2MessageId, :fallback3ChatId, :fallback3MessageId,
+         :subtitlePrimaryLink, :subtitleFallback1Link, :subtitleFallback2Link, :subtitleFallback3Link,
+         :subtitlePrimaryMessageId, :subtitleFallback1MessageId, :subtitleFallback2MessageId, :subtitleFallback3MessageId,
          :subtitleFileSize, :ingestKey
        )`,
       {
@@ -641,18 +642,23 @@ class AdminBotService {
         primaryLink: v.copies.primary.link,
         fallback1Link: v.copies.fallback1.link,
         fallback2Link: v.copies.fallback2.link,
+        fallback3Link: v.copies.fallback3?.link || null,
         primaryChatId: v.copies.primary.chatId,
         primaryMessageId: v.copies.primary.messageId,
         fallback1ChatId: v.copies.fallback1.chatId,
         fallback1MessageId: v.copies.fallback1.messageId,
         fallback2ChatId: v.copies.fallback2.chatId,
         fallback2MessageId: v.copies.fallback2.messageId,
+        fallback3ChatId: v.copies.fallback3?.chatId || null,
+        fallback3MessageId: v.copies.fallback3?.messageId || null,
         subtitlePrimaryLink: s?.copies?.primary?.link || null,
         subtitleFallback1Link: s?.copies?.fallback1?.link || null,
         subtitleFallback2Link: s?.copies?.fallback2?.link || null,
+        subtitleFallback3Link: s?.copies?.fallback3?.link || null,
         subtitlePrimaryMessageId: s?.copies?.primary?.messageId || null,
         subtitleFallback1MessageId: s?.copies?.fallback1?.messageId || null,
         subtitleFallback2MessageId: s?.copies?.fallback2?.messageId || null,
+        subtitleFallback3MessageId: s?.copies?.fallback3?.messageId || null,
         subtitleFileSize: s?.metadata?.fileSize || null,
         ingestKey,
       },

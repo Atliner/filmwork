@@ -78,6 +78,12 @@ jobs:
         run: |
           mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-telegram-deletion-queue.sql
           mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-telegram-deletion-queue.sql
+      - name: Verify media upgrade migrations are repeatable
+        run: |
+          for i in 1 2; do
+            mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-fourth-telegram-replica.sql
+            mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-manual-telegram-downloads.sql
+          done
       - name: Exercise transactions and delivery against MySQL
         shell: bash
         run: |

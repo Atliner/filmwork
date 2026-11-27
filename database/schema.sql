@@ -109,19 +109,24 @@ CREATE TABLE IF NOT EXISTS media_links (
   tg_link_primary VARCHAR(2048) NULL,
   tg_link_fallback_1 VARCHAR(2048) NULL,
   tg_link_fallback_2 VARCHAR(2048) NULL,
+  tg_link_fallback_3 VARCHAR(2048) NULL,
   primary_chat_id BIGINT NULL,
   primary_message_id BIGINT NULL,
   fallback_1_chat_id BIGINT NULL,
   fallback_1_message_id BIGINT NULL,
   fallback_2_chat_id BIGINT NULL,
   fallback_2_message_id BIGINT NULL,
+  fallback_3_chat_id BIGINT NULL,
+  fallback_3_message_id BIGINT NULL,
 
   subtitle_link_primary VARCHAR(2048) NULL,
   subtitle_link_fallback_1 VARCHAR(2048) NULL,
   subtitle_link_fallback_2 VARCHAR(2048) NULL,
+  subtitle_link_fallback_3 VARCHAR(2048) NULL,
   subtitle_primary_message_id BIGINT NULL,
   subtitle_fallback_1_message_id BIGINT NULL,
   subtitle_fallback_2_message_id BIGINT NULL,
+  subtitle_fallback_3_message_id BIGINT NULL,
   subtitle_file_size_bytes BIGINT UNSIGNED NULL,
 
   health_status ENUM('unchecked', 'healthy', 'promoted', 'unavailable') NOT NULL DEFAULT 'unchecked',
@@ -196,12 +201,14 @@ CREATE TABLE IF NOT EXISTS playback_progress (
 CREATE TABLE IF NOT EXISTS download_history (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id BIGINT UNSIGNED NOT NULL,
-  media_link_id BIGINT UNSIGNED NOT NULL,
+  media_link_id BIGINT UNSIGNED NULL,
+  manual_version_link_id BIGINT UNSIGNED NULL,
   delivery_method ENUM('telegram_copy', 'telegram_link') NOT NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (id),
   KEY idx_download_history_user (user_id, created_at),
   KEY idx_download_history_media (media_link_id),
+  KEY idx_download_history_manual (manual_version_link_id),
   CONSTRAINT fk_download_history_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_download_history_media FOREIGN KEY (media_link_id) REFERENCES media_links(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -454,6 +461,7 @@ CREATE TABLE IF NOT EXISTS content_versions (
 CREATE TABLE IF NOT EXISTS content_version_links (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   version_id BIGINT UNSIGNED NOT NULL,
+  public_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
   season_number SMALLINT UNSIGNED NULL,
   episode_number SMALLINT UNSIGNED NULL,
   episode_title VARCHAR(255) NULL,
@@ -470,9 +478,13 @@ CREATE TABLE IF NOT EXISTS content_version_links (
   PRIMARY KEY (id),
   KEY idx_version_links_tree (version_id, season_number, episode_number),
   UNIQUE KEY uq_version_link_media (media_link_id),
+  UNIQUE KEY uq_content_version_link_public (public_id),
   CONSTRAINT fk_version_link_version FOREIGN KEY (version_id) REFERENCES content_versions(id) ON DELETE CASCADE,
   CONSTRAINT fk_version_link_media FOREIGN KEY (media_link_id) REFERENCES media_links(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+SET @has_fk = (SELECT COUNT(*) FROM information_schema.table_constraints WHERE table_schema=DATABASE() AND table_name='download_history' AND constraint_name='fk_download_history_manual');
+SET @sql = IF(@has_fk=0, 'ALTER TABLE download_history ADD CONSTRAINT fk_download_history_manual FOREIGN KEY (manual_version_link_id) REFERENCES content_version_links(id) ON DELETE CASCADE', 'SELECT 1'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 CREATE TABLE IF NOT EXISTS admin_events (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -512,19 +524,24 @@ BEGIN
   SET
     tg_link_primary = tg_link_fallback_1,
     tg_link_fallback_1 = tg_link_fallback_2,
-    tg_link_fallback_2 = NULL,
+    tg_link_fallback_2 = tg_link_fallback_3,
+    tg_link_fallback_3 = NULL,
     primary_chat_id = fallback_1_chat_id,
     primary_message_id = fallback_1_message_id,
     fallback_1_chat_id = fallback_2_chat_id,
     fallback_1_message_id = fallback_2_message_id,
-    fallback_2_chat_id = NULL,
-    fallback_2_message_id = NULL,
+    fallback_2_chat_id = fallback_3_chat_id,
+    fallback_2_message_id = fallback_3_message_id,
+    fallback_3_chat_id = NULL,
+    fallback_3_message_id = NULL,
     subtitle_link_primary = subtitle_link_fallback_1,
     subtitle_link_fallback_1 = subtitle_link_fallback_2,
-    subtitle_link_fallback_2 = NULL,
+    subtitle_link_fallback_2 = subtitle_link_fallback_3,
+    subtitle_link_fallback_3 = NULL,
     subtitle_primary_message_id = subtitle_fallback_1_message_id,
     subtitle_fallback_1_message_id = subtitle_fallback_2_message_id,
-    subtitle_fallback_2_message_id = NULL,
+    subtitle_fallback_2_message_id = subtitle_fallback_3_message_id,
+    subtitle_fallback_3_message_id = NULL,
     health_status = IF(v_promoted IS NULL, 'unavailable', 'promoted'),
     failure_count = failure_count + 1,
     last_checked_at = CURRENT_TIMESTAMP(3),

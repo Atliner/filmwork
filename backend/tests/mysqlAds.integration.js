@@ -507,7 +507,7 @@ test('bot media edits update the delivery source, preserve linked/manual rows, d
     assert.ok(publicSources.data.sources.some(s=>s.id===mediaId && s.streamUrl==='https://example.com/new.mp4'));
     assert.ok(!JSON.stringify(publicSources.data).includes('t.me/c/'));
     detail=(await admin(`/api/admin/contents/${id}`)).data;
-    const saved=await admin(`/api/admin/contents/${id}`,'PATCH',{titleFa:'media editor',versions:detail.versions});
+    const saved=await admin(`/api/admin/contents/${id}`,'PATCH',{titleFa:'media editor',versions:detail.versions,manualRevision:detail.manualRevision});
     assert.equal(saved.status,200,JSON.stringify(saved.data));
     assert.equal((await query('SELECT id FROM content_version_links WHERE media_link_id=:id',{id:first.insertId})).length,1);
     assert.equal((await query("SELECT id FROM content_version_links WHERE stream_url='https://example.com/manual.mp4'")).length,1);
@@ -517,4 +517,54 @@ test('bot media edits update the delivery source, preserve linked/manual rows, d
     assert.equal((await query('SELECT id FROM media_links WHERE public_id=:id',{id:second})).length,1);
     assert.equal((await query("SELECT id FROM content_version_links WHERE stream_url='https://example.com/manual.mp4'")).length,1);
   } finally { await query('DELETE FROM contents WHERE id=:id',{id:content.insertId}); }
+});
+
+test('fourth replica and subtitle persist and shift intact through fallback promotion', async () => {
+  const { AdminBotService, parseDirectives } = require('../bots/adminBot');
+  const { promoteFallback } = require('../services/mediaDelivery');
+  const content = (await query('SELECT id FROM contents WHERE asset_uuid=:assetId', {assetId}))[0];
+  const copies = Object.fromEntries([['primary',111,1],['fallback1',222,2],['fallback2',333,3],['fallback3',444,4]].map(([name,chat,id]) => [name,{chatId:`-100${chat}`,messageId:id,link:`https://t.me/c/${chat}/${id}`} ]));
+  const subtitles = Object.fromEntries(Object.entries(copies).map(([name,copy]) => [name,{...copy,messageId:copy.messageId+10,link:copy.link.replace(/\d+$/, String(copy.messageId+10))}]));
+  const key=`fourth:${crypto.randomUUID()}`;
+  await new AdminBotService().insertMediaLink({content_id:content.id,directives:parseDirectives(`#اثر ${assetId} #نسخه V #نوع دوبله`)},{metadata:{fileName:'a.720p.mkv',fileSize:100,mimeType:'video/mp4'},copies},{metadata:{fileSize:10},copies:subtitles},key);
+  const [row] = await query('SELECT * FROM media_links WHERE ingest_key=:key',{key});
+  try {
+    assert.equal(row.tg_link_fallback_3,'https://t.me/c/444/4'); assert.equal(Number(row.subtitle_fallback_3_message_id),14);
+    await promoteFallback(row.id,row.primary_message_id,row.tg_link_primary,'test');
+    const [after] = await query('SELECT * FROM media_links WHERE id=:id',{id:row.id});
+    assert.equal(after.tg_link_fallback_2,'https://t.me/c/444/4'); assert.equal(Number(after.fallback_2_chat_id),-100444);
+    assert.equal(Number(after.subtitle_fallback_2_message_id),14); assert.equal(after.tg_link_fallback_3,null);
+  } finally { await query('DELETE FROM media_links WHERE id=:id',{id:row.id}); }
+});
+
+test('manual Telegram version appears and delivers, survives editing, and counts in history', async () => {
+  const { downloadBotService } = require('../bots/downloadBot');
+  const originals = { ensureReady:downloadBotService.ensureReady, copyMedia:downloadBotService.copyMedia };
+  const copied=[]; downloadBotService.ensureReady=()=>({telegram:{getChat:async()=>({id:-100123})}});
+  downloadBotService.copyMedia=async (...args)=>{ copied.push(args); return {message_id:98}; };
+  const id=crypto.randomUUID(), csrf='manual-test-csrf', cookie=`filmwork_admin=${signAdminToken('123456789',csrf)}`;
+  async function admin(method,body) { const res=await fetch(`${base}/api/admin/contents/${id}`,{method,headers:{cookie,'x-csrf-token':csrf,...(body?{'content-type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});return {status:res.status,data:await res.json()}; }
+  const c=await query("INSERT INTO contents (asset_uuid,content_type,title,slug,status) VALUES (:id,'movie','Manual',:id,'published')",{id});
+  const version=await query("INSERT INTO content_versions (content_id,kind,title,resolution) VALUES (:id,'dub','manual','720p')",{id:c.insertId});
+  const manualId=crypto.randomUUID(), link=await query("INSERT INTO content_version_links (public_id,version_id,telegram_url,size_text,source) VALUES (:id,:version,'https://t.me/c/123/55','1 GB','manual')",{id:manualId,version:version.insertId});
+  const empty=await query("INSERT INTO content_version_links (public_id,version_id,stream_url,source) VALUES (:id,:version,'https://example.com/only-stream','manual')",{id:crypto.randomUUID(),version:version.insertId});
+  try {
+    const listing=await request(`/api/contents/${id}/media-options`,'GET',undefined,'');
+    assert.equal(listing.data.items.length,1); assert.equal(listing.data.items[0].id,manualId); assert.equal(listing.data.items[0].sizeText,'1 GB');
+    const delivery=await request('/api/download','POST',{mediaId:manualId});
+    assert.equal(delivery.response.status,200,JSON.stringify(delivery.data));
+    assert.equal(String(copied[0][1]),'-100123'); assert.equal(copied[0][2],55);
+    assert.equal(Number((await query('SELECT COUNT(*) n FROM download_history WHERE manual_version_link_id=:id',{id:link.insertId}))[0].n),1);
+    const detail=(await admin('GET')).data;
+    detail.versions[0].links[0].label='edited';
+    const saved=await admin('PATCH',{titleFa:'Manual',versions:detail.versions,manualRevision:detail.manualRevision});
+    assert.equal(saved.status,200,JSON.stringify(saved.data));
+    assert.equal((await query('SELECT public_id FROM content_version_links WHERE id=:id',{id:link.insertId}))[0].public_id,manualId);
+    assert.equal(Number((await query('SELECT COUNT(*) n FROM download_history WHERE manual_version_link_id=:id',{id:link.insertId}))[0].n),1);
+    assert.equal((await admin('PATCH',{titleFa:'Manual',versions:detail.versions,manualRevision:detail.manualRevision})).status,409);
+    assert.ok((await request('/api/downloads')).data.items.some(x=>x.media.id===manualId));
+  } finally {
+    downloadBotService.ensureReady=originals.ensureReady; downloadBotService.copyMedia=originals.copyMedia;
+    await query('DELETE FROM contents WHERE id=:id',{id:c.insertId});
+  }
 });

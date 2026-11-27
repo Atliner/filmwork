@@ -69,6 +69,7 @@ const {
   ownerIds,
 } = require('./middleware/auth');
 const { deliverMedia } = require('./services/mediaDelivery');
+const { deliverManual } = require('./services/manualDelivery');
 const mediaAdmin = require('./services/mediaAdmin');
 const { processDeletions } = require('./services/telegramDeletion');
 const { checkDownloadAllowance } = require('./services/downloadPolicy');
@@ -156,6 +157,7 @@ function validateRuntimeConfiguration() {
       'TELEGRAM_PRIMARY_CHAT_ID',
       'TELEGRAM_FALLBACK_1_CHAT_ID',
       'TELEGRAM_FALLBACK_2_CHAT_ID',
+      'TELEGRAM_FALLBACK_3_CHAT_ID',
     ]) {
       const value = String(process.env[name] || '');
       if (value && !/^-?\d+$/.test(value)) {
@@ -576,12 +578,16 @@ app.post('/api/contents/:assetId/progress', requireUser, asyncRoute(async (req, 
 app.get('/api/downloads', requireUser, asyncRoute(async (req, res) => {
   const rows = await query(
     `SELECT dh.id AS download_id, dh.delivery_method, dh.created_at AS downloaded_at,
-            ml.public_id AS media_public_id, ml.resolution, ml.version_label, ml.file_size_bytes,
-            ml.audio_type, ml.season_number, ml.episode_number, c.*
+            COALESCE(ml.public_id,vcl.public_id) AS media_public_id,
+            COALESCE(ml.resolution,cv.resolution) AS resolution, COALESCE(ml.version_label,cv.title) AS version_label,
+            ml.file_size_bytes, COALESCE(ml.audio_type, IF(cv.kind='dub','dubbed','soft_sub')) AS audio_type,
+            COALESCE(ml.season_number,vcl.season_number) AS season_number, COALESCE(ml.episode_number,vcl.episode_number) AS episode_number, c.*
      FROM download_history dh
-     JOIN media_links ml ON ml.id = dh.media_link_id
-     JOIN contents c ON c.id = ml.content_id
-     WHERE dh.user_id = :userId AND c.status = 'published'
+     LEFT JOIN media_links ml ON ml.id=dh.media_link_id
+     LEFT JOIN content_version_links vcl ON vcl.id=dh.manual_version_link_id
+     LEFT JOIN content_versions cv ON cv.id=vcl.version_id
+     JOIN contents c ON c.id=COALESCE(ml.content_id,cv.content_id)
+     WHERE dh.user_id=:userId AND c.status='published'
      ORDER BY dh.created_at DESC LIMIT 100`,
     { userId: req.user.id },
   );
@@ -887,8 +893,22 @@ app.get('/api/contents/:assetId/media-options', asyncRoute(async (req, res) => {
               ml.file_size_bytes ASC`,
     { assetId: req.params.assetId },
   );
-  res.setHeader('Cache-Control', 'public, max-age=20');
-  res.json({ items: rows.map(mediaDto) });
+  const manualRows = await query(`SELECT vcl.*, cv.title AS version_title, cv.kind, cv.resolution
+    FROM content_version_links vcl JOIN content_versions cv ON cv.id=vcl.version_id
+    JOIN contents c ON c.id=cv.content_id
+    WHERE c.asset_uuid=:assetId AND c.status='published' AND vcl.media_link_id IS NULL
+      AND vcl.public_id IS NOT NULL AND vcl.telegram_url IS NOT NULL`, { assetId:req.params.assetId });
+  const knownLinks = new Set(rows.flatMap(row => [row.tg_link_primary, row.tg_link_fallback_1, row.tg_link_fallback_2, row.tg_link_fallback_3]).filter(Boolean));
+  const manual = manualRows.filter(row => {
+    if (knownLinks.has(row.telegram_url)) return false;
+    try { mediaAdmin.parseTelegramMessage(row.telegram_url); return true; } catch { return false; }
+  }).map(row => ({ id:row.public_id, season:row.season_number, episode:row.episode_number,
+    episodeTitle:row.episode_title, version:row.version_title, audioType:row.kind === 'dub' ? 'dubbed' : 'soft_sub',
+    audioLabel:row.kind === 'dub' ? 'دوبله' : 'سافت‌ساب', subtitleType:row.subtitle_url ? 'separate' : 'none',
+    resolution:row.resolution || row.version_title, quality:row.label, encoder:null, fileSizeBytes:0,
+    sizeText:row.size_text, subtitleFileSizeBytes:null, streamUrl:row.stream_url }));
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ items: [...rows.map(mediaDto), ...manual] });
 }));
 
 app.get('/api/contents/:assetId/comments', asyncRoute(async (req, res) => {
@@ -975,23 +995,20 @@ app.delete('/api/contents/:assetId/favorite', requireUser, asyncRoute(async (req
 app.post('/api/download', requireUser, asyncRoute(async (req, res) => {
   const mediaId = asString(req.body?.mediaId, 'شناسه فایل', { min: 36, max: 36 });
   const mediaRows = await query(
-    `SELECT ml.id FROM media_links ml
-     JOIN contents c ON c.id = ml.content_id
-     WHERE ml.public_id = :mediaId AND ml.is_active = TRUE AND c.status = 'published' LIMIT 1`,
-    { mediaId },
-  );
-  assert(mediaRows[0], 404, 'MEDIA_NOT_FOUND', 'فایل پیدا نشد.');
+    `SELECT ml.id FROM media_links ml JOIN contents c ON c.id = ml.content_id
+     WHERE ml.public_id = :mediaId AND ml.is_active = TRUE AND c.status = 'published' LIMIT 1`, { mediaId });
+  const manualRows = mediaRows.length ? [] : await query(
+    `SELECT vcl.*, cv.title AS version_title, c.title AS content_title FROM content_version_links vcl
+     JOIN content_versions cv ON cv.id=vcl.version_id JOIN contents c ON c.id=cv.content_id
+     WHERE vcl.public_id=:mediaId AND vcl.media_link_id IS NULL AND vcl.telegram_url IS NOT NULL AND c.status='published' LIMIT 1`, { mediaId });
+  assert(mediaRows[0] || manualRows[0], 404, 'MEDIA_NOT_FOUND', 'فایل پیدا نشد.');
   const isOwner = new Set(String(process.env.ADMIN_OWNER_IDS || '').split(',').map((id) => id.trim()).filter(Boolean)).has(String(req.user.tg_user_id));
   const settings = isOwner ? await siteSettings.read() : (await checkDownloadAllowance(req.user.id)).settings;
-  const result = await deliverMedia(mediaId, req.user, settings);
+  const result = mediaRows[0] ? await deliverMedia(mediaId, req.user, settings) : await deliverManual(manualRows[0], req.user, settings);
   await query(
-    `INSERT INTO download_history (user_id, media_link_id, delivery_method)
-     VALUES (:userId, :mediaLinkId, :deliveryMethod)`,
-    {
-      userId: req.user.id,
-      mediaLinkId: mediaRows[0].id,
-      deliveryMethod: result.deliveryMethod,
-    },
+    `INSERT INTO download_history (user_id, media_link_id, manual_version_link_id, delivery_method)
+     VALUES (:userId, :mediaLinkId, :manualLinkId, :deliveryMethod)`,
+    { userId:req.user.id, mediaLinkId:mediaRows[0]?.id || null, manualLinkId:manualRows[0]?.id || null, deliveryMethod:result.deliveryMethod },
   ).catch((error) => console.error('Download was delivered but history logging failed', error));
   res.setHeader('Cache-Control', 'no-store');
   res.json({
@@ -1894,6 +1911,7 @@ app.patch('/api/admin/contents/:assetId', requireAdmin, requireAdminCsrf, asyncR
   }
   const payload = updateContentPayload(await contentStore().getContent(req.params.assetId), req.body || {});
   if (!Object.hasOwn(req.body || {}, 'versions')) payload.versions = undefined;
+  else payload.manualRevision = req.body?.manualRevision;
   const updated = await contentStore().updateContent(req.params.assetId, payload);
   invalidatePeopleCache();
   res.json(updated);

@@ -54,19 +54,24 @@ async function promoteFallback(mediaId, expectedPrimaryMessageId, expectedPrimar
       `UPDATE media_links SET
          tg_link_primary = tg_link_fallback_1,
          tg_link_fallback_1 = tg_link_fallback_2,
-         tg_link_fallback_2 = NULL,
+         tg_link_fallback_2 = tg_link_fallback_3,
+         tg_link_fallback_3 = NULL,
          primary_chat_id = fallback_1_chat_id,
          primary_message_id = fallback_1_message_id,
          fallback_1_chat_id = fallback_2_chat_id,
          fallback_1_message_id = fallback_2_message_id,
-         fallback_2_chat_id = NULL,
-         fallback_2_message_id = NULL,
+         fallback_2_chat_id = fallback_3_chat_id,
+         fallback_2_message_id = fallback_3_message_id,
+         fallback_3_chat_id = NULL,
+         fallback_3_message_id = NULL,
          subtitle_link_primary = subtitle_link_fallback_1,
          subtitle_link_fallback_1 = subtitle_link_fallback_2,
-         subtitle_link_fallback_2 = NULL,
+         subtitle_link_fallback_2 = subtitle_link_fallback_3,
+         subtitle_link_fallback_3 = NULL,
          subtitle_primary_message_id = subtitle_fallback_1_message_id,
          subtitle_fallback_1_message_id = subtitle_fallback_2_message_id,
-         subtitle_fallback_2_message_id = NULL,
+         subtitle_fallback_2_message_id = subtitle_fallback_3_message_id,
+         subtitle_fallback_3_message_id = NULL,
          health_status = IF(:promotedUrl IS NULL, 'unavailable', 'promoted'),
          failure_count = failure_count + 1,
          last_checked_at = UTC_TIMESTAMP(3),
@@ -94,6 +99,7 @@ async function deliverSubtitleBestEffort(user, media, settings) {
     [media.primary_chat_id, media.subtitle_primary_message_id],
     [media.fallback_1_chat_id, media.subtitle_fallback_1_message_id],
     [media.fallback_2_chat_id, media.subtitle_fallback_2_message_id],
+    [media.fallback_3_chat_id, media.subtitle_fallback_3_message_id],
   ].filter((pair) => pair[0] && pair[1]);
   for (const [chatId, messageId] of attempts) {
     try {
@@ -125,7 +131,7 @@ async function deliverMedia(publicId, user, settings = {}) {
   }
   const timeout = Math.max(1000, Math.min(15_000, Number(process.env.TELEGRAM_LINK_CHECK_TIMEOUT_MS || 5000)));
 
-  for (let replicaAttempt = 0; replicaAttempt < 3; replicaAttempt += 1) {
+  for (let replicaAttempt = 0; replicaAttempt < 4; replicaAttempt += 1) {
     const media = await getMedia(publicId);
     if (!media || !media.tg_link_primary) {
       throw new AppError(410, 'MEDIA_UNAVAILABLE', 'نسخه‌های ذخیره‌شده این فایل در دسترس نیستند.');
@@ -201,7 +207,7 @@ async function deliverMedia(publicId, user, settings = {}) {
     }
   }
 
-  throw new AppError(410, 'MEDIA_UNAVAILABLE', 'هر سه نسخه ذخیره‌شده این فایل حذف شده‌اند.');
+  throw new AppError(410, 'MEDIA_UNAVAILABLE', 'نسخه‌های ذخیره‌شده این فایل در دسترس نیستند.');
 }
 
 module.exports = {
