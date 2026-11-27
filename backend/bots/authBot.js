@@ -1,6 +1,7 @@
 'use strict';
 
 const { Telegraf, Markup } = require('telegraf');
+const { startPolling, stopPolling } = require('../lib/botPolling');
 const { query, withTransaction } = require('../config/db');
 const {
   generateLoginCode,
@@ -51,10 +52,7 @@ class AuthBotService {
     this.bot = new Telegraf(token);
     this.registerHandlers();
     try {
-      await this.bot.launch({
-        dropPendingUpdates: false,
-        allowedUpdates: ['message'],
-      });
+      if (!await startPolling(this, this.bot, ['message'])) return false;
     } catch (error) {
       safeStop(this.bot, 'startup-failure');
       this.bot = null;
@@ -64,7 +62,6 @@ class AuthBotService {
         ? 'Public authentication bot cannot poll: another process is already polling AUTH_BOT_TOKEN (Telegram 409). Run a single instance or use a webhook.'
         : `Public authentication bot could not start: ${telegramErrorDescription(error)}`);
     }
-    this.started = true;
     console.log('Public authentication bot started.');
     return true;
   }
@@ -215,10 +212,7 @@ class AuthBotService {
 
 
   async stop(reason = 'shutdown') {
-    if (this.bot && this.started) {
-      this.bot.stop(reason);
-      this.started = false;
-    }
+    await stopPolling(this, reason);
   }
 }
 

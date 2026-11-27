@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { Telegraf } = require('telegraf');
+const { startPolling, stopPolling } = require('../lib/botPolling');
 const { query, withTransaction } = require('../config/db');
 const { hmacHex, generateOpaqueToken } = require('../lib/security');
 const {
@@ -252,10 +253,7 @@ class AdminBotService {
     this.bot = new Telegraf(token);
     this.registerHandlers();
     try {
-      await this.bot.launch({
-        dropPendingUpdates: false,
-        allowedUpdates: ['message', 'channel_post'],
-      });
+      if (!await startPolling(this, this.bot, ['message', 'channel_post'])) return false;
     } catch (error) {
       // A second polling instance yields "409 Conflict"; a revoked token yields 401.
       safeStop(this.bot, 'startup-failure');
@@ -266,7 +264,7 @@ class AdminBotService {
         ? 'Private admin bot cannot poll: another process is already polling ADMIN_BOT_TOKEN (Telegram 409). Run a single instance or use a webhook.'
         : `Private admin bot could not start: ${telegramErrorDescription(error)}`);
     }
-    this.started = true;
+    if (!this.started) return false;
     this.sweeper = setInterval(() => this.finalizeDueBundles().catch((error) => {
       console.error('Bundle sweeper failed', error);
     }), 5000);
@@ -661,10 +659,7 @@ class AdminBotService {
     if (this.sweeper) clearInterval(this.sweeper);
     for (const timer of this.finalizeTimers.values()) clearTimeout(timer);
     this.finalizeTimers.clear();
-    if (this.bot && this.started) {
-      this.bot.stop(reason);
-      this.started = false;
-    }
+    await stopPolling(this, reason);
   }
 }
 

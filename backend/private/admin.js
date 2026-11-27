@@ -2102,15 +2102,16 @@
     const changedFiles = (lastRun?.files || []);
     root.innerHTML = `<section class="view">
       <div class="page-head"><div><h1>به‌روزرسانی از گیت‌هاب</h1><p>هر تغییری که در گیت‌هاب می‌دهید، از همین صفحه روی هاست اعمال می‌شود؛ لازم نیست فایل‌ها را با File Manager عوض کنید</p></div></div>
-      <div class="callout callout--warn">${ICONS.warn}<span>این ابزار فقط فایل‌ها را کپی می‌کند و migrationهای پایگاه داده را اجرا نمی‌کند. پیش از اعمال نسخه‌های نیازمند migration از دیتابیس پشتیبان بگیرید و دستورهای راهنما را اجرا کنید. <button class="button button--ghost button--xs" type="button" data-diagnostics>بررسی ساختار دیتابیس</button></span></div>
+      <div class="callout callout--warn">${ICONS.warn}<span>وضعیت کد و ربات فقط مربوط به پردازشی است که به این صفحه پاسخ داده است؛ پردازش‌های مستقل قدیمی را جداگانه متوقف کنید. این ابزار فقط فایل‌ها را کپی می‌کند و migrationهای پایگاه داده را اجرا نمی‌کند. پیش از اعمال نسخه‌های نیازمند migration از دیتابیس پشتیبان بگیرید و دستورهای راهنما را اجرا کنید. <button class="button button--ghost button--xs" type="button" data-diagnostics>بررسی ساختار دیتابیس</button></span></div>
       ${status.configured ? '' : `<div class="callout callout--warn">${ICONS.warn}<span>برای فعال شدن این صفحه، در <code>.env</code> مقدار <code>GITHUB_REPO=Atliner/filmwork</code> را بگذارید (برای ریپوی خصوصی <code>GITHUB_TOKEN</code> هم لازم است) و سرویس Node را یک‌بار ری‌استارت کنید.</span></div>`}
       <div class="deploy-grid">
         <article class="panel"><div class="panel__head"><div><h2>وضعیت</h2><p>مخزن و شاخه‌ای که روی هاست اعمال می‌شود</p></div></div>
           <div class="panel__body deploy-meta">
             <div><span>ریپازیتوری</span><b dir="ltr">${esc(status.repo || '—')}</b></div>
-            <div><span>شاخه</span><b dir="ltr">${esc(status.branch || '—')}</b></div>
-            <div><span>آخرین دریافت</span><b>${status.lastRunAt ? faDate(status.lastRunAt) : 'هنوز اجرا نشده'}</b></div>
-            ${upstream ? `<div><span>آخرین کامیت گیت‌هاب</span><b dir="ltr" style="font-size:11px">${esc(upstream.sha.slice(0, 7))}</b></div>
+            <div><span>شاخه پیش‌فرض تنظیم‌شده</span><b dir="ltr">${esc(status.branch || '—')}</b></div>
+            <div><span>آخرین درخواست در این پردازش</span><b>${status.lastRunAt ? faDate(status.lastRunAt) : 'نامشخص / پس از راه‌اندازی'}</b></div>
+            ${status.botRuntime ? `<div><span>کد ربات این پردازش</span><b>${status.botRuntime.matchesDisk ? 'مطابق فایل‌ها' : 'قدیمی؛ نیازمند راه‌اندازی مجدد'}</b></div><div><span>وضعیت این پردازش</span><b>${status.botRuntime.leader ? 'پردازنده ربات‌ها' : 'در انتظار / غیرفعال'}</b></div>` : ''}
+            ${upstream ? `<div><span>آخرین کامیت شاخه پیش‌فرض در گیت‌هاب</span><b dir="ltr" style="font-size:11px">${esc(upstream.sha.slice(0, 7))}</b></div>
               <div style="grid-column:1/-1"><span>پیام کامیت</span><p style="margin:2px 0 0;font-size:12px;line-height:1.9">${esc(upstream.message.split('\n')[0])}</p></div>` : ''}
           </div>
         </article>
@@ -2139,7 +2140,7 @@
           ${CODE('mkdir -p ~/filmwork/backend/tmp && touch ~/filmwork/backend/tmp/restart.txt', 'deploy-restart')}
         </div>
       </details>
-      <div class="callout">${ICONS.info}<span>بعد از اعمال تغییرات، سرویس Node را از cPanel («Setup Node.js App» → Restart) ری‌استارت کنید تا نسخه جدید فعال شود.</span></div>
+      <div class="callout">${ICONS.info}<span>پس از اعمال، درخواست ری‌استارت Passenger ثبت می‌شود. تطابق کد این پردازش و عملکرد ربات‌ها را بررسی کنید؛ پردازش‌های مستقل و مدیرهای سرویس دیگر جداگانه ری‌استارت می‌شوند.</span></div>
     </section>`;
 
     const run = async (dryRun) => {
@@ -2156,7 +2157,7 @@
           <span class="muted" dir="ltr">${esc(result.sha.slice(0, 7))}</span>
           ${files.length ? `<div class="deploy-files">${files.slice(0, 80).map((file) => `<span class="deploy-file deploy-file--${file.status}"><i dir="ltr">${esc(file.path)}</i><b>${file.status === 'added' ? 'جدید' : 'به‌روز'}</b></span>`).join('')}</div>` : '<p class="muted" style="font-size:12px">همه فایل‌ها از قبل به‌روز بودند.</p>'}
           ${result.cssNeedsBuild ? '<p class="muted" style="font-size:12px">استایل‌ها تغییر کرده‌اند: روی هاست <code>cd backend &amp;&amp; npm run build:css</code> را اجرا کنید (یا <code>frontend/styles.css</code> را هم از گیت‌هاب بگیرید).</p>' : ''}
-          ${result.restartRequired && !dryRun ? '<p class="muted" style="font-size:12px">برای فعال شدن کد جدید، سرویس Node را ری‌استارت کنید.</p>' : ''}
+          ${result.restartRequested && !dryRun ? '<p class="muted" style="font-size:12px">درخواست راه‌اندازی مجدد Passenger ثبت شد. پس از چند لحظه صفحه را تازه و وضعیت ربات‌ها را بررسی کنید؛ پردازش‌های جداگانه باید مستقل متوقف شوند.</p>' : ''}
         </div>`;
       } catch (error) {
         box.innerHTML = `<p style="color:#fca5a5;font-size:12px;margin-top:12px">${esc(error.message)}</p>`;

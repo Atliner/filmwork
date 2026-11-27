@@ -6,6 +6,16 @@ const os = require('os');
 const fsp = fs.promises;
 const { spawn } = require('child_process');
 const crypto = require('crypto');
+const botRuntimeFiles = ['server.js', 'bots/authBot.js', 'bots/adminBot.js', 'bots/downloadBot.js', 'lib/botPolling.js', 'lib/botLeader.js'];
+function botSourceFingerprint() {
+  const hash = crypto.createHash('sha256');
+  for (const file of botRuntimeFiles) {
+    hash.update(file);
+    try { hash.update(fs.readFileSync(path.join(__dirname, file))); } catch { hash.update('<missing>'); }
+  }
+  return hash.digest('hex');
+}
+const runningBotFingerprint = botSourceFingerprint();
 const dotenv = require('dotenv');
 
 // `DOTENV_CONFIG_PATH` lets a host (or a test) point at another env file.
@@ -22,7 +32,9 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 
-const { query, withTransaction, healthCheck, closePool } = require('./config/db');
+const { pool, query, withTransaction, healthCheck, closePool } = require('./config/db');
+const { BotLeader } = require('./lib/botLeader');
+const { requestPassengerRestart } = require('./lib/deployRestart');
 const { AppError, assert, asyncRoute } = require('./lib/errors');
 const { parseCatalogFilters, catalogFacets } = require('./lib/catalogFilters');
 const { createAliasIndex, expandAliases, displayCredits } = require('./lib/peopleAliases');
@@ -1612,6 +1624,7 @@ app.get('/api/admin/deploy/status', requireAdmin, asyncRoute(async (_req, res) =
     appRoot: path.resolve(__dirname, '..'),
     lastRunAt: deployState.lastRunAt,
     lastResult: deployState.lastResult,
+    botRuntime: { matchesDisk: runningBotFingerprint === botSourceFingerprint(), fingerprint: runningBotFingerprint.slice(0, 12), processId: process.pid, leader: botStatus.leader, status: { ...botStatus } },
   };
   if (!repo) {
     res.json(base);
@@ -1691,6 +1704,13 @@ app.post('/api/admin/deploy/github', requireAdmin, requireAdminCsrf, asyncRoute(
     await walk('');
     // Keep the prebuilt CSS in step with the Tailwind sources when they changed.
     const cssChanged = written.some((file) => file.path === 'frontend/tailwind.css' || file.path === 'backend/tailwind.config.js');
+    // Passenger observes this marker on the next request. It cannot restart a
+    // separately launched process or replace a systemd/PM2 restart policy.
+    let restartRequested = false;
+    if (!dryRun) {
+      await requestPassengerRestart(__dirname);
+      restartRequested = true;
+    }
     deployState.lastRunAt = new Date().toISOString();
     deployState.lastResult = { sha, branch, dryRun, files: written.length, cssNeedsBuild: cssChanged };
     res.json({
@@ -1701,7 +1721,8 @@ app.post('/api/admin/deploy/github', requireAdmin, requireAdminCsrf, asyncRoute(
       files: written,
       skipped: skipped.slice(0, 50),
       cssNeedsBuild: cssChanged,
-      restartRequired: written.length > 0,
+      restartRequired: !dryRun,
+      restartRequested,
     });
   } finally {
     await fsp.rm(staging, { recursive: true, force: true }).catch(() => {});
@@ -2361,7 +2382,25 @@ let botRetryTimer;
 let processGuardsInstalled = false;
 let shuttingDown = false;
 let botsStarting = false;
-const botStatus = { authentication: 'pending', administration: 'pending', download: 'pending', lastError: null };
+const botStatus = { authentication: 'pending', administration: 'pending', download: 'pending', lastError: null, leader: false };
+const botServices = [authBotService, adminBotService, downloadBotService];
+const botLeader = new BotLeader(pool, async (error) => {
+  botStatus.leader = false;
+  botStatus.lastError = `Telegram leader lock lost: ${error.message}`;
+  console.error(botStatus.lastError);
+  await Promise.allSettled(botServices.map((service) => service.stop('leader-lock-lost')));
+  if (!shuttingDown) scheduleBotRetry();
+});
+for (const [index, service] of botServices.entries()) {
+  const key = ['authentication', 'administration', 'download'][index];
+  service.onPollingStopped = (error) => {
+    botStatus[key] = 'failed';
+    botStatus.lastError = String(error?.message || error).slice(0, 500);
+    console.error(`Telegram bot (${key}) polling stopped:`, error);
+    service.stop('polling-stopped').catch((stopError) => console.error('Bot cleanup failed:', stopError));
+    if (!shuttingDown) scheduleBotRetry();
+  };
+}
 
 /**
  * Bots are started *after* HTTP is already serving, and their failure never takes the
@@ -2379,6 +2418,14 @@ async function startBots() {
     if (botStatus[key] === 'pending') botStatus[key] = 'starting';
   }
   try {
+    if (!await botLeader.acquire()) {
+      botStatus.leader = false;
+      for (const key of ['authentication', 'administration', 'download']) botStatus[key] = 'standby';
+      if (!shuttingDown) scheduleBotRetry();
+      return;
+    }
+    if (shuttingDown) return;
+    botStatus.leader = true;
     // Only start what is not already polling: launching the same token twice makes
     // Telegram answer 409 Conflict and kills the bot that was working.
     const pending = [];
@@ -2406,6 +2453,10 @@ async function startBots() {
       console.error(`Telegram bot (${key}) failed to start; the website stays online:`, result.reason);
     });
     if (failed) scheduleBotRetry();
+  } catch (error) {
+    botStatus.lastError = `Telegram coordination error: ${error.message}`;
+    console.error(botStatus.lastError);
+    if (!shuttingDown) scheduleBotRetry();
   } finally {
     botsStarting = false;
   }
@@ -2413,7 +2464,8 @@ async function startBots() {
 
 function scheduleBotRetry() {
   if (botRetryTimer || shuttingDown) return;
-  const delayMs = Math.max(60_000, Number(process.env.BOT_RETRY_SECONDS || 300) * 1000);
+  const retrySeconds = Number(process.env.BOT_RETRY_SECONDS || 10);
+  const delayMs = Math.max(5, Math.min(30, Number.isFinite(retrySeconds) ? retrySeconds : 10)) * 1000;
   botRetryTimer = setTimeout(() => {
     botRetryTimer = null;
     startBots().catch((error) => console.error('Telegram bot retry failed:', error));
@@ -2494,6 +2546,7 @@ async function shutdown(signal) {
     adminBotService.stop(signal),
     downloadBotService.stop(signal),
   ]);
+  await botLeader.close();
   if (httpServer) {
     await new Promise((resolve) => httpServer.close(resolve));
   }

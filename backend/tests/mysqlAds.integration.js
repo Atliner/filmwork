@@ -299,3 +299,38 @@ test('missing ad migrations produce actionable errors and owner diagnostics', as
     await query('ALTER TABLE ads ADD COLUMN deleted_at TIMESTAMP(3) NULL AFTER reviewed_at');
   }
 });
+
+test('database leader lock allows one bot worker and hands over after shutdown', async () => {
+  const { pool } = require('../config/db');
+  const { BotLeader } = require('../lib/botLeader');
+  const name = `filmwork-test:${crypto.randomBytes(8).toString('hex')}`;
+  const first = new BotLeader(pool, async () => {}, { name });
+  const second = new BotLeader(pool, async () => {}, { name });
+  try {
+    assert.equal(await first.acquire(), true);
+    assert.equal(await second.acquire(), false);
+    await first.check();
+    assert.ok(first.connection);
+    await first.close();
+    assert.equal(await second.acquire(), true);
+  } finally { await first.close(); await second.close(); }
+});
+
+test('admin bot persists a dubbed file without a subtitle tag in real SQL', async () => {
+  const { AdminBotService, parseDirectives } = require('../bots/adminBot');
+  const content = await query('SELECT id FROM contents WHERE asset_uuid=:assetId', { assetId });
+  const directives = parseDirectives(`#اثر ${assetId} #نسخه Kingmovie #نوع دوبله`);
+  const copy = { chatId: '-100123', messageId: 10, link: 'https://t.me/c/123/10' };
+  const key = `integration:${crypto.randomUUID()}`;
+  await new AdminBotService().insertMediaLink({ content_id: content[0].id, directives }, {
+    metadata: { fileName: 'The.Pitt.S01E02.720p.WEB-DL.KIMO.DUBLE.mkv', fileSize: 50, mimeType: 'video/x-matroska' },
+    copies: { primary: copy, fallback1: copy, fallback2: copy },
+  }, null, key);
+  const rows = await query('SELECT subtitle_type,resolution,season_number,episode_number FROM media_links WHERE ingest_key=:key', { key });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].subtitle_type, 'none');
+  assert.equal(rows[0].resolution, '720p');
+  assert.equal(Number(rows[0].season_number), 1);
+  assert.equal(Number(rows[0].episode_number), 2);
+  await query('DELETE FROM media_links WHERE ingest_key=:key', { key });
+});
