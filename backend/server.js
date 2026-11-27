@@ -69,6 +69,7 @@ const {
   ownerIds,
 } = require('./middleware/auth');
 const { deliverMedia } = require('./services/mediaDelivery');
+const mediaAdmin = require('./services/mediaAdmin');
 const { processDeletions } = require('./services/telegramDeletion');
 const { checkDownloadAllowance } = require('./services/downloadPolicy');
 const { changeCampaignStatus, settleExpiredCampaigns, deleteCampaign } = require('./services/adAccounting');
@@ -841,6 +842,13 @@ app.get('/api/contents/:assetId/player-sources', asyncRoute(async (req, res) => 
       audioLabel: version.kind === 'dub' ? 'دوبله' : 'سافت‌ساب',
       streamUrl: link.streamUrl, subtitleUrl: link.subtitleUrl || null, audioUrl: link.dubUrl || null,
     })));
+  for (const item of detail.botMedia || []) {
+    if (!item.is_active || !item.stream_url) continue;
+    sources.push({ id: item.public_id, season: item.season_number, episode: item.episode_number,
+      episodeTitle: item.episode_title, version: item.version_label, resolution: item.resolution,
+      quality: item.quality_label, audioLabel: item.audio_type === 'dubbed' ? 'دوبله' : 'زیرنویس',
+      streamUrl: item.stream_url, subtitleUrl: null, audioUrl: null });
+  }
   res.setHeader('Cache-Control', 'no-store');
   res.json({ sources });
 }));
@@ -1878,12 +1886,14 @@ app.patch('/api/admin/contents/:assetId', requireAdmin, requireAdminCsrf, asyncR
   if (req.body?.status && Object.keys(req.body).length === 1) {
     const status = asEnum(req.body.status, 'وضعیت', ['draft', 'published', 'archived']);
     const payload = updateContentPayload(await contentStore().getContent(req.params.assetId), { status });
+    payload.versions = undefined;
     const updated = await contentStore().updateContent(req.params.assetId, payload);
     invalidatePeopleCache();
     res.json(updated);
     return;
   }
   const payload = updateContentPayload(await contentStore().getContent(req.params.assetId), req.body || {});
+  if (!Object.hasOwn(req.body || {}, 'versions')) payload.versions = undefined;
   const updated = await contentStore().updateContent(req.params.assetId, payload);
   invalidatePeopleCache();
   res.json(updated);
@@ -1892,6 +1902,16 @@ app.patch('/api/admin/contents/:assetId', requireAdmin, requireAdminCsrf, asyncR
 app.post('/api/admin/contents/:assetId/hero', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
   const enabled = Boolean(req.body?.enabled);
   res.json(await contentStore().setHero(req.params.assetId, enabled));
+}));
+
+app.patch('/api/admin/contents/:assetId/media/:mediaId', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  assert(contentStore().kind !== 'demo', 404, 'MEDIA_NOT_FOUND', 'فایل پیدا نشد.');
+  res.json({ media: await mediaAdmin.update(req.params.assetId, req.params.mediaId, req.body?.revision, req.body?.changes) });
+}));
+
+app.delete('/api/admin/contents/:assetId/media/:mediaId', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  assert(contentStore().kind !== 'demo', 404, 'MEDIA_NOT_FOUND', 'فایل پیدا نشد.');
+  res.json(await mediaAdmin.remove(req.params.assetId, req.params.mediaId, req.body?.revision));
 }));
 
 app.post('/api/admin/contents/:assetId/sync-media', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {

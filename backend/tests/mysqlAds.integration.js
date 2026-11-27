@@ -458,6 +458,63 @@ test('admin detail automatically lists active bot media and all replica data wit
     assert.equal(Number(media.file_size_bytes), 123456);
     assert.equal((await query('SELECT id FROM content_version_links WHERE media_link_id = :id', {id: added.insertId})).length, 0);
     await query('UPDATE media_links SET is_active = FALSE WHERE id = :id', {id: added.insertId});
-    assert.ok(!(await store.getContent(assetId)).botMedia.some(item => item.public_id === id));
+    assert.equal(Number((await store.getContent(assetId)).botMedia.find(item => item.public_id === id).is_active), 0);
   } finally { await query('DELETE FROM media_links WHERE id = :id', {id: added.insertId}); }
+});
+
+test('bot media edits update the delivery source, preserve linked/manual rows, detect stale saves and delete only the selected file', async () => {
+  const id = crypto.randomUUID(), mediaId = crypto.randomUUID(), second = crypto.randomUUID();
+  const content = await query("INSERT INTO contents (asset_uuid,content_type,title,slug,status) VALUES (:id,'series','media editor',:id,'published')", {id});
+  const first = await query(`INSERT INTO media_links (public_id,content_id,version_label,audio_type,subtitle_type,resolution,file_size_bytes,
+    tg_link_primary,primary_chat_id,primary_message_id,tg_link_fallback_1,fallback_1_chat_id,fallback_1_message_id,
+    tg_link_fallback_2,fallback_2_chat_id,fallback_2_message_id,subtitle_link_primary,subtitle_primary_message_id)
+    VALUES (:mediaId,:content,'first','soft_sub','separate','720p',100,'https://t.me/c/123/10',-100123,10,
+    'https://t.me/c/456/20',-100456,20,'https://t.me/c/789/30',-100789,30,'https://t.me/c/123/11',11)`, {mediaId,content:content.insertId});
+  await query("INSERT INTO media_links (public_id,content_id,version_label,resolution,file_size_bytes,tg_link_primary) VALUES (:id,:content,'second','1080p',100,'https://t.me/c/234/3')", {id:second,content:content.insertId});
+  const v = await query("INSERT INTO content_versions (content_id,kind,title,resolution) VALUES (:content,'sub','720p','720p')", {content:content.insertId});
+  await query("INSERT INTO content_version_links (version_id,media_link_id,telegram_url,stream_url,source) VALUES (:v,:m,'https://t.me/c/123/10','https://example.com/old.mp4','telegram_bot')", {v:v.insertId,m:first.insertId});
+  await query("INSERT INTO content_version_links (version_id,stream_url,source) VALUES (:v,'https://example.com/manual.mp4','manual')", {v:v.insertId});
+  const csrf='media-edit-csrf', cookie=`filmwork_admin=${signAdminToken('123456789',csrf)}`;
+  async function admin(path, method='GET', body, token=csrf) {
+    const response=await fetch(base+path,{method,headers:{cookie,...(token?{'x-csrf-token':token}:{}),...(body?{'content-type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});
+    return {status:response.status,data:await response.json().catch(()=>({}))};
+  }
+  const url=`/api/admin/contents/${id}/media/${mediaId}`;
+  try {
+    let detail=(await admin(`/api/admin/contents/${id}`)).data;
+    assert.equal(detail.botMedia.length,2); assert.equal(detail.versions.length,1);
+    assert.deepEqual(detail.versions[0].links.map(l=>l.streamUrl),['https://example.com/manual.mp4']);
+    let firstView=detail.botMedia.find(m=>m.public_id===mediaId);
+    assert.equal((await admin(url,'PATCH',{revision:firstView.revision,changes:{version_label:'No'}},'wrong')).status,403);
+    assert.equal((await request(url,'PATCH',{revision:firstView.revision,changes:{version_label:'No'}},'')).response.status,404);
+    const edited=await admin(url,'PATCH',{revision:firstView.revision,changes:{
+      version_label:'Edited',episode_number:7,stream_url:'https://example.com/new.mp4',
+      tg_link_primary:'https://t.me/c/999/50',subtitle_link_primary:'https://t.me/c/999/51',
+      tg_link_fallback_1:'https://t.me/c/456/22',
+    }});
+    assert.equal(edited.status,200,JSON.stringify(edited.data));
+    const updated=edited.data.media;
+    assert.equal(Number(updated.primary_chat_id),-100999); assert.equal(Number(updated.primary_message_id),50);
+    assert.equal(Number(updated.subtitle_primary_message_id),51); assert.equal(Number(updated.fallback_1_message_id),22);
+    assert.equal(updated.tg_link_fallback_2,'https://t.me/c/789/30');
+    assert.equal((await admin(url,'PATCH',{revision:firstView.revision,changes:{version_label:'stale'}})).status,409);
+    assert.equal((await admin(url,'DELETE',{revision:firstView.revision})).status,409);
+    const projection=(await query('SELECT * FROM content_version_links WHERE media_link_id=:id',{id:first.insertId}))[0];
+    assert.equal(projection.telegram_url,'https://t.me/c/999/50'); assert.equal(projection.stream_url,'https://example.com/new.mp4');
+    const publicMedia=await request(`/api/contents/${id}/media-options`,'GET',undefined,'');
+    assert.ok(publicMedia.data.items.some(m=>m.id===mediaId && m.version==='Edited' && m.episode===7));
+    const publicSources=await request(`/api/contents/${id}/player-sources`,'GET',undefined,'');
+    assert.ok(publicSources.data.sources.some(s=>s.id===mediaId && s.streamUrl==='https://example.com/new.mp4'));
+    assert.ok(!JSON.stringify(publicSources.data).includes('t.me/c/'));
+    detail=(await admin(`/api/admin/contents/${id}`)).data;
+    const saved=await admin(`/api/admin/contents/${id}`,'PATCH',{titleFa:'media editor',versions:detail.versions});
+    assert.equal(saved.status,200,JSON.stringify(saved.data));
+    assert.equal((await query('SELECT id FROM content_version_links WHERE media_link_id=:id',{id:first.insertId})).length,1);
+    assert.equal((await query("SELECT id FROM content_version_links WHERE stream_url='https://example.com/manual.mp4'")).length,1);
+    assert.equal((await admin(url,'DELETE',{revision:updated.revision})).status,200);
+    assert.equal((await query('SELECT id FROM media_links WHERE id=:id',{id:first.insertId})).length,0);
+    assert.equal((await query('SELECT id FROM content_version_links WHERE media_link_id=:id',{id:first.insertId})).length,0);
+    assert.equal((await query('SELECT id FROM media_links WHERE public_id=:id',{id:second})).length,1);
+    assert.equal((await query("SELECT id FROM content_version_links WHERE stream_url='https://example.com/manual.mp4'")).length,1);
+  } finally { await query('DELETE FROM contents WHERE id=:id',{id:content.insertId}); }
 });

@@ -769,7 +769,7 @@
             dubUrl: link.dubUrl || '', telegramUrl: link.telegramUrl || '',
           })),
         })),
-        botMedia: data.botMedia || [],
+        botMedia: (data.botMedia || []).map((item) => ({ ...item, _saved: { ...item } })),
         meta: null,
         sourceText: '',
         sourceLink: '',
@@ -802,7 +802,7 @@
           <h1>${isCreate ? 'افزودن محتوای جدید' : `ویرایش ${esc(draft.titleFa || draft.titleEn || 'محتوا')}`}</h1>
           <p>${isCreate
     ? 'لینک پست تلگرام یا متن آن را وارد کنید تا فیلدها خودکار پر شوند، سپس بازبینی و ذخیره کنید.'
-    : 'مشخصات و نسخه‌های دستی را ویرایش کنید. اطلاعات ربات جداگانه و فقط‌خواندنی نمایش داده می‌شود.'}</p>
+    : 'مشخصات، نسخه‌های دستی و فایل‌های ربات را در همین صفحه مدیریت کنید.'}</p>
         </div>
         <div class="page-head__actions">
           <button class="button button--ghost button--sm" type="button" data-view-nav="content">بازگشت به فهرست</button>
@@ -1026,22 +1026,48 @@
 
   function botMediaList(media) {
     if (!media?.length) return '';
-    const fields = [
-      ['شناسه', 'public_id'], ['نسخه', 'version_label'], ['فصل', 'season_number'],
-      ['قسمت', 'episode_number'], ['عنوان قسمت', 'episode_title'], ['نوع صدا', 'audio_type'],
-      ['نوع زیرنویس', 'subtitle_type'], ['رزولوشن', 'resolution'], ['کیفیت', 'quality_label'],
-      ['انکودر', 'encoder'], ['حجم فایل (بایت)', 'file_size_bytes'], ['نوع فایل', 'mime_type'],
-      ['پخش آنلاین', 'stream_url'], ['لینک اصلی', 'tg_link_primary'], ['لینک پشتیبان ۱', 'tg_link_fallback_1'],
-      ['لینک پشتیبان ۲', 'tg_link_fallback_2'], ['چت اصلی', 'primary_chat_id'], ['پیام اصلی', 'primary_message_id'],
-      ['چت پشتیبان ۱', 'fallback_1_chat_id'], ['پیام پشتیبان ۱', 'fallback_1_message_id'],
-      ['چت پشتیبان ۲', 'fallback_2_chat_id'], ['پیام پشتیبان ۲', 'fallback_2_message_id'],
-      ['لینک زیرنویس اصلی', 'subtitle_link_primary'], ['لینک زیرنویس پشتیبان ۱', 'subtitle_link_fallback_1'],
-      ['لینک زیرنویس پشتیبان ۲', 'subtitle_link_fallback_2'], ['پیام زیرنویس اصلی', 'subtitle_primary_message_id'],
-      ['پیام زیرنویس پشتیبان ۱', 'subtitle_fallback_1_message_id'], ['پیام زیرنویس پشتیبان ۲', 'subtitle_fallback_2_message_id'],
-      ['حجم زیرنویس (بایت)', 'subtitle_file_size_bytes'], ['سلامت', 'health_status'],
+    const input = (index, item, key, label, attrs = '') => `<label class="field"><span>${esc(label)}</span><input class="input" data-bot-index="${index}" data-bot-field="${key}" value="${esc(item[key])}" ${attrs}></label>`;
+    const select = (index, item, key, label, options) => `<label class="field"><span>${esc(label)}</span><select class="select" data-bot-index="${index}" data-bot-field="${key}">${options.map(([value, text]) => `<option value="${value}" ${item[key] === value ? 'selected' : ''}>${esc(text)}</option>`).join('')}</select></label>`;
+    const replicas = [
+      ['اصلی', 'tg_link_primary', 'primary_chat_id', 'primary_message_id', 'subtitle_link_primary', 'subtitle_primary_message_id'],
+      ['پشتیبان ۱', 'tg_link_fallback_1', 'fallback_1_chat_id', 'fallback_1_message_id', 'subtitle_link_fallback_1', 'subtitle_fallback_1_message_id'],
+      ['پشتیبان ۲', 'tg_link_fallback_2', 'fallback_2_chat_id', 'fallback_2_message_id', 'subtitle_link_fallback_2', 'subtitle_fallback_2_message_id'],
     ];
-    return `<div class="callout">${ICONS.info}<span>فایل‌های فعال ربات به‌طور خودکار در زیر نمایش داده می‌شوند. این بخش فعلاً فقط خواندنی است؛ ویرایش و حذف دوطرفه هنوز پشتیبانی نمی‌شود. نسخه‌هایی که قبلاً با دکمهٔ دریافت وارد شده‌اند ممکن است جداگانه در بخش دستی هم دیده شوند؛ ویرایش یا حذف آن‌ها فایل ربات را تغییر نمی‌دهد.</span></div>
-      <div class="version-list"><h3>فایل‌های ربات (${fa(media.length)})</h3>${media.map((item) => `<details class="version-card"><summary class="version-card__head">${esc(item.version_label || item.resolution || 'فایل')} · ${esc(item.resolution || '')} ${item.episode_number ? `· قسمت ${esc(item.episode_number)}` : ''}</summary><div class="version-card__body"><dl class="summary-list">${fields.filter(([, key]) => item[key] !== null && item[key] !== undefined && item[key] !== '').map(([label, key]) => `<div><dt>${esc(label)}</dt><dd dir="auto" style="overflow-wrap:anywhere">${esc(item[key])}</dd></div>`).join('')}</dl></div></details>`).join('')}</div>`;
+    return `<div class="callout">${ICONS.info}<span>فایل‌های ربات مستقیم از پایگاه داده نمایش داده می‌شوند. هر فایل دکمهٔ ذخیره و حذف مستقل دارد. تغییر لینک، شناسهٔ کانال و پیام را نیز برای ربات دریافت به‌روزرسانی می‌کند؛ نسخه‌های کانال‌ها حذف نمی‌شوند. لینک‌های زیرنویس باید در همان کانال فایل باشند.</span></div>
+      <div class="version-list"><h3>فایل‌های ثبت‌شده با ربات (${fa(media.length)})</h3>${media.map((item, index) => `<details class="version-card">
+        <summary class="version-card__head">${esc(item.version_label || item.resolution || 'فایل')} · ${esc(item.resolution || '')} ${item.episode_number ? `· قسمت ${esc(item.episode_number)}` : ''} ${item.is_active ? '' : '· غیرفعال'}</summary>
+        <div class="version-card__body"><fieldset style="border:0;padding:0;margin:0;min-width:0" ${item._pending ? 'disabled' : ''}>
+          <small dir="ltr">${esc(item.public_id)}</small>
+          <div class="field-grid">
+            ${input(index, item, 'version_label', 'نام نسخه', 'maxlength="120"')}
+            ${input(index, item, 'resolution', 'رزولوشن', 'maxlength="24" dir="ltr"')}
+            ${select(index, item, 'audio_type', 'نوع صدا', [['dubbed','دوبله'],['hard_sub','هاردساب'],['soft_sub','سافت‌ساب'],['original','زبان اصلی']])}
+            ${select(index, item, 'subtitle_type', 'نوع زیرنویس', [['none','ندارد'],['embedded','داخلی'],['separate','مجزا']])}
+            ${input(index, item, 'season_number', 'فصل', 'type="number" min="1" max="65535" dir="ltr"')}
+            ${input(index, item, 'episode_number', 'قسمت', 'type="number" min="1" max="65535" dir="ltr"')}
+            ${input(index, item, 'episode_title', 'عنوان قسمت', 'maxlength="255"')}
+            ${input(index, item, 'quality_label', 'کیفیت', 'maxlength="80"')}
+            ${input(index, item, 'encoder', 'انکودر', 'maxlength="100"')}
+            ${input(index, item, 'file_size_bytes', 'حجم فایل (بایت)', 'type="number" min="1" dir="ltr"')}
+            ${input(index, item, 'subtitle_file_size_bytes', 'حجم زیرنویس (بایت)', 'type="number" min="1" dir="ltr"')}
+            ${input(index, item, 'mime_type', 'نوع فایل (MIME)', 'maxlength="120" dir="ltr"')}
+            ${input(index, item, 'stream_url', 'لینک پخش آنلاین', 'type="url" dir="ltr"')}
+            <label class="setting-check"><input type="checkbox" data-bot-index="${index}" data-bot-field="is_active" ${item.is_active ? 'checked' : ''}><span>فایل فعال برای دانلود</span></label>
+          </div>
+          ${replicas.map(([label, link, chat, message, sub, subMessage]) => `<h4>${esc(label)}</h4><div class="field-grid">
+            ${input(index, item, link, 'لینک فایل', 'type="url" dir="ltr" placeholder="https://t.me/c/…/…"')}
+            ${input(index, item, sub, 'لینک زیرنویس مجزا', 'type="url" dir="ltr" placeholder="اختیاری"')}
+            <small dir="ltr">Chat: ${esc(item[chat] ?? '—')} · Message: ${esc(item[message] ?? '—')} · Subtitle: ${esc(item[subMessage] ?? '—')}</small>
+          </div>`).join('')}
+          <p class="muted">سلامت: ${esc(item.health_status || '—')} · در صورت جایگزینی فایل با محتوای متفاوت، مشخصات و حجم را نیز اصلاح کنید. ربات دریافت باید به کانال دسترسی داشته باشد.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="button button--primary button--sm" type="button" data-save-bot-media="${index}">ذخیره این فایل</button><button class="button button--danger button--sm" type="button" data-delete-bot-media="${index}">حذف این فایل</button></div>
+        </fieldset></div></details>`).join('')}</div>`;
+  }
+
+  function botMediaChanges(item) {
+    const keys = ['version_label','resolution','audio_type','subtitle_type','season_number','episode_number','episode_title','quality_label','encoder','file_size_bytes','subtitle_file_size_bytes','mime_type','stream_url','is_active','tg_link_primary','tg_link_fallback_1','tg_link_fallback_2','subtitle_link_primary','subtitle_link_fallback_1','subtitle_link_fallback_2'];
+    const normalize = (value) => value == null ? '' : String(value);
+    return Object.fromEntries(keys.filter((key) => key === 'is_active' ? Boolean(item[key]) !== Boolean(item._saved[key]) : normalize(item[key]) !== normalize(item._saved[key])).map((key) => [key, key === 'is_active' ? Boolean(item[key]) : item[key]]));
   }
 
   function versionsStep(editor) {
@@ -1062,7 +1088,7 @@
             <input class="input" dir="ltr" data-quality-input value="${esc(editor.qualities)}" placeholder="1080p، 720p، 480p"></label>
           <button class="button button--primary button--sm" type="button" data-create-versions>${ICONS.plus} ایجاد نسخه‌ها</button>
         </div>
-        <div class="callout">${ICONS.info}<span>لینک‌های پخش آنلاین، زیرنویس، دوبله و تلگرام را برای ردیف‌های دستی وارد کنید. این بخش هنوز با فایل‌های ربات همگام نیست؛ برای سریال، فصل و شماره قسمت را مشخص کنید.</span></div>
+        <div class="callout">${ICONS.info}<span>فایل‌های ربات و نسخه‌های دستی جداگانه نگهداری می‌شوند؛ هر فایل ربات دکمه ذخیره و حذف مستقل دارد. برای سریال، فصل و شماره قسمت را مشخص کنید.</span></div>
 
         ${botMediaList(editor.botMedia)}
         <h3>نسخه‌های قابل ویرایش پنل</h3>
@@ -1225,6 +1251,10 @@
   async function saveEditor() {
     const editor = state.editor;
     if (!editor || state.busy) return;
+    if ((editor.botMedia || []).some((item) => item._pending || Object.keys(botMediaChanges(item)).length)) {
+      toast('ابتدا تغییرات هر فایل ربات را با دکمهٔ ذخیره همان فایل ثبت کنید.', 'error');
+      editor.step = 3; paintEditor(); return;
+    }
     let payload = readEditorDraft();
     if (!payload.titleFa && !payload.titleEn) {
       toast('عنوان فارسی یا انگلیسی را وارد کنید.', 'error');
@@ -1342,7 +1372,7 @@
    * land on a usable versions table instead of an empty card.
    */
   function edgePrimeVersions(editor) {
-    if (!editor || editor.versions.length) return;
+    if (!editor || editor.mode === 'edit' || editor.versions.length) return;
     if (!editor.draft.titleFa && !editor.draft.titleEn) return;
     const qualities = listFrom(editor.qualities);
     const chosen = qualities.length ? qualities : ['1080p', '720p'];
@@ -2437,6 +2467,11 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
           if (active) $(`[data-field="${active}"]`)?.focus();
           return;
         }
+        if (target.matches('[data-bot-field]')) {
+          const item = editor.botMedia[Number(target.dataset.botIndex)];
+          if (item) item[target.dataset.botField] = target.type === 'checkbox' ? target.checked : target.value;
+          return;
+        }
         if (target.matches('[data-source-link]')) { editor.sourceLink = target.value; return; }
         if (target.matches('[data-source-text]')) { editor.sourceText = target.value; return; }
         if (target.matches('[data-quality-input]')) { editor.qualities = target.value; return; }
@@ -2466,6 +2501,11 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
       const target = event.target;
       // Some browsers only fire `change` (not `input`) for <select>, so the same
       // field assignment runs here as a safety net.
+      if (state.editor && target.matches('[data-bot-field]')) {
+        const item = state.editor.botMedia[Number(target.dataset.botIndex)];
+        if (item) item[target.dataset.botField] = target.type === 'checkbox' ? target.checked : target.value;
+        return;
+      }
       if (state.editor && target.matches('[data-field]')) {
         state.editor.draft[target.dataset.field] = target.type === 'checkbox' ? target.checked : target.value;
         if (target.dataset.structural || target.dataset.field === 'status') paintEditor();
@@ -2628,6 +2668,35 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
       if (button.matches('[data-run-parse]')) { await runParse(); return; }
       if (button.matches('[data-skip-import]')) { state.editor.step = 2; paintEditor(); return; }
       if (button.matches('[data-save-content]')) { await saveEditor(); return; }
+      if (button.matches('[data-save-bot-media]')) {
+        const editor = state.editor, index = Number(button.dataset.saveBotMedia), item = editor?.botMedia[index];
+        if (!item) return;
+        const changes = botMediaChanges(item);
+        if (!Object.keys(changes).length) { toast('تغییری برای ذخیره وجود ندارد.'); return; }
+        item._pending = true;
+        const fieldset = button.closest('fieldset'); if (fieldset) fieldset.disabled = true;
+        try {
+          const result = await api(`/api/admin/contents/${encodeURIComponent(editor.assetId)}/media/${encodeURIComponent(item.public_id)}`, { method: 'PATCH', body: { revision: item._saved.revision, changes } });
+          if (state.editor !== editor) return;
+          editor.botMedia[index] = { ...result.media, _saved: { ...result.media } };
+          paintEditor(); toast('تغییرات فایل ربات ذخیره شد.');
+        } catch (error) { item._pending = false; if (state.editor === editor) paintEditor(); toast(error.message, 'error'); }
+        return;
+      }
+      if (button.matches('[data-delete-bot-media]')) {
+        const editor = state.editor, index = Number(button.dataset.deleteBotMedia), item = editor?.botMedia[index];
+        if (!item) return;
+        const confirmed = await confirmDialog({ title: 'حذف فایل ربات', message: 'این فایل، لینک‌های آن و سوابق دانلود و سلامت مربوط به آن از سایت و دیتابیس حذف می‌شوند و دیگر قابل دریافت نیستند. پیام‌های کانال‌های مخزن پاک نمی‌شوند. حذف برگشت‌ناپذیر است.', confirmLabel: 'حذف فایل' });
+        if (!confirmed) return;
+        item._pending = true;
+        const fieldset = button.closest('fieldset'); if (fieldset) fieldset.disabled = true;
+        try {
+          await api(`/api/admin/contents/${encodeURIComponent(editor.assetId)}/media/${encodeURIComponent(item.public_id)}`, { method: 'DELETE', body: { revision: item._saved.revision } });
+          if (state.editor !== editor) return;
+          editor.botMedia.splice(index, 1); paintEditor(); toast('فایل از سایت حذف شد؛ پیام‌های کانال دست‌نخورده‌اند.');
+        } catch (error) { item._pending = false; if (state.editor === editor) paintEditor(); toast(error.message, 'error'); }
+        return;
+      }
       if (button.matches('[data-create-versions]')) { createVersions(); return; }
       if (button.matches('[data-quick-quality]')) {
         state.editor.qualities = button.dataset.quickQuality;

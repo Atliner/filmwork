@@ -1,0 +1,36 @@
+'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs'); const path = require('node:path'); const { JSDOM } = require('jsdom');
+const root = path.resolve(__dirname, '..');
+const html = fs.readFileSync(path.join(root, 'private/admin.html'), 'utf8');
+const script = fs.readFileSync(path.join(root, 'private/admin.js'), 'utf8');
+test('bot file editor sends only changed replica and confirms deletion', async () => {
+  const dom = new JSDOM(html, { url:'https://film.test/owner-console#/edit/asset', runScripts:'outside-only', pretendToBeVisual:true });
+  const w=dom.window; w.scrollTo=()=>{}; const requests=[];
+  let media={public_id:'media',revision:'rev1',version_label:'نسخه',resolution:'720p',audio_type:'soft_sub',subtitle_type:'none',file_size_bytes:100,is_active:1,tg_link_primary:'https://t.me/c/123/1',tg_link_fallback_1:'https://t.me/c/456/2',tg_link_fallback_2:'https://t.me/c/789/3'};
+  w.fetch=async (url,options={})=>{
+    requests.push({url,...options}); let data={};
+    if (url==='/api/admin/session') data={csrfToken:'csrf'};
+    else if (url==='/api/admin/stats') data={overview:{totals:{contents:1,pendingAds:0}}};
+    else if (url==='/api/admin/contents/asset') data={content:{id:'asset',type:'series',title:'پیت',originalTitle:'Pitt',status:'published',directors:[],cast:[],genres:[],countries:[],posterGallery:[]},versions:[],botMedia:[media]};
+    else if (url==='/api/admin/contents/asset/media/media' && options.method==='PATCH') { const body=JSON.parse(options.body); media={...media,...body.changes,revision:'rev2'}; data={media}; }
+    else if (url==='/api/admin/contents/asset/media/media' && options.method==='DELETE') data={deleted:true};
+    else throw Error(`unexpected ${url}`);
+    return {ok:true,status:200,json:async()=>data};
+  };
+  const wait=async(fn)=>{for(let i=0;i<100;i++){const result=fn();if(result)return result;await new Promise(r=>setTimeout(r,5));}throw Error('UI timeout');};
+  w.eval(script); await wait(()=>w.document.querySelector('[data-step="3"]')); w.document.querySelector('[data-step="3"]').click();
+  const input=await wait(()=>w.document.querySelector('[data-bot-field="tg_link_fallback_1"]'));
+  assert.equal(w.document.querySelector('[data-bot-field="tg_link_fallback_2"]').value,'https://t.me/c/789/3');
+  input.value='https://t.me/c/456/25'; input.dispatchEvent(new w.Event('input',{bubbles:true}));
+  const oldDelete = w.document.querySelector('[data-delete-bot-media]');
+  w.document.querySelector('[data-save-bot-media]').click();
+  const patch=await wait(()=>requests.find(r=>r.method==='PATCH'));
+  assert.deepEqual(JSON.parse(patch.body),{revision:'rev1',changes:{tg_link_fallback_1:'https://t.me/c/456/25'}});
+  await wait(()=>w.document.querySelector('[data-delete-bot-media]') !== oldDelete); w.document.querySelector('[data-delete-bot-media]').click();
+  assert.equal(requests.some(r=>r.method==='DELETE'),false);
+  w.document.querySelector('[data-confirm]').click();
+  const del=await wait(()=>requests.find(r=>r.method==='DELETE')); assert.deepEqual(JSON.parse(del.body),{revision:'rev2'});
+  dom.window.close();
+});

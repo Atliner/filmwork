@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { query, withTransaction } = require('../config/db');
 const { AppError, assert } = require('../lib/errors');
 const { composeOverview } = require('./adminOverview');
+const mediaAdmin = require('./mediaAdmin');
 
 function jsonColumn(value) {
   if (value === null || value === undefined) return null;
@@ -304,20 +305,8 @@ const store = {
          ORDER BY COALESCE(season_number, 0), COALESCE(episode_number, 0), id`,
       )
       : [];
-    // Read the source of truth directly. This is deliberately separate from the
-    // editable version tree: replacing that tree must not rewrite bot replicas.
-    const media = await query(
-      `SELECT public_id, season_number, episode_number, episode_title, version_label,
-              audio_type, subtitle_type, resolution, quality_label, encoder, file_size_bytes,
-              mime_type, stream_url, tg_link_primary, tg_link_fallback_1, tg_link_fallback_2,
-              primary_chat_id, primary_message_id, fallback_1_chat_id, fallback_1_message_id,
-              fallback_2_chat_id, fallback_2_message_id, subtitle_link_primary,
-              subtitle_link_fallback_1, subtitle_link_fallback_2, subtitle_primary_message_id,
-              subtitle_fallback_1_message_id, subtitle_fallback_2_message_id,
-              subtitle_file_size_bytes, health_status
-       FROM media_links WHERE content_id = :id AND is_active = TRUE ORDER BY id`,
-      { id: rows[0].id },
-    );
+    // Source records are shown independently of the legacy editable projection.
+    const media = await query('SELECT * FROM media_links WHERE content_id = :id ORDER BY id', { id: rows[0].id });
     const byVersion = new Map();
     for (const link of links) {
       const key = String(link.version_id);
@@ -326,8 +315,12 @@ const store = {
     }
     return {
       content: detailRow(rows[0]),
-      versions: versions.map((version) => versionDto(version, byVersion.get(String(version.id)) || [])),
-      botMedia: media,
+      versions: versions.map((version) => {
+        const all = byVersion.get(String(version.id)) || [];
+        const manual = all.filter((link) => !link.media_link_id);
+        return all.length && !manual.length ? null : versionDto(version, manual);
+      }).filter(Boolean),
+      botMedia: media.map(mediaAdmin.dto),
       counts: {
         seasons: rows[0].season_count === null ? null : Number(rows[0].season_count),
         episodes: rows[0].episode_count === null ? null : Number(rows[0].episode_count),
@@ -451,8 +444,14 @@ const store = {
           featuredHero: payload.featuredHero,
         },
       );
-      if (Array.isArray(payload.versions) && payload.versions.length) {
-        await connection.execute('DELETE FROM content_versions WHERE content_id = :id', { id: rows[0].id });
+      if (Array.isArray(payload.versions)) {
+        // Legacy bot projections can share a version with manual links. Never
+        // cascade-delete them when saving the separate manual editor.
+        await connection.execute(`DELETE vcl FROM content_version_links vcl
+          JOIN content_versions cv ON cv.id = vcl.version_id
+          WHERE cv.content_id = :id AND vcl.media_link_id IS NULL`, { id: rows[0].id });
+        await connection.execute(`DELETE FROM content_versions WHERE content_id = :id
+          AND NOT EXISTS (SELECT 1 FROM content_version_links WHERE version_id = content_versions.id)`, { id: rows[0].id });
         await store.writeVersions(connection, rows[0].id, payload.versions);
       }
       await store.syncSeriesCounts(connection, rows[0].id, payload);
@@ -561,91 +560,10 @@ const store = {
     );
   },
 
-  /**
-   * The owner console's "pull links from the bot" action.
-   *
-   * Bot ingestion writes `media_links`, so those links already serve the public
-   * download picker; this projects them into the console's version tree as well
-   * (idempotently, keyed by `media_link_id`) so the owner sees one link model.
-   */
-  async syncFromMedia(assetId, payload = {}) {
-    const content = await query('SELECT id, title FROM contents WHERE asset_uuid = :assetId LIMIT 1', { assetId });
-    assert(content[0], 404, 'CONTENT_NOT_FOUND', 'اثر پیدا نشد.');
-    const rows = await query(
-      `SELECT ml.* FROM media_links ml
-       WHERE ml.content_id = :contentId AND ml.is_active = TRUE
-       ORDER BY COALESCE(ml.season_number, 0), COALESCE(ml.episode_number, 0),
-                FIELD(ml.audio_type, 'dubbed', 'hard_sub', 'soft_sub', 'original'),
-                CAST(REGEXP_REPLACE(ml.resolution, '[^0-9]', '') AS UNSIGNED) DESC`,
-      { contentId: content[0].id },
-    );
-    let imported = 0;
-    await withTransaction(async (connection) => {
-      for (const row of rows) {
-        const kind = row.audio_type === 'dubbed' ? 'dub' : 'sub';
-        const quality = row.resolution || row.quality_label || 'نسخه';
-        const [versions] = await connection.execute(
-          'SELECT id FROM content_versions WHERE content_id = :contentId AND kind = :kind AND title = :title LIMIT 1',
-          { contentId: content[0].id, kind, title: quality },
-        );
-        let versionId = versions[0]?.id;
-        if (!versionId) {
-          const [inserted] = await connection.execute(
-            `INSERT INTO content_versions (content_id, kind, title, resolution, sort_order)
-             VALUES (:contentId, :kind, :title, :resolution, :sortOrder)`,
-            {
-              contentId: content[0].id,
-              kind,
-              title: quality,
-              resolution: row.resolution,
-              sortOrder: Number(String(row.resolution || '').replace(/\D/g, '')) || 0,
-            },
-          );
-          versionId = inserted.insertId;
-        }
-        const result = await connection.execute(
-          `INSERT INTO content_version_links
-             (version_id, season_number, episode_number, label, size_text, stream_url,
-              subtitle_url, dub_url, telegram_url, media_link_id, source)
-           VALUES
-             (:versionId, :season, :episode, :label, :sizeText, :streamUrl,
-              :subtitleUrl, :dubUrl, :telegramUrl, :mediaLinkId, 'telegram_bot')
-           ON DUPLICATE KEY UPDATE
-             telegram_url = VALUES(telegram_url), subtitle_url = VALUES(subtitle_url),
-             dub_url = VALUES(dub_url), stream_url = VALUES(stream_url)`,
-          {
-            versionId,
-            season: row.season_number,
-            episode: row.episode_number,
-            label: [row.quality_label, row.encoder].filter(Boolean).join(' · ') || null,
-            sizeText: row.file_size_bytes ? `${(Number(row.file_size_bytes) / 1_073_741_824).toFixed(2)} GB` : null,
-            streamUrl: row.stream_url,
-            subtitleUrl: row.subtitle_link_primary,
-            dubUrl: row.audio_type === 'dubbed' ? row.tg_link_primary : null,
-            telegramUrl: row.tg_link_primary,
-            mediaLinkId: row.id,
-          },
-        );
-        imported += result.affectedRows;
-      }
-      const uniqueEpisodes = new Set(rows.filter((row) => row.episode_number)
-        .map((row) => `${row.season_number || 1}-${row.episode_number}`));
-      if (uniqueEpisodes.size) {
-        await connection.execute(
-          `UPDATE contents SET
-             season_count = COALESCE(season_count, :seasons),
-             episode_count = COALESCE(episode_count, :episodes)
-           WHERE id = :contentId`,
-          {
-            seasons: new Set(rows.map((row) => row.season_number || 1)).size,
-            episodes: uniqueEpisodes.size,
-            contentId: content[0].id,
-          },
-        );
-      }
-      await logEvent('media', `لینک‌های رسانه همگام شد: ${content[0].title}`, `${rows.length} لینک در ربات`, connection, assetId);
-    });
-    return { imported, scanned: rows.length, ...(await store.getContent(assetId)) };
+  // Kept for older clients; the source rows are now returned automatically.
+  async syncFromMedia(assetId) {
+    const detail = await store.getContent(assetId);
+    return { imported: 0, scanned: detail.botMedia.length, ...detail };
   },
 
   async countContentsThisMonth() {

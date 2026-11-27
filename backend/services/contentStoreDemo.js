@@ -526,7 +526,7 @@ const store = {
     } else {
       item.featuredHero = payload.featuredHero;
     }
-    if (payload.versions.length) {
+    if (Array.isArray(payload.versions)) {
       item.versions = payload.versions.map((version, index) => ({
         id: `v-${index}`,
         kind: version.kind,
