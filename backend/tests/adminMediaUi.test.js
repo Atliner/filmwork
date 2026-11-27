@@ -23,6 +23,12 @@ test('bot file editor sends only changed replica and confirms deletion', async (
   w.eval(script); await wait(()=>w.document.querySelector('[data-step="3"]')); w.document.querySelector('[data-step="3"]').click();
   const input=await wait(()=>w.document.querySelector('[data-bot-field="tg_link_fallback_1"]'));
   assert.equal(w.document.querySelector('[data-bot-field="tg_link_fallback_2"]').value,'https://t.me/c/789/3');
+  assert.deepEqual(Array.from(w.document.querySelectorAll('[data-inventory-versions]'), n=>n.textContent),['۱','۱']);
+  assert.deepEqual(Array.from(w.document.querySelectorAll('[data-inventory-links]'), n=>n.textContent),['۳','۳']);
+  const audio=w.document.querySelector('[data-bot-field="audio_link_primary"]');
+  audio.value='https://t.me/c/123/4'; audio.dispatchEvent(new w.Event('input',{bubbles:true}));
+  assert.deepEqual(Array.from(w.document.querySelectorAll('[data-inventory-links]'), n=>n.textContent),['۴','۴']);
+  audio.value=''; audio.dispatchEvent(new w.Event('input',{bubbles:true}));
   input.value='https://t.me/c/456/25'; input.dispatchEvent(new w.Event('input',{bubbles:true}));
   const oldDelete = w.document.querySelector('[data-delete-bot-media]');
   w.document.querySelector('[data-save-bot-media]').click();
