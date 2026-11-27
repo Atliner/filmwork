@@ -102,6 +102,7 @@ jobs:
             mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-fourth-telegram-replica.sql
             mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-manual-telegram-downloads.sql
           done
+          mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-fourth-telegram-procedure-optional.sql
           test "$(mysql -N -B -h 127.0.0.1 -u root filmwork_test -e "SELECT COUNT(*) FROM media_links WHERE public_id='00000000-0000-4000-8000-000000000011' AND tg_link_primary='https://t.me/c/123/5' AND tg_link_fallback_2='https://t.me/c/456/6' AND tg_link_fallback_3 IS NULL")" = 1
           test "$(mysql -N -B -h 127.0.0.1 -u root filmwork_test -e "SELECT COUNT(*) FROM content_version_links WHERE telegram_url='https://t.me/c/789/7' AND public_id IS NOT NULL")" = 1
           test "$(mysql -N -B -h 127.0.0.1 -u root filmwork_test -e "SELECT COUNT(*) FROM download_history d JOIN media_links m ON m.id=d.media_link_id WHERE m.public_id='00000000-0000-4000-8000-000000000011'")" = 1

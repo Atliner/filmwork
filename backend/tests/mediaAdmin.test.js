@@ -41,3 +41,12 @@ test('revision detects concurrent replica and metadata changes; protected fields
   await assert.rejects(prepareChanges(row, { primary_chat_id:123 }), {code:'VALIDATION_ERROR'});
   await assert.rejects(prepareChanges(row, { file_size_bytes:0 }), {code:'VALIDATION_ERROR'});
 });
+
+test('fourth replica can be edited together with its subtitle', async () => {
+  const row = { ...sample(), tg_link_fallback_3:'https://t.me/c/444/4', fallback_3_chat_id:-100444, fallback_3_message_id:4,
+    subtitle_link_fallback_3:'https://t.me/c/444/14', subtitle_fallback_3_message_id:14 };
+  const changed = await prepareChanges(row, {tg_link_fallback_3:'https://t.me/c/555/50',subtitle_link_fallback_3:'https://t.me/c/555/51'});
+  assert.equal(changed.changed.fallback_3_chat_id,'-100555'); assert.equal(changed.changed.fallback_3_message_id,50);
+  assert.equal(changed.changed.subtitle_fallback_3_message_id,51);
+  await assert.rejects(prepareChanges(row,{tg_link_fallback_2:''}),{code:'INVALID_REPLICAS'});
+});

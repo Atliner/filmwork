@@ -13,7 +13,7 @@
 - دو ربات جداگانه از BotFather:
   1. ربات عمومی ورود و تحویل فایل
   2. ربات خصوصی مالک/ورود مدیریت/پارسر
-- سه کانال خصوصی تلگرام برای نسخه اصلی و دو fallback
+- سه کانال خصوصی تلگرام برای نسخه اصلی و دو fallback؛ کانال چهارم اختیاری است
 
 ## 2) انتقال کد
 
@@ -45,7 +45,7 @@ npm run build:css
 mysql -u CPANEL_DB_USER -p CPANEL_DB_NAME < ~/filmwork/database/schema.sql
 ```
 
-Schema از InnoDB و `utf8mb4` استفاده می‌کند و جدول‌ها را idempotent می‌سازد. جدول‌های `playback_progress` و `download_history` به‌ترتیب ادامه‌تماشا و تاریخچه ارسال فایل را نگه می‌دارند؛ شماره تلفن یا متن خصوصی تلگرام در این جدول‌ها ذخیره نمی‌شود. هنگام ارتقای نسخه قبلی نیز اجرای دوباره همین فایل، جدول‌های جدید را با `CREATE TABLE IF NOT EXISTS` اضافه می‌کند و داده‌های قبلی را حذف نمی‌کند. در پایان یک procedure نگه‌داری به نام `promote_media_fallback` ایجاد می‌شود. API برای بازیابی به procedure وابسته نیست و همان جابه‌جایی را داخل transaction و با `SELECT ... FOR UPDATE` انجام می‌دهد. اگر host اجازه `CREATE ROUTINE` نمی‌دهد، فقط بخش بین `DROP PROCEDURE` و آخر فایل را حذف و import را تکرار کنید.
+Schema از InnoDB و `utf8mb4` استفاده می‌کند و جدول‌ها را idempotent می‌سازد. جدول‌های `playback_progress` و `download_history` به‌ترتیب ادامه‌تماشا و تاریخچه ارسال فایل را نگه می‌دارند؛ شماره تلفن یا متن خصوصی تلگرام در این جدول‌ها ذخیره نمی‌شود. برای ارتقای ساختارهای موجود از migrationهای مربوط استفاده کنید؛ اجرای مجدد schema ستون‌های جدید را به جدول موجود اضافه نمی‌کند. در پایان یک procedure نگه‌داری به نام `promote_media_fallback` ایجاد می‌شود. API برای بازیابی به procedure وابسته نیست و همان جابه‌جایی را داخل transaction و با `SELECT ... FOR UPDATE` انجام می‌دهد. اگر host اجازه `CREATE ROUTINE` نمی‌دهد، فقط بخش بین `DROP PROCEDURE` و آخر فایل را حذف و import را تکرار کنید.
 
 ## 4) ساخت کلیدها و `.env`
 
@@ -74,7 +74,7 @@ openssl rand -hex 32   # PHONE_ENCRYPTION_KEY
 | `DOWNLOAD_BOT_USERNAME` | username ربات دریافت فایل، بدون `@` |
 | `ADMIN_BOT_TOKEN` | token کاملاً مجزای ربات خصوصی |
 | `ADMIN_OWNER_IDS` | Telegram numeric user ID مالک‌ها، با کاما |
-| `*_CHAT_ID` | شناسه عددی سه کانال، معمولاً با `-100` |
+| `*_CHAT_ID` | شناسه عددی کانال‌های مخزن، معمولاً با `-100` |
 
 در production باید `NODE_ENV=production`، `TRUST_PROXY=1` و `APP_URL=https://...` باشد.
 
@@ -88,14 +88,14 @@ openssl rand -hex 32   # PHONE_ENCRYPTION_KEY
 
 1. در BotFather ربات ورود بسازید و token/username را در `AUTH_BOT_TOKEN` و `AUTH_BOT_USERNAME` بگذارید. این ربات فقط ورود و صدور کد را انجام می‌دهد.
 2. یک ربات سوم بسازید و token/username را در `DOWNLOAD_BOT_TOKEN` و `DOWNLOAD_BOT_USERNAME` بگذارید. کاربران باید پیش از دریافت فایل یک‌بار `/start` را در آن بزنند.
-3. ربات دانلود را در هر سه کانال storage administrator کنید. دسترسی لازم است تا `copyMessage` فایل را برای کاربر کپی کند.
+3. ربات دانلود را در همه کانال‌های تنظیم‌شده storage administrator کنید. دسترسی لازم است تا `copyMessage` فایل را برای کاربر کپی کند.
 4. ربات خصوصی مدیریت همچنان از `ADMIN_BOT_TOKEN` استفاده می‌کند و مستقل می‌ماند.
 
 ### 5.2 ربات خصوصی مدیریت
 
 1. ربات دوم بسازید و token آن را فقط در `ADMIN_BOT_TOKEN` بگذارید.
 2. numeric Telegram user ID مالک را در `ADMIN_OWNER_IDS` وارد کنید. پیام افراد دیگر بی‌صدا نادیده گرفته می‌شود.
-3. ربات را administrator هر سه کانال کنید تا فایل را به fallbackها کپی کند.
+3. ربات را administrator همه کانال‌های تنظیم‌شده کنید تا فایل را به fallbackها کپی کند.
 4. `ADMIN_SOURCE_CHAT_ID` و `TELEGRAM_PRIMARY_CHAT_ID` معمولاً یک کانال هستند.
 
 ### 5.3 یافتن chat ID بدون سرویس شخص ثالث
@@ -226,7 +226,7 @@ node --check server.js
    ```
 
 4. ویدیو و، برای `#زیرنویس مجزا`، فایل `.srt` را حداکثر ده ثانیه بعد بفرستید.
-5. وجود پیام در هر سه کانال و کارت نسخه در سایت را بررسی کنید.
+5. وجود پیام در همه کانال‌های تنظیم‌شده و کارت نسخه در سایت را بررسی کنید.
 6. در سایت، ربات عمومی را باز کنید، contact را share کنید و کد شش‌رقمی را وارد کنید.
 7. یک download را انتخاب کنید؛ پس از pre-roll و هشدار، فایل باید در گفت‌وگوی ربات عمومی کپی شود.
 8. برای آزمون recovery، فقط پیام primary را حذف کنید و همان download را بزنید. رکورد باید خودکار به fallback 1 ارتقا یابد.
@@ -343,4 +343,4 @@ cPanel → **Git™ Version Control** → مخزن را clone/ثبت کنید �
 Before enabling this feature apply `database/migrations/2026-11-telegram-deletion-queue.sql` and restart all application workers. The default is off. A persistent database queue retries deletes after restarts; Telegram's deletion time limits and downtime mean deletion cannot be guaranteed. Expired jobs remain marked `failed` in `telegram_deletion_queue` and errors are logged. It never deletes storage-channel messages. Telegram delivery and database insertion are not atomic; an insertion failure triggers a best-effort immediate deletion and a log entry.
 
 ### نسخه دستی تلگرام و کانال مخزن چهارم
-پس از بکاپ قابل‌بازیابی و توقف تمام workerها، به‌ترتیب فایل‌های `database/migrations/2026-11-fourth-telegram-replica.sql` و `database/migrations/2026-11-manual-telegram-downloads.sql` را اجرا کنید، سپس کد را منتشر کنید. این migrationها تکرارپذیرند و migration قدیمی owner-console نباید دوباره اجرا شود. در `backend/.env` یا تنظیمات محیط cPanel مقدار `TELEGRAM_FALLBACK_3_CHAT_ID=-100...` را برای کانال چهارم بگذارید؛ برای کانال عمومی `TELEGRAM_FALLBACK_3_USERNAME` اختیاری و بدون @ است. متغیر محیطی میزبان بر فایل `.env` اولویت دارد. هر دو ربات مدیریت و دریافت باید به کانال دسترسی لازم داشته باشند. پس از انتشار، همهٔ workerها را restart و با یک فایل و زیرنویس آزمایشی چهار کپی و دریافت را کنترل کنید. به‌روزرسانی، فایل‌های قدیمی را خودکار در کانال چهارم کپی نمی‌کند. کانال چهارم اختیاری است و اگر شناسه خالی بماند ثبت جدید با همان سه کانال انجام می‌شود.
+پس از بکاپ قابل‌بازیابی و توقف تمام workerها، به‌ترتیب فایل‌های `database/migrations/2026-11-fourth-telegram-replica.sql` و `database/migrations/2026-11-manual-telegram-downloads.sql` را اجرا کنید، سپس کد را منتشر کنید. اگر از procedure قدیمی `promote_media_fallback` به‌صورت دستی استفاده می‌کنید، فایل اختیاری `2026-11-fourth-telegram-procedure-optional.sql` را نیز با دسترسی ساخت procedure اجرا کنید؛ تا آن زمان از procedure قدیمی استفاده نکنید. API از procedure استفاده نمی‌کند. این migrationها تکرارپذیرند و migration قدیمی owner-console نباید دوباره اجرا شود. در `backend/.env` یا تنظیمات محیط cPanel مقدار `TELEGRAM_FALLBACK_3_CHAT_ID=-100...` را برای کانال چهارم بگذارید؛ برای کانال عمومی `TELEGRAM_FALLBACK_3_USERNAME` اختیاری و بدون @ است. متغیر محیطی میزبان بر فایل `.env` اولویت دارد. هر دو ربات مدیریت و دریافت باید به کانال دسترسی لازم داشته باشند. پس از انتشار، همهٔ workerها را restart و با یک فایل و زیرنویس آزمایشی چهار کپی و دریافت را کنترل کنید. به‌روزرسانی، فایل‌های قدیمی را خودکار در کانال چهارم کپی نمی‌کند. کانال چهارم اختیاری است و اگر شناسه خالی بماند ثبت جدید با همان سه کانال انجام می‌شود.
