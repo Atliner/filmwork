@@ -534,6 +534,12 @@ test('fourth replica and subtitle persist and shift intact through fallback prom
     const [after] = await query('SELECT * FROM media_links WHERE id=:id',{id:row.id});
     assert.equal(after.tg_link_fallback_2,'https://t.me/c/444/4'); assert.equal(Number(after.fallback_2_chat_id),-100444);
     assert.equal(Number(after.subtitle_fallback_2_message_id),14); assert.equal(after.tg_link_fallback_3,null);
+    await promoteFallback(after.id,after.primary_message_id,after.tg_link_primary,'test2');
+    const [after2] = await query('SELECT * FROM media_links WHERE id=:id',{id:row.id});
+    await promoteFallback(after2.id,after2.primary_message_id,after2.tg_link_primary,'test3');
+    const [after3] = await query('SELECT * FROM media_links WHERE id=:id',{id:row.id});
+    assert.equal(after3.tg_link_primary,'https://t.me/c/444/4'); assert.equal(Number(after3.primary_message_id),4);
+    assert.equal(Number(after3.subtitle_primary_message_id),14); assert.equal(Number(after3.is_active),1);
   } finally { await query('DELETE FROM media_links WHERE id=:id',{id:row.id}); }
 });
 

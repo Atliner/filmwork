@@ -82,12 +82,30 @@ jobs:
         run: |
           mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-telegram-deletion-queue.sql
           mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-telegram-deletion-queue.sql
+      - name: Simulate legacy media schema and retain existing data
+        run: |
+          mysql -h 127.0.0.1 -u root filmwork_test <<'SQL'
+          ALTER TABLE media_links DROP COLUMN tg_link_fallback_3, DROP COLUMN fallback_3_chat_id, DROP COLUMN fallback_3_message_id, DROP COLUMN subtitle_link_fallback_3, DROP COLUMN subtitle_fallback_3_message_id;
+          ALTER TABLE media_links MODIFY COLUMN tg_link_primary VARCHAR(2048) NULL, MODIFY COLUMN tg_link_fallback_1 VARCHAR(2048) NULL, MODIFY COLUMN tg_link_fallback_2 VARCHAR(2048) NULL, MODIFY COLUMN subtitle_link_primary VARCHAR(2048) NULL, MODIFY COLUMN subtitle_link_fallback_1 VARCHAR(2048) NULL, MODIFY COLUMN subtitle_link_fallback_2 VARCHAR(2048) NULL;
+          ALTER TABLE download_history DROP FOREIGN KEY fk_download_history_manual, DROP KEY idx_download_history_manual, DROP COLUMN manual_version_link_id, MODIFY COLUMN media_link_id BIGINT UNSIGNED NOT NULL;
+          ALTER TABLE content_version_links DROP KEY uq_content_version_link_public, DROP COLUMN public_id;
+          INSERT INTO users (tg_user_id,tg_chat_id,account_name,encrypted_phone) VALUES (900002,900002,'legacy-media','x'); SET @u=LAST_INSERT_ID();
+          INSERT INTO contents (asset_uuid,content_type,title,slug,status) VALUES ('00000000-0000-4000-8000-000000000010','movie','legacy-media','legacy-media','published'); SET @c=LAST_INSERT_ID();
+          INSERT INTO media_links (public_id,content_id,version_label,resolution,file_size_bytes,tg_link_primary,tg_link_fallback_2) VALUES ('00000000-0000-4000-8000-000000000011',@c,'legacy','720p',123,'https://t.me/c/123/5','https://t.me/c/456/6'); SET @m=LAST_INSERT_ID();
+          INSERT INTO download_history (user_id,media_link_id,delivery_method) VALUES (@u,@m,'telegram_copy');
+          INSERT INTO content_versions (content_id,kind,title) VALUES (@c,'sub','legacy'); SET @v=LAST_INSERT_ID();
+          INSERT INTO content_version_links (version_id,telegram_url) VALUES (@v,'https://t.me/c/789/7');
+          SQL
       - name: Verify media upgrade migrations are repeatable
         run: |
           for i in 1 2; do
             mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-fourth-telegram-replica.sql
             mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-manual-telegram-downloads.sql
           done
+          test "$(mysql -N -B -h 127.0.0.1 -u root filmwork_test -e "SELECT COUNT(*) FROM media_links WHERE public_id='00000000-0000-4000-8000-000000000011' AND tg_link_primary='https://t.me/c/123/5' AND tg_link_fallback_2='https://t.me/c/456/6' AND tg_link_fallback_3 IS NULL")" = 1
+          test "$(mysql -N -B -h 127.0.0.1 -u root filmwork_test -e "SELECT COUNT(*) FROM content_version_links WHERE telegram_url='https://t.me/c/789/7' AND public_id IS NOT NULL")" = 1
+          test "$(mysql -N -B -h 127.0.0.1 -u root filmwork_test -e "SELECT COUNT(*) FROM download_history d JOIN media_links m ON m.id=d.media_link_id WHERE m.public_id='00000000-0000-4000-8000-000000000011'")" = 1
+          mysql -h 127.0.0.1 -u root filmwork_test -e "DELETE FROM contents WHERE asset_uuid='00000000-0000-4000-8000-000000000010'; DELETE FROM users WHERE tg_user_id=900002"
       - name: Exercise transactions and delivery against MySQL
         shell: bash
         run: |
