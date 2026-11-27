@@ -14,7 +14,6 @@
     modalTimer: null,
     player: null,
     searchTimer: null,
-    selectedPlacement: 'pre_roll',
     routeVisits: 0,
   };
 
@@ -138,7 +137,8 @@
   }
 
   function apiErrorMessage(error) {
-    return error?.message || 'ارتباط با سرور برقرار نشد.';
+    const message = error?.message || 'ارتباط با سرور برقرار نشد.';
+    return error?.requestId ? `${message} (شناسه پیگیری: ${error.requestId})` : message;
   }
 
   async function api(path, options = {}) {
@@ -166,6 +166,7 @@
       const error = new Error(data.error?.message || 'درخواست انجام نشد.');
       error.code = data.error?.code || `HTTP_${response.status}`;
       error.status = response.status;
+      if (response.status >= 500 && /^[a-f0-9-]{36}$/i.test(data.error?.requestId || '')) error.requestId = data.error.requestId;
       throw error;
     }
     return data;
@@ -235,6 +236,11 @@
     </div>`;
   }
 
+  function yearLabel(content) {
+    if (!content.releaseYear) return 'سال نامشخص';
+    return `${content.releaseYear}${content.type === 'series' ? `–${content.lastAirYear || 'نامشخص'}` : ''}`;
+  }
+
   function mediaCard(content) {
     const fa = titleFa(content);
     const en = titleEn(content);
@@ -242,7 +248,7 @@
     return `<article class="media-card" tabindex="0" role="button" data-route="/content/${encodeURIComponent(content.id)}" aria-label="${escapeHtml(label)}">
       ${posterMarkup(content)}
       ${titleMarkup(content, { enClass: 'title-en title-en--card' })}
-      <p>${content.releaseYear ? escapeHtml(content.releaseYear) : 'سال نامشخص'}${content.genres?.[0] ? ` · ${escapeHtml(content.genres[0])}` : ''}</p>
+      <p>${escapeHtml(yearLabel(content))}${content.genres?.[0] ? ` · ${escapeHtml(content.genres[0])}` : ''}</p>
     </article>`;
   }
 
@@ -271,7 +277,7 @@
         ${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="hero-en-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}
         <div class="hero-meta">
           ${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}
-          ${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}</span>` : ''}
+          ${content.releaseYear ? `<span class="meta-dot">${escapeHtml(yearLabel(content))}</span>` : ''}
           <span class="meta-dot">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</span>
           ${genres ? `<span class="meta-dot">${genres}</span>` : ''}
         </div>
@@ -354,6 +360,7 @@
       </div>
       ${heroMarkup(hero)}
       <div class="page-shell">
+        <div class="page-ad-slots"><div id="ad-banner-home"></div><div id="ad-text-home"></div></div>
         ${continueItems.length && onlinePlaybackVisible() ? `<section class="content-section resume-section"><div class="section-head"><div><h2>ادامه تماشا</h2><p>از همان‌جایی که رها کردید</p></div></div><div class="resume-scroller">${continueItems.map(continueCard).join('')}</div></section>` : ''}
         ${gameCard(items)}
         <section class="content-section">
@@ -362,6 +369,8 @@
         </section>
         ${topRated.length ? `<section class="content-section"><div class="section-head"><div><h2>بالاترین امتیاز</h2><p>انتخاب‌ها بر اساس امتیاز IMDb</p></div></div><div class="media-scroller">${topRated.map(mediaCard).join('')}</div></section>` : ''}
       </div>`;
+    loadPageAd('banner_home', '#ad-banner-home', version);
+    loadPageAd('text_home', '#ad-text-home', version);
   }
 
   let searchSequence = 0;
@@ -381,6 +390,7 @@
         <button type="button" class="genre-chip ${initialGenre ? '' : 'active'}" data-search-genre="">همه</button>
         ${facets.genres.map(({name, count}) => `<button type="button" class="genre-chip ${initialGenre === name ? 'active' : ''}" data-search-genre="${escapeHtml(name)}">${escapeHtml(name)} <small>${formatNumber(count)}</small></button>`).join('')}
       </div></section>
+      <div class="page-ad-slots"><div id="ad-banner-search"></div><div id="ad-text-search"></div></div>
       <div class="discovery-layout"><details class="filter-panel" ${window.matchMedia('(min-width: 900px)').matches ? 'open' : ''}><summary><span><b>فیلترهای جستجو</b><small>انتخاب دقیق‌تر</small></span><i aria-hidden="true">＋</i></summary><div class="catalog-filters">
         ${range('سال ساخت', 'search-year', facets.years, 1)}${range('امتیاز IMDb', 'search-rating', facets.ratings, 0.1)}
         ${multi('کشور سازنده', 'country', facets.countries)}${multi('رده سنی', 'age', facets.ages)}${multi('شبکه پخش', 'network', facets.networks)}
@@ -393,6 +403,8 @@
         <div class="search-status" id="search-status" aria-live="polite">در حال دریافت کتابخانه…</div><div class="media-grid" id="search-results"></div><div id="search-more"></div>
       </div></div>
     </div>`;
+    loadPageAd('banner_search', '#ad-banner-search', version);
+    loadPageAd('text_search', '#ad-text-search', version);
     await runSearch('', initialQuery, version, initialGenre);
   }
 
@@ -502,12 +514,14 @@
         <div class="detail-copy"><div class="eyebrow">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</div><h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>
           ${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="detail-en-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}
           <div class="meta-row">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}${content.type === 'series' ? `–${escapeHtml(content.lastAirYear || 'نامشخص')}` : ''}</span>` : ''}${content.runtimeMinutes ? `<span class="meta-dot">${formatNumber(content.runtimeMinutes)} دقیقه</span>` : ''}${content.seriesRunning && content.currentSeason ? `<span class="meta-dot status-live">فصل ${formatNumber(content.currentSeason)} در حال پخش</span>` : ''}</div>
+          <p class="detail-view-count" aria-live="polite"><span id="detail-views">${formatNumber(content.views || 0)}</span> بازدید</p>
           <div class="action-row">${onlinePlaybackVisible() ? `<button class="primary-button" data-route="/player/${encodeURIComponent(content.id)}">${icons.play} پخش آنلاین</button>` : ''}<button class="secondary-button" data-open-download="${escapeHtml(content.id)}">${icons.download} انتخاب نسخه</button><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="علاقه‌مندی">${icons.heart}</button></div>
         </div>
       </div>
     </section>
     <div class="page-shell detail-layout">
-      <div class="detail-story"><section class="detail-synopsis"><span class="editorial-kicker">THE STORY / داستان</span><h2>دربارهٔ این اثر</h2><p>${content.description ? escapeHtml(content.description) : 'توضیحی برای این اثر ثبت نشده است.'}</p></section>
+      <div class="detail-story"><div class="page-ad-slots"><div id="ad-banner-detail"></div><div id="ad-text-detail"></div></div><section class="detail-synopsis"><span class="editorial-kicker">THE STORY / داستان</span><h2>دربارهٔ این اثر</h2><p>${content.description ? escapeHtml(content.description) : 'توضیحی برای این اثر ثبت نشده است.'}</p></section>
+        ${(content.posterGallery || []).map(safeUrl).filter(Boolean).length ? `<section class="detail-posters"><div class="detail-section-heading"><div><span class="editorial-kicker">THE POSTERS</span><h2>گالری پوسترها</h2></div></div><div class="poster-gallery">${content.posterGallery.map(safeUrl).filter(Boolean).map((url, i) => `<a href="${url}" target="_blank" rel="noopener noreferrer" aria-label="نمایش پوستر ${i + 1}"><img src="${url}" loading="lazy" alt="پوستر ${i + 1}"></a>`).join('')}</div></section>` : ''}
         ${(content.directors?.length || content.cast?.length) ? `<section class="detail-credits"><div class="detail-section-heading"><div><span class="editorial-kicker">THE PEOPLE / عوامل</span><h2>جلوی دوربین و پشت صحنه</h2></div></div>${content.directors?.length ? `<div class="credit-block"><span>کارگردان</span><div>${namesMarkup(content.directors)}</div></div>` : ''}${content.cast?.length ? `<div class="credit-block"><span>بازیگران</span><div>${namesMarkup(content.cast)}</div></div>` : ''}</section>` : ''}
       </div>
       <aside class="surface-panel detail-facts"><span class="editorial-kicker">THE DETAILS</span><h2>اطلاعات اثر</h2><div class="fact-list">${facts.filter(([label]) => !['کارگردان','بازیگران'].includes(label)).map(([label, value]) => `<div class="fact"><span>${escapeHtml(label)}</span><div class="fact-value">${escapeHtml(value)}</div></div>`).join('')}</div></aside>
@@ -516,6 +530,27 @@
         <div class="comments" id="comments-list">${commentsMarkup(comments)}</div>
       </section>
     </div>`;
+    recordContentView(assetId, version);
+    loadPageAd('banner_detail', '#ad-banner-detail', version);
+    loadPageAd('text_detail', '#ad-text-detail', version);
+  }
+
+  async function recordContentView(assetId, version) {
+    // A fresh token per navigation, reused on retry, avoids double increments.
+    const bytes = new Uint8Array(16); window.crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+    const hex = [...bytes].map((n) => n.toString(16).padStart(2, '0')).join('');
+    const visitId = `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const result = await api(`/contents/${encodeURIComponent(assetId)}/views`, { method:'POST', keepalive:true, body:JSON.stringify({ visitId }) });
+        if (version === state.routeVersion && $('#detail-views')) $('#detail-views').textContent = formatNumber(result.views);
+        return;
+      } catch (error) {
+        if (attempt === 2 || (error.status && error.status < 500 && error.status !== 429)) return;
+        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+      }
+    }
   }
 
   // A version is an administrator-provided stream, not a user-supplied URL.
@@ -546,7 +581,7 @@
   }
 
   function playerControlMarkup(title, versions) {
-    return `<div class="player-topbar"><button type="button" class="player-back" data-go-back aria-label="بازگشت">‹</button><strong class="player-top-title">${escapeHtml(title)}</strong><div class="player-top-actions">${versions.length > 1 ? `<select id="player-version" aria-label="انتخاب نسخه پخش">${versions.map((item, i) => `<option value="${i}">${escapeHtml(item.label)}</option>`).join('')}</select>` : ''}<button type="button" id="player-audio-menu">صدا</button><button type="button" id="player-subtitle-menu">زیرنویس</button></div></div>
+    return `<div class="player-topbar"><button type="button" class="player-back" data-go-back aria-label="بازگشت">‹</button><strong class="player-top-title">${escapeHtml(title)}</strong><div id="pause-ad-slot"></div><div class="player-top-actions">${versions.length > 1 ? `<select id="player-version" aria-label="انتخاب نسخه پخش">${versions.map((item, i) => `<option value="${i}">${escapeHtml(item.label)}</option>`).join('')}</select>` : ''}<button type="button" id="player-audio-menu">صدا</button><button type="button" id="player-subtitle-menu">زیرنویس</button></div></div>
       <div class="player-center-controls"><button type="button" id="skip-back" aria-label="ده ثانیه عقب">↶<small>۱۰</small></button><button type="button" id="center-play" aria-label="پخش">▶</button><button type="button" id="skip-forward" aria-label="ده ثانیه جلو">↷<small>۱۰</small></button></div>
       <div class="subtitle-overlay" id="external-subtitle" aria-live="off"></div>
       <div class="player-controls">
@@ -608,13 +643,12 @@
       <div class="player-shell controls-visible" id="player-shell">
         <video id="video" class="${safeStream ? '' : 'pixelated'}" playsinline preload="metadata" ${safeStream ? `src="${safeStream}"` : ''}></video>
         ${!safeStream ? `<div class="player-unavailable" id="unavailable-overlay">${icons.film}<strong>پخش آنلاین در دسترس نیست - دریافت از تلگرام</strong><span>در حال حاضر منبعی برای پخش این محتوا تنظیم نشده است.</span></div>` : ''}
-        ${playerControlMarkup(titleFa(content) || titleEn(content), versions)}<div id="pause-ad-slot"></div><div id="player-ad-slot"></div>
+        ${playerControlMarkup(titleFa(content) || titleEn(content), versions)}<div id="player-ad-slot"></div>
       </div>
       <div id="timed-banner-slot"></div>
-      <div id="pause-banner-slot" class="banner-slot"></div>
       <section class="player-info">
         <div class="player-info-main"><div class="player-title-row"><div><h1>${escapeHtml(titleFa(content) || titleEn(content))}</h1>${titleEn(content) && titleEn(content) !== titleFa(content) ? `<p class="original-title" dir="ltr" lang="en">${escapeHtml(titleEn(content))}</p>` : ''}</div><button class="icon-button" data-favorite="${escapeHtml(content.id)}" aria-label="نشان کردن">${icons.heart}</button></div>
-          <div class="hero-meta">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(content.releaseYear)}</span>` : ''}<span class="meta-dot">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</span>${content.genres?.length ? `<span class="meta-dot">${content.genres.slice(0, 3).map(escapeHtml).join('، ')}</span>` : ''}</div>
+          <div class="hero-meta">${content.imdbScore !== null ? `<span class="rating"><b>★</b> IMDb ${escapeHtml(content.imdbScore)}</span>` : ''}${content.releaseYear ? `<span class="meta-dot">${escapeHtml(yearLabel(content))}</span>` : ''}<span class="meta-dot">${content.type === 'series' ? 'سریال' : 'فیلم سینمایی'}</span>${content.genres?.length ? `<span class="meta-dot">${content.genres.slice(0, 3).map(escapeHtml).join('، ')}</span>` : ''}</div>
           ${content.description ? `<p class="player-description">${escapeHtml(content.description)}</p>` : ''}
         </div>
         <aside class="offline-card"><div><span class="offline-icon">${icons.download}</span><div><strong>دانلود و تماشای آفلاین</strong><small>${formatNumber(mediaData.items.length)} نسخه آماده ارسال امن با تلگرام</small></div></div><button class="primary-button" data-open-download="${escapeHtml(content.id)}">انتخاب نسخه</button></aside>
@@ -920,14 +954,14 @@
         syncExternalAudio(true);
         try { await player.externalAudio.play(); } catch { toast('پخش صدای خارجی ممکن نشد.', 'error'); }
       }
+      player.pauseAdGeneration = (player.pauseAdGeneration || 0) + 1;
       clearAdSlot($('#pause-ad-slot'));
-      clearAdSlot($('#pause-banner-slot'));
     });
     on(video, 'pause', () => {
       syncPlayIcon(); showControls(); player.externalAudio?.pause();
       if (player.switchingVersion) return;
       saveProgress(true);
-      if (video.currentTime > 1 && !video.ended && !player.adActive && !player.switchingVersion) { loadPlayerAd('pause_overlay', '#pause-ad-slot', player); loadPlayerAd('banner_pause', '#pause-banner-slot', player); }
+      if (video.currentTime > 1 && !video.ended && !player.adActive && !player.switchingVersion) { player.pauseAdGeneration = (player.pauseAdGeneration || 0) + 1; loadPlayerAd('banner_pause', '#pause-ad-slot', player); }
     });
     on(video, 'waiting', () => { if (player.externalAudioEnabled) player.externalAudio?.pause(); });
     on(video, 'playing', () => {
@@ -1063,7 +1097,8 @@
     let reported = false;
     let intersecting = false;
     const isVideo = element.tagName === 'VIDEO';
-    let mediaReady = isVideo ? false : Boolean(element.complete && element.naturalWidth);
+    const isImage = element.tagName === 'IMG';
+    let mediaReady = isVideo ? false : isImage ? Boolean(element.complete && element.naturalWidth) : true;
     let observer;
     const fallbackVisible = () => {
       const rect = element.getBoundingClientRect();
@@ -1103,6 +1138,19 @@
     }
     check();
     return cleanup;
+  }
+
+  const pageAdCleanups = [];
+  async function loadPageAd(placement, selector, version) {
+    try {
+      const { ad } = await api(`/ads/serve?placement=${encodeURIComponent(placement)}`);
+      const host = $(selector);
+      if (!ad || version !== state.routeVersion || !host) return;
+      const image = !placement.startsWith('text_') && safeUrl(ad.creativeUrl);
+      if (!placement.startsWith('text_') && !image) return;
+      host.innerHTML = `<a class="page-ad ${image ? 'page-ad--banner' : 'page-ad--text'}" href="${escapeHtml(ad.tunnelUrl)}" target="_blank" rel="noopener noreferrer" data-ad-click="${escapeHtml(ad.id)}" data-ad-session="${escapeHtml(ad.session)}"><span class="page-ad-label">تبلیغ</span>${image ? `<img src="${image}" loading="lazy" alt="">` : ''}<span class="page-ad-copy"><strong>${escapeHtml(ad.headline)}</strong>${ad.body ? `<span>${escapeHtml(ad.body)}</span>` : ''}</span><b aria-hidden="true">↗</b></a>`;
+      pageAdCleanups.push(observeAdImpression(ad, image ? $('img', host) : $('a', host)));
+    } catch { /* Content remains usable when the ad server is unavailable. */ }
   }
 
   function clearAdSlot(host) {
@@ -1183,9 +1231,10 @@
   }
 
   async function loadPlayerAd(placement, selector, player) {
+    const pauseGeneration = player.pauseAdGeneration;
     try {
       const { ad } = await api(`/ads/serve?placement=${placement}`);
-      if (!ad || state.player !== player || (['pause_overlay', 'banner_pause'].includes(placement) && (!player.video.paused || player.adActive || player.video.ended))) return;
+      if (!ad || state.player !== player || (placement === 'banner_pause' && (ad.assetType !== 'image' || pauseGeneration !== player.pauseAdGeneration || !player.video.paused || player.adActive || player.video.ended))) return;
       const host = $(selector);
       if (!host) return;
       // The owner sets how many seconds a creative stays on screen.
@@ -1193,7 +1242,7 @@
       const displayId = `${ad.id}:${ad.session}`;
       clearAdSlot(host);
       host.dataset.displayId = displayId;
-      if (ad.durationSeconds) {
+      if (ad.durationSeconds && placement !== 'banner_pause') {
         setTimeout(() => {
           if (state.player === player && host.dataset.displayId === displayId) clearAdSlot(host);
         }, Number(ad.durationSeconds) * 1000);
@@ -1201,7 +1250,7 @@
       const media = ad.assetType === 'video'
         ? `<video src="${safeUrl(ad.creativeUrl)}" muted autoplay playsinline loop></video>`
         : `<img src="${safeUrl(ad.creativeUrl)}" alt="${escapeHtml(ad.headline)}">`;
-      host.innerHTML = placement === 'pause_overlay'
+      host.innerHTML = placement === 'banner_pause'
         ? `<a class="pause-ad-card" href="${escapeHtml(ad.tunnelUrl)}" target="_blank" rel="noopener" data-ad-click="${escapeHtml(ad.id)}" data-ad-session="${escapeHtml(ad.session)}"><span>تبلیغ</span>${media}<strong>${escapeHtml(ad.headline)}</strong></a>`
         : `<a class="timed-banner" href="${escapeHtml(ad.tunnelUrl)}" target="_blank" rel="noopener" data-ad-click="${escapeHtml(ad.id)}" data-ad-session="${escapeHtml(ad.session)}">${media}<div><small>پیشنهاد ویژه</small><strong>${escapeHtml(ad.headline)}</strong><p>${escapeHtml(ad.body || '')}</p></div><b>مشاهده</b></a>`;
       host._adCleanup = observeAdImpression(ad, $('video, img', host));
@@ -1269,18 +1318,21 @@
     const data = await api('/advertiser/profile');
     if (version !== state.routeVersion) return;
     const prices = state.config.placementPrices || [];
-    if (!prices.some((price) => price.placement === state.selectedPlacement)) state.selectedPlacement = prices[0]?.placement || 'pre_roll';
-    const priceCards = prices.map((price) => `<button class="price-card ${state.selectedPlacement === price.placement ? 'selected' : ''}" type="button" data-placement="${price.placement}"><strong>${escapeHtml(price.label)}</strong><span>${formatMoney(price.cpm, price.currency)} / هزار نمایش</span></button>`).join('');
+    const typeLabels = { video:'ویدیو', image:'تصویر / بنر', text:'متن', link:'دکمهٔ زیر فایل تلگرام' };
+    const availableTypes = [...new Set(prices.map((price) => price.asset))];
+    const typeOptions = availableTypes.map((type) => `<option value="${escapeHtml(type)}">${escapeHtml(typeLabels[type] || type)}</option>`).join('');
+    const priceCards = prices.map((price) => `<label class="price-card" data-slot-type="${escapeHtml(price.asset)}" hidden><input type="checkbox" name="placements" value="${escapeHtml(price.placement)}"><strong>${escapeHtml(price.label)}</strong><span>تعرفهٔ پایه: ${formatMoney(price.cpm, price.currency)} / ${price.group === 'link' ? 'هزار ارسال فایل' : 'هزار نمایش'}</span></label>`).join('');
     const statusLabels = { active: 'فعال', paused: 'متوقف', pending: 'در بررسی', rejected: 'ردشده', completed: 'پایان‌یافته', cancelled: 'لغوشده' };
     const campaigns = data.campaigns.length ? data.campaigns.map((campaign) => {
       const percent = campaign.budget > 0 ? Math.min(100, (campaign.spent / campaign.budget) * 100) : 0;
       return `<article class="campaign-card">
         <div class="campaign-creative">${campaign.creativeUrl ? (campaign.assetType === 'video' ? `<video src="${safeUrl(campaign.creativeUrl)}" muted preload="metadata"></video>` : `<img src="${safeUrl(campaign.creativeUrl)}" alt="">`) : '<span>AD</span>'}<i class="status-dot status-${escapeHtml(campaign.status)}"></i></div>
         <div class="campaign-main"><div class="campaign-title"><div><h3>${escapeHtml(campaign.name)}</h3><p>${escapeHtml(campaign.headline)}</p></div><span class="status-pill status-${escapeHtml(campaign.status)}">${escapeHtml(statusLabels[campaign.status] || campaign.status)}</span></div>
-          <div class="campaign-metrics"><span><b>${formatNumber(campaign.impressions)}</b> نمایش</span><span><b>${formatNumber(campaign.clicks)}</b> کلیک</span><span><b>${formatNumber(campaign.completes)}</b> پایان</span><span><b>${formatNumber(campaign.skips)}</b> رد</span><span><b>${formatMoney(campaign.spent)}</b> هزینه</span></div>
+          <p class="muted">جایگاه‌ها: ${escapeHtml((campaign.placements || [campaign.placement]).map((key) => prices.find((price) => price.placement === key)?.label || key).join('، '))}</p><div class="campaign-metrics"><span><b>${formatNumber(campaign.impressions)}</b> نمایش</span><span>${campaign.placement === 'link_file_button' && campaign.telegramClickMode === 'direct' ? 'کلیک مستقیم قابل ثبت نیست' : `<b>${formatNumber(campaign.clicks)}</b> کلیک`}</span><span><b>${formatNumber(campaign.completes)}</b> پایان</span><span><b>${formatNumber(campaign.skips)}</b> رد</span><span><b>${formatMoney(campaign.spent)}</b> هزینه</span></div>
           <div class="budget-progress"><i><b style="width:${percent.toFixed(1)}%"></b></i><small>${formatNumber(percent.toFixed(0))}٪ بودجه · تا ${formatDate(campaign.endsAt)}</small></div>
         </div>
         ${['active', 'paused'].includes(campaign.status) ? `<button type="button" class="campaign-toggle" data-campaign-status="${campaign.status === 'active' ? 'paused' : 'active'}" data-campaign-id="${escapeHtml(campaign.id)}">${campaign.status === 'active' ? 'توقف' : 'ادامه'}</button>` : ''}
+        <button type="button" class="campaign-toggle campaign-delete" data-campaign-delete="${escapeHtml(campaign.id)}">حذف کمپین</button>
       </article>`;
     }).join('') : '<p style="color:#71717a;font-size:12px">هنوز کمپینی ساخته نشده است.</p>';
     app.innerHTML = `<div class="page-shell page-top advertiser-page">
@@ -1295,21 +1347,25 @@
         <section class="surface-panel wallet-card"><span class="wallet-label">موجودی قابل استفاده</span><strong class="wallet-balance">${formatMoney(data.wallet.balance, data.wallet.currency)}</strong><span class="wallet-currency">کیف پول امن کمپین‌ها</span>
           <form id="coupon-redemption-form" class="coupon-redemption"><label class="form-field"><span>کد افزایش موجودی</span><input class="form-input" name="code" maxlength="32" dir="ltr" autocomplete="off" required placeholder="کد تخفیف"></label><button class="primary-button" type="submit">اعمال کد</button></form>
         </section>
-        <section class="surface-panel"><h2>نقشه تعاملی جایگاه‌ها</h2><div class="placement-map"><div class="mock-player">نمای پلیر<button type="button" class="zone zone-pre ${state.selectedPlacement === 'pre_roll' ? 'selected' : ''}" data-placement="pre_roll">Pre-roll</button><button type="button" class="zone zone-pause ${state.selectedPlacement === 'pause_overlay' ? 'selected' : ''}" data-placement="pause_overlay">Pause overlay</button></div><button type="button" class="zone zone-banner ${state.selectedPlacement === 'timed_banner' ? 'selected' : ''}" data-placement="timed_banner">Timed banner below player</button></div><div class="price-cards">${priceCards}</div></section>
+        <section class="surface-panel"><h2>چگونه تبلیغ بسازیم؟</h2><p class="muted">ابتدا نوع محتوا را انتخاب کنید، سپس یک یا چند جایگاه سازگار را علامت بزنید. یک بودجه برای همهٔ جایگاه‌ها رزرو می‌شود و تعرفهٔ هر جایگاه جداگانه است.</p></section>
       </div>
       <div class="hub-layout">
         <section class="surface-panel campaigns-panel"><h2>کمپین‌های من</h2><div class="campaign-list">${campaigns}</div></section>
         <section class="surface-panel" id="new-campaign"><h2>ساخت کمپین</h2><form id="campaign-form">
-          <input type="hidden" name="placement" value="${escapeHtml(state.selectedPlacement)}">
+          <label class="form-field"><span>۱. نوع محتوای تبلیغ</span><select class="form-select" name="creativeType" required><option value="">نوع محتوا را انتخاب کنید</option>${typeOptions}</select></label>
+          <fieldset class="campaign-placements"><legend>۲. جایگاه‌های نمایش</legend><p data-slot-prompt>ابتدا نوع محتوا را انتخاب کنید.</p><div class="price-cards">${priceCards}</div><small>می‌توانید چند جایگاه انتخاب کنید؛ بودجه بین آن‌ها مشترک است.</small></fieldset>
           <label class="form-field"><span>نام داخلی کمپین</span><input class="form-input" name="campaignName" minlength="3" maxlength="180" required></label>
           <label class="form-field"><span>عنوان قابل نمایش</span><input class="form-input" name="headline" minlength="3" maxlength="180" required></label>
           <label class="form-field"><span>توضیح کوتاه</span><textarea class="form-textarea" name="body" maxlength="1000"></textarea></label>
-          <div class="form-grid"><label class="form-field"><span>نوع خلاقه</span><select class="form-select" name="assetType"><option value="video">ویدیو</option><option value="image">تصویر</option></select></label><label class="form-field"><span>بودجه (ریال)</span><input class="form-input" name="budget" type="number" min="1" required></label></div>
-          <label class="form-field"><span>نشانی HTTPS فایل تبلیغ</span><input class="form-input" name="creativeUrl" type="url" inputmode="url" required placeholder="https://cdn.example.com/ad.mp4"></label>
+          <label class="form-field"><span>بودجهٔ مشترک (ریال)</span><input class="form-input" name="budget" type="number" min="1" required><small>مبلغ یک‌بار رزرو می‌شود؛ حداقل بودجه باید حداقل به اندازهٔ بالاترین حداقل جایگاه‌های انتخابی باشد.</small></label>
+          <label class="form-field" data-creative-field><span>نشانی HTTPS فایل تبلیغ</span><input class="form-input" name="creativeUrl" type="url" inputmode="url" required placeholder="https://cdn.example.com/ad.mp4"></label>
+          <label class="form-field" data-bid-field><span>ضریب پیشنهاد (اولویت نمایش)</span><input class="form-input" name="bidMultiplier" type="range" min="1" max="${escapeHtml(state.config.maxPriorityMultiplier || 10)}" step="0.01" value="1" required><output data-bid-value>۱×</output><small>تعرفهٔ هر هزار نمایش برابر تعرفهٔ پایه × ضریب است. ضریب بالاتر احتمال انتخاب را بیشتر می‌کند.</small></label>
           <label class="form-field"><span>نشانی مقصد</span><input class="form-input" name="targetUrl" type="url" inputmode="url" placeholder="https://…"></label>
+          <label class="form-field" data-landing-mode hidden><span>پس از کلیک</span><select class="form-select" name="landingMode"><option value="direct">مستقیم به مقصد (با ثبت کلیک)</option><option value="intermediate">صفحهٔ واسط سایت، سپس مقصد</option></select></label>
+          <label class="form-field" data-telegram-mode hidden><span>شیوهٔ باز شدن دکمهٔ ربات</span><select class="form-select" name="telegramClickMode"><option value="tracked">از طریق سایت · با ثبت کلیک</option><option value="direct">مستقیم به تلگرام · بدون آمار کلیک</option></select><small>نشانی مقصد باید لینک کانال یا ربات در t.me باشد. هزینه بر اساس هر هزار ارسال فایل است و ضریب ندارد.</small></label>
           <div class="form-grid"><label class="form-field"><span>شروع</span><input class="form-input" name="startsAt" type="datetime-local" required></label><label class="form-field"><span>پایان</span><input class="form-input" name="endsAt" type="datetime-local" required></label></div>
-          <label class="form-field"><span>متن صفحه واسط بدون فیلتر</span><textarea class="form-textarea" name="telegramPostText" maxlength="5000"></textarea></label>
-          <div class="form-grid"><label class="form-field"><span>عنوان دکمه تعاملی</span><input class="form-input" name="buttonText" maxlength="60" placeholder="مشاهده پیشنهاد"></label><label class="form-field"><span>نشانی دکمه</span><input class="form-input" name="buttonUrl" type="url" inputmode="url" placeholder="https://…"></label></div>
+          <div data-landing-fields hidden><label class="form-field"><span>متن صفحهٔ واسط (اختیاری)</span><textarea class="form-textarea" name="telegramPostText" maxlength="5000"></textarea></label>
+          <div class="form-grid"><label class="form-field"><span>عنوان دکمهٔ اضافی (اختیاری)</span><input class="form-input" name="buttonText" maxlength="60" placeholder="مشاهده پیشنهاد"></label><label class="form-field"><span>نشانی دکمه</span><input class="form-input" name="buttonUrl" type="url" inputmode="url" placeholder="https://…"></label></div></div>
           <button class="primary-button" type="submit" style="width:100%">رزرو بودجه و ارسال برای بررسی</button>
         </form></section>
       </div>
@@ -1319,12 +1375,24 @@
   }
 
   function setCampaignCreativeType() {
-    const select = $('#campaign-form [name="assetType"]');
-    if (!select) return;
-    const group = state.config.placementPrices?.find((price) => price.placement === state.selectedPlacement)?.group || 'video';
-    const type = group === 'video' ? 'video' : 'image';
-    select.value = type;
-    [...select.options].forEach((option) => { option.disabled = option.value !== type; });
+    const form = $('#campaign-form'); if (!form) return;
+    const type = $('[name="creativeType"]', form).value;
+    $$('[data-slot-type]', form).forEach((label) => {
+      const visible = type && label.dataset.slotType === type;
+      label.hidden = !visible;
+      const box = $('input', label); box.disabled = !visible; if (!visible) box.checked = false;
+    });
+    $('[data-slot-prompt]', form).hidden = Boolean(type);
+    const creativeField = $('[data-creative-field]', form), creative = $('[name="creativeUrl"]', form);
+    creativeField.hidden = !['image','video'].includes(type); creative.required = !creativeField.hidden;
+    const bidField = $('[data-bid-field]', form); bidField.hidden = !type || type === 'link';
+    if (type === 'link') { $('[name="bidMultiplier"]', form).value = '1'; $('[data-bid-value]', form).textContent = '۱×'; }
+    $('[data-telegram-mode]', form).hidden = type !== 'link';
+    $('[data-landing-mode]', form).hidden = !type || type === 'link';
+    const intermediate = type && type !== 'link' && $('[name="landingMode"]', form).value === 'intermediate';
+    $('[data-landing-fields]', form).hidden = !intermediate;
+    $('[name="targetUrl"]', form).required = type === 'link' || (Boolean(type) && !intermediate);
+    $('[name="headline"]', form).maxLength = type === 'link' ? 64 : 180;
   }
 
   function setCampaignDateDefaults() {
@@ -1342,6 +1410,7 @@
     const version = ++state.routeVersion;
     state.routeVisits += 1;
     closeModal();
+    while (pageAdCleanups.length) pageAdCleanups.pop()();
     destroyPlayer();
     window.scrollTo({ top: 0, behavior: 'instant' });
     const parts = routeParts();
@@ -1473,8 +1542,8 @@
     }
     openModal(`${modalHeader('آماده‌سازی دریافت')}<div style="display:grid;place-items:center;min-height:180px"><span class="spinner"></span></div>`, { locked: true });
     try {
-      const { ad } = await api('/ads/serve?placement=pre_roll');
-      if (!ad) {
+      const { ad } = await api('/ads/serve?placement=video_download');
+      if (!ad || ad.assetType !== 'video') {
         showDownloadWarning(mediaId);
         return;
       }
@@ -1517,7 +1586,7 @@
       ? `<video id="preroll-video" src="${safeUrl(ad.creativeUrl)}" autoplay playsinline muted></video>`
       : `<img src="${safeUrl(ad.creativeUrl)}" alt="${escapeHtml(ad.headline)}">`;
     let seconds = Math.max(0, Number(ad.skipAfterSeconds || 0));
-    openModal(`${modalHeader('پیام حامی Vizosten')}<div class="ad-stage"><span class="ad-label">تبلیغ</span>${media}<button class="ad-skip" id="skip-ad" type="button" ${seconds ? 'disabled' : ''}>${seconds ? `رد کردن · ${formatNumber(seconds)}` : 'رد کردن تبلیغ'}</button></div><div class="ad-copy"><h3>${escapeHtml(ad.headline)}</h3><p>${escapeHtml(ad.body || '')}</p><a class="text-button" href="${escapeHtml(ad.tunnelUrl)}" target="_blank" rel="noopener" data-ad-click="${escapeHtml(ad.id)}" data-ad-session="${escapeHtml(ad.session)}">مشاهده جزئیات در صفحه بدون فیلتر</a></div>`, { locked: true });
+    openModal(`${modalHeader('پیام حامی Vizosten')}<div class="ad-stage"><span class="ad-label">تبلیغ</span>${media}<button class="ad-skip" id="skip-ad" type="button" ${seconds ? 'disabled' : ''}>${seconds ? `رد کردن · ${formatNumber(seconds)}` : 'رد کردن تبلیغ'}</button></div><div class="ad-copy"><h3>${escapeHtml(ad.headline)}</h3><p>${escapeHtml(ad.body || '')}</p><a class="text-button" href="${escapeHtml(ad.tunnelUrl)}" target="_blank" rel="noopener" data-ad-click="${escapeHtml(ad.id)}" data-ad-session="${escapeHtml(ad.session)}">مشاهده آگهی</a></div>`, { locked: true });
     const stopObserving = observeAdImpression(ad, $('.ad-stage video, .ad-stage img', modalRoot));
     state.modalAdCleanup = stopObserving;
     const skip = $('#skip-ad');
@@ -1528,6 +1597,7 @@
     if (video) {
       video.muted = false;
       video.addEventListener('ended', () => { recordAdEvent(ad, 'complete'); showDownloadWarning(mediaId); }, { once: true });
+      video.addEventListener('error', () => showDownloadWarning(mediaId), { once: true });
       video.play().catch(() => { video.muted = true; video.play().catch(() => {}); });
     }
     if (seconds > 0) {
@@ -1639,7 +1709,9 @@
   async function submitCampaign(form) {
     const button = $('button[type="submit"]', form);
     const values = Object.fromEntries(new FormData(form));
-    if (Boolean(values.buttonText) !== Boolean(values.buttonUrl)) {
+    const placements = new FormData(form).getAll('placements');
+    if (!placements.length) { toast('حداقل یک جایگاه انتخاب کنید.', 'error'); return; }
+    if (values.landingMode === 'intermediate' && Boolean(values.buttonText) !== Boolean(values.buttonUrl)) {
       toast('برای دکمه تعاملی، عنوان و نشانی را با هم وارد کنید.', 'error');
       return;
     }
@@ -1650,13 +1722,15 @@
     delete values.buttonUrl;
     const payload = {
       ...values,
+      placements,
       startsAt: new Date(values.startsAt).toISOString(),
       endsAt: new Date(values.endsAt).toISOString(),
       telegramButtons: interactiveButtons,
-      skipAfterSeconds: values.placement === 'pre_roll' ? 5 : 0,
+      skipAfterSeconds: placements.includes('pre_roll') ? 5 : 0,
     };
-    const group = state.config.placementPrices?.find((price) => price.placement === payload.placement)?.group || 'video';
-    payload.assetType = group === 'video' ? 'video' : 'image';
+    payload.assetType = values.creativeType === 'video' ? 'video' : 'image';
+    delete payload.creativeType;
+    if (values.landingMode !== 'intermediate') { payload.telegramPostText = ''; payload.telegramButtons = []; }
     button.disabled = true;
     button.innerHTML = '<span class="spinner"></span> در حال رزرو بودجه';
     try {
@@ -1701,17 +1775,18 @@
     }
     const delivery = event.target.closest('#confirm-delivery');
     if (delivery) { invokeDelivery(delivery.dataset.mediaId); return; }
-    const placement = event.target.closest('[data-placement]');
-    if (placement && $('#campaign-form')) {
-      state.selectedPlacement = placement.dataset.placement;
-      const hidden = $('#campaign-form [name="placement"]');
-      if (hidden) hidden.value = state.selectedPlacement;
-      $$('[data-placement]').forEach((element) => element.classList.toggle('selected', element.dataset.placement === state.selectedPlacement));
-      setCampaignCreativeType();
-      return;
-    }
     const campaignScroll = event.target.closest('[data-scroll-campaign]');
     if (campaignScroll) { $('#new-campaign')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+    const campaignDelete = event.target.closest('[data-campaign-delete]');
+    if (campaignDelete) {
+      if (!window.confirm('کمپین و آمار آن برای همیشه حذف شود؟ بودجهٔ مصرف‌نشده به کیف پول برمی‌گردد و سوابق مالی حفظ می‌شود.')) return;
+      campaignDelete.disabled = true;
+      try {
+        await api(`/advertiser/campaigns/${encodeURIComponent(campaignDelete.dataset.campaignDelete)}`, { method:'DELETE' });
+        toast('کمپین حذف شد و بودجهٔ مصرف‌نشده بازگردانده شد.', 'success'); route();
+      } catch (error) { toast(apiErrorMessage(error), 'error'); campaignDelete.disabled = false; }
+      return;
+    }
     const campaignToggle = event.target.closest('[data-campaign-status]');
     if (campaignToggle) {
       campaignToggle.disabled = true;
@@ -1736,7 +1811,7 @@
   });
 
   document.addEventListener('dblclick', (event) => {
-    if (!state.player || !event.target.closest('#player-shell')) return;
+    if (!state.player || !event.target.closest('#player-shell') || event.target.closest('a, button, input, select, #pause-ad-slot')) return;
     const rect = state.player.shell.getBoundingClientRect();
     const forward = event.clientX < rect.left + rect.width / 2; // RTL visual: left is forward.
     state.player.video.currentTime = Math.max(0, Math.min(state.player.video.duration || Infinity, state.player.video.currentTime + (forward ? 10 : -10)));
@@ -1749,6 +1824,7 @@
   });
 
   document.addEventListener('input', (event) => {
+    if (event.target.matches('#campaign-form [name=bidMultiplier]')) $('[data-bid-value]', event.target.form).textContent = `${formatNumber(Number(event.target.value))}×`;
     if (event.target.id !== 'search-input') return;
     clearTimeout(state.searchTimer);
     state.searchTimer = setTimeout(() => {
@@ -1784,6 +1860,7 @@
   });
 
   document.addEventListener('change', (event) => {
+    if (event.target.closest('#campaign-form') && event.target.matches('[name=creativeType], [name=landingMode]')) { setCampaignCreativeType(); return; }
     if (!event.target.matches('[data-catalog-filter]')) return;
     const type = $('[data-search-type].active')?.dataset.searchType || '';
     runSearch(type, $('#search-input')?.value || '');

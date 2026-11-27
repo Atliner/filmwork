@@ -26,6 +26,8 @@ const { query, withTransaction, healthCheck, closePool } = require('./config/db'
 const { AppError, assert, asyncRoute } = require('./lib/errors');
 const { parseCatalogFilters, catalogFacets } = require('./lib/catalogFilters');
 const { createAliasIndex, expandAliases, displayCredits } = require('./lib/peopleAliases');
+const { resolvePoster, posterImage } = require('./lib/posterImport');
+const { imdbPosters } = require('./lib/imdbPosters');
 const {
   hmacHex,
   generateOpaqueToken,
@@ -55,8 +57,13 @@ const {
 } = require('./middleware/auth');
 const { deliverMedia } = require('./services/mediaDelivery');
 const { checkDownloadAllowance } = require('./services/downloadPolicy');
-const { changeCampaignStatus, settleExpiredCampaigns } = require('./services/adAccounting');
+const { changeCampaignStatus, settleExpiredCampaigns, deleteCampaign } = require('./services/adAccounting');
 const { eventDecision, shouldChargeImpression } = require('./services/adEventRules');
+const { normalizeBid, chooseAd } = require('./services/adCompetition');
+const { createAdSession, verifyAdSession } = require('./lib/adSession');
+const { parsePlacements } = require('./services/adPlacements');
+const { telegramTarget, trackedOrigin } = require('./lib/telegramAd');
+const { moneyCents } = require('./lib/money');
 const { buildParseDraft, normalizeContentPayload, updateContentPayload } = require('./lib/contentParams');
 const { contentStore } = require('./services/contentStoreIndex');
 const siteSettings = require('./services/siteSettings');
@@ -263,6 +270,7 @@ function contentDto(row) {
     description: row.description,
     imdbScore: row.imdb_score === null ? null : Number(row.imdb_score),
     releaseYear: row.release_year,
+    lastAirYear: row.last_air_year ?? null,
     genres: parseJsonColumn(row.genres, []),
     directors: parseJsonColumn(row.directors, []),
     cast: parseJsonColumn(row.cast_members, []),
@@ -286,6 +294,7 @@ function contentDto(row) {
     seasonCount: row.season_count,
     posterGallery: parseJsonColumn(row.poster_gallery, []),
     featuredHero: row.featured_hero === undefined ? undefined : Boolean(row.featured_hero),
+    views: Number(row.view_count || 0),
     createdAt: row.created_at,
   };
 }
@@ -345,30 +354,6 @@ function safePublicUrl(value) {
   }
 }
 
-function createAdSession(adPublicId) {
-  const payload = Buffer.from(JSON.stringify({
-    ad: adPublicId,
-    exp: Date.now() + 2 * 60 * 60_000,
-    nonce: generateOpaqueToken(12),
-  })).toString('base64url');
-  return `${payload}.${hmacHex(payload)}`;
-}
-
-function verifyAdSession(session, expectedAdId) {
-  const [payload, signature, ...extra] = String(session || '').split('.');
-  assert(payload && signature && extra.length === 0, 422, 'INVALID_AD_SESSION', 'شناسه نمایش نامعتبر است.');
-  const expectedSignature = hmacHex(payload);
-  assert(timingSafeHexEqual(signature, expectedSignature), 422, 'INVALID_AD_SESSION', 'شناسه نمایش نامعتبر است.');
-  let claims;
-  try {
-    claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-  } catch {
-    throw new AppError(422, 'INVALID_AD_SESSION', 'شناسه نمایش نامعتبر است.');
-  }
-  assert(claims.ad === expectedAdId && Number(claims.exp) > Date.now(), 422, 'EXPIRED_AD_SESSION', 'شناسه نمایش منقضی شده است.');
-  return claims;
-}
-
 app.get('/api/health', asyncRoute(async (_req, res) => {
   const demoMode = process.env.DEMO_DATA === '1';
   let database;
@@ -419,8 +404,10 @@ app.get('/api/config', asyncRoute(async (_req, res) => {
     player: { enabled: publicSettings['player.enabled'] === '1', buttonVisible: publicSettings['player.button_visible'] === '1' },
     authBotUrl: username ? `https://t.me/${encodeURIComponent(username)}` : null,
     downloadBotUrl: downloadUsername ? `https://t.me/${encodeURIComponent(downloadUsername)}` : null,
+    maxPriorityMultiplier: adSettingsLib.adPolicy(await adPlatform.readSettings().catch(() => ({ ...adSettingsLib.DEFAULTS }))).maxPriorityMultiplier,
     placementPrices: adSettingsLib.publicPlacementPrices(prices).map((price) => ({
       placement: price.placement,
+      asset: adSettingsLib.placementMeta(price.placement)?.asset,
       group: price.slot_group || 'video',
       label: price.display_name_fa,
       cpm: Number(price.price_per_thousand),
@@ -681,6 +668,7 @@ function contentFromStoreItem(item) {
     posterUrl: item.posterUrl,
     posterGallery: item.posterGallery || [],
     featuredHero: Boolean(item.featuredHero),
+    views: Number(item.views || 0),
     mediaCount: item.mediaCount,
     createdAt: item.createdAt,
   };
@@ -805,6 +793,25 @@ app.get('/api/contents/:assetId', asyncRoute(async (req, res) => {
   assert(rows[0], 404, 'CONTENT_NOT_FOUND', 'اثر پیدا نشد.');
   res.setHeader('Cache-Control', 'public, max-age=30');
   res.json({ content: await enrichCredits(contentDto(rows[0])) });
+}));
+
+// A detail-page navigation has one UUID. A retry after a lost response must not
+// increment twice; row locking and the receipt are committed with the counter.
+app.post('/api/contents/:assetId/views', asyncRoute(async (req, res) => {
+  const assetId = asString(req.params.assetId, 'شناسه اثر', { min: 36, max: 36 });
+  const visitId = asString(req.body?.visitId, 'شناسه بازدید', { min: 36, max: 36 }).toLowerCase();
+  assert(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(visitId), 422, 'INVALID_VISIT', 'شناسه بازدید معتبر نیست.');
+  let result;
+  if (contentStore().kind === 'demo') result = await contentStore().recordContentView(assetId, visitId);
+  else result = await withTransaction(async (connection) => {
+    const [rows] = await connection.execute("SELECT id, view_count FROM contents WHERE asset_uuid = :assetId AND status = 'published' FOR UPDATE", { assetId });
+    assert(rows[0], 404, 'CONTENT_NOT_FOUND', 'اثر پیدا نشد.');
+    const [receipt] = await connection.execute('INSERT IGNORE INTO content_view_receipts (content_id, visit_id) VALUES (:id, :visitId)', { id: rows[0].id, visitId });
+    if (receipt.affectedRows) await connection.execute('UPDATE contents SET view_count = view_count + 1, last_viewed_at = UTC_TIMESTAMP(3) WHERE id = :id', { id: rows[0].id });
+    return { views: Number(rows[0].view_count) + (receipt.affectedRows ? 1 : 0), counted: Boolean(receipt.affectedRows) };
+  }, { isolationLevel: 'READ COMMITTED' });
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(result);
 }));
 
 // Only playback URLs are public here; Telegram delivery links and owner data stay private.
@@ -973,7 +980,10 @@ app.post('/api/download', requireUser, asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/ads/serve', optionalUser, asyncRoute(async (req, res) => {
+  // Old clients can still ask for the retired video pause slot. Never serve it.
+  if (req.query.placement === 'pause_overlay') return res.json({ ad: null });
   const placement = asEnum(req.query.placement, 'جایگاه', adSettingsLib.PLACEMENT_KEYS);
+  if (placement === 'link_file_button') return res.json({ ad:null }); // Served only with Telegram deliveries.
   const settings = await adPlatform.readSettings().catch(() => ({ ...adSettingsLib.DEFAULTS }));
   const policy = adSettingsLib.adPolicy(settings);
   const slot = await query(
@@ -982,19 +992,19 @@ app.get('/api/ads/serve', optionalUser, asyncRoute(async (req, res) => {
   ).catch(() => []);
   if (!slot[0] || !slot[0].is_enabled || !slot[0].is_active) return res.json({ ad: null });
   const rows = await query(
-    `SELECT public_id, headline, body, placement, asset_type, creative_url,
-            target_url, skip_after_seconds, duration_seconds, skip_after_seconds, budget, spent,
-            owner_campaign
-     FROM ads
-     WHERE placement = :placement AND status = 'active'
-       AND starts_at <= UTC_TIMESTAMP(3) AND ends_at > UTC_TIMESTAMP(3)
-       AND (owner_campaign = TRUE OR spent < budget)
-     ORDER BY id DESC LIMIT 100`,
+    `SELECT a.public_id, a.headline, a.body, ap.placement, a.asset_type, a.creative_url,
+            a.target_url, a.skip_after_seconds, a.duration_seconds, a.budget, a.spent,
+            a.owner_campaign, ap.bid_multiplier
+     FROM ad_campaign_placements ap JOIN ads a ON a.id = ap.ad_id
+     WHERE ap.placement = :placement AND a.status = 'active' AND a.deleted_at IS NULL
+       AND a.starts_at <= UTC_TIMESTAMP(3) AND a.ends_at > UTC_TIMESTAMP(3)
+       AND (a.owner_campaign = TRUE OR a.spent < a.budget)
+     ORDER BY a.id DESC`,
     { placement },
   );
   if (!rows.length) return res.json({ ad: null });
-  const row = rows[crypto.randomInt(0, rows.length)];
-  const adSession = createAdSession(row.public_id);
+  const row = chooseAd(rows);
+  const adSession = createAdSession(row.public_id, { placement });
   res.setHeader('Cache-Control', 'no-store');
   res.json({
     ad: {
@@ -1004,7 +1014,7 @@ app.get('/api/ads/serve', optionalUser, asyncRoute(async (req, res) => {
       placement: row.placement,
       assetType: row.asset_type,
       creativeUrl: row.creative_url,
-      tunnelUrl: `/api/ad-tunnel/${encodeURIComponent(row.public_id)}`,
+      tunnelUrl: `/api/ad-tunnel/${encodeURIComponent(row.public_id)}?session=${encodeURIComponent(adSession)}`,
       skipAfterSeconds: Number(row.skip_after_seconds ?? policy.skipAfterSeconds),
       durationSeconds: Number(row.duration_seconds || policy.defaultVideoDuration),
       targetUrl: row.target_url || null,
@@ -1013,32 +1023,35 @@ app.get('/api/ads/serve', optionalUser, asyncRoute(async (req, res) => {
   });
 }));
 
-app.post('/api/ads/:adId/events', optionalUser, asyncRoute(async (req, res) => {
-  const eventType = asEnum(req.body?.eventType, 'رویداد', ['impression', 'click', 'skip', 'complete']);
-  const session = asString(req.get('x-ad-session') || req.body?.session, 'شناسه نمایش', { min: 40, max: 400 });
-  verifyAdSession(session, req.params.adId);
-  const sessionKey = hmacHex(`${req.params.adId}:${session}`);
+async function recordAdEvent(req, adId, session, eventType, { requireImpression = false } = {}) {
+  const claims = verifyAdSession(session, adId);
+  const sessionKey = hmacHex(`${adId}:${session}`);
   const accepted = await withTransaction(async (connection) => {
     const [ads] = await connection.execute(
-      'SELECT id, unit_price, budget, spent, status, owner_campaign FROM ads WHERE public_id = :adId FOR UPDATE',
-      { adId: req.params.adId },
+      'SELECT id, placement, unit_price, budget, spent, status, owner_campaign FROM ads WHERE public_id = :adId AND deleted_at IS NULL FOR UPDATE',
+      { adId: adId },
     );
     assert(ads[0], 404, 'AD_NOT_FOUND', 'تبلیغ پیدا نشد.');
+    const eventPlacement = claims.placement || ads[0].placement;
+    const [slots] = await connection.execute('SELECT CAST(unit_price AS CHAR) AS unit_price FROM ad_campaign_placements WHERE ad_id = :id AND placement = :placement', { id:ads[0].id, placement:eventPlacement });
+    assert(slots[0], 422, 'INVALID_AD_SESSION', 'جایگاه نمایش نامعتبر است.');
     // Serialise transitions on the campaign row. The unique key alone prevents
     // duplicate event types but cannot prevent both skip and complete for a session.
     const [prior] = await connection.execute(
       'SELECT event_type FROM ad_events WHERE ad_id = :adId AND session_key = :sessionKey',
       { adId: ads[0].id, sessionKey },
     );
+    if (requireImpression && !prior.some((event) => event.event_type === 'impression')) return false;
     const decision = eventDecision(eventType, prior.map((event) => event.event_type));
     if (decision !== 'accept') return false;
     const [eventResult] = await connection.execute(
-      `INSERT IGNORE INTO ad_events (ad_id, user_id, event_type, session_key, ip_hash, user_agent)
-       VALUES (:adId, :userId, :eventType, :sessionKey, :ipHash, :userAgent)`,
+      `INSERT IGNORE INTO ad_events (ad_id, user_id, event_type, placement, session_key, ip_hash, user_agent)
+       VALUES (:adId, :userId, :eventType, :placement, :sessionKey, :ipHash, :userAgent)`,
       {
         adId: ads[0].id,
         userId: req.user?.id || null,
         eventType,
+        placement: eventPlacement,
         sessionKey,
         ipHash: hashIp(req.ip),
         userAgent: String(req.get('user-agent') || '').slice(0, 500) || null,
@@ -1047,34 +1060,69 @@ app.post('/api/ads/:adId/events', optionalUser, asyncRoute(async (req, res) => {
     if (shouldChargeImpression(eventType, eventResult.affectedRows === 1, ads[0])) {
       await connection.execute(
         `UPDATE ads SET
-           status = IF(spent + (unit_price / 1000) >= budget, 'completed', status),
-           spent = LEAST(budget, spent + (unit_price / 1000))
+           status = IF(spent + (:unitPrice / 1000) >= budget, 'completed', status),
+           spent = LEAST(budget, spent + (:unitPrice / 1000))
          WHERE id = :id`,
-        { id: ads[0].id },
+        { id: ads[0].id, unitPrice: slots[0].unit_price },
       );
     }
     return eventResult.affectedRows === 1;
   }, { isolationLevel: 'READ COMMITTED' });
+  return accepted;
+}
+
+app.post('/api/ads/:adId/events', optionalUser, asyncRoute(async (req, res) => {
+  const eventType = asEnum(req.body?.eventType, 'رویداد', ['impression', 'click', 'skip', 'complete']);
+  const session = asString(req.get('x-ad-session') || req.body?.session, 'شناسه نمایش', { min: 40, max: 400 });
+  const claims = verifyAdSession(session, req.params.adId);
+  assert(!claims.purpose || claims.purpose === 'web', 422, 'INVALID_AD_SESSION', 'شناسه نمایش نامعتبر است.');
+  const accepted = await recordAdEvent(req, req.params.adId, session, eventType);
   res.status(202).json({ accepted });
+}));
+
+// A tracked bot link counts at most one click per delivered message. Direct
+// links bypass the site completely and never report clicks.
+app.get('/api/ads/telegram-click/:adId', asyncRoute(async (req, res) => {
+  const session = asString(req.query.session, 'شناسه نمایش', { min:40, max:400 });
+  const claims = verifyAdSession(session, req.params.adId, { allowExpired:true });
+  assert(claims.purpose === 'telegram', 422, 'INVALID_AD_SESSION', 'شناسه نمایش نامعتبر است.');
+  const rows = await query("SELECT target_url FROM ads WHERE public_id = :id AND placement = 'link_file_button' AND telegram_click_mode = 'tracked' AND deleted_at IS NULL AND status IN ('active','paused','completed') LIMIT 1", { id:req.params.adId });
+  assert(rows[0], 404, 'AD_NOT_FOUND', 'تبلیغ پیدا نشد.');
+  const target = telegramTarget(rows[0].target_url);
+  if (Number(claims.exp) > Date.now()) await recordAdEvent(req, req.params.adId, session, 'click', { requireImpression:true });
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.redirect(302, target);
 }));
 
 app.get('/api/ad-tunnel/:adId', asyncRoute(async (req, res) => {
   const rows = await query(
     `SELECT public_id, headline, body, asset_type, creative_url, target_url,
-            telegram_post_text, telegram_buttons
+            telegram_post_text, telegram_buttons, landing_mode
      FROM ads
-     WHERE public_id = :adId AND status IN ('active', 'completed') LIMIT 1`,
+     WHERE public_id = :adId AND deleted_at IS NULL AND status IN ('active', 'completed') LIMIT 1`,
     { adId: req.params.adId },
   );
   assert(rows[0], 404, 'AD_NOT_FOUND', 'صفحه تبلیغ پیدا نشد.');
+  if (req.query.session) {
+    const session = asString(req.query.session, 'شناسه نمایش', { min: 40, max: 400 });
+    // Navigation is a fallback when a browser is closed before the click POST.
+    // The same session/type is idempotent with the POST and transactionally locked.
+    await recordAdEvent(req, req.params.adId, session, 'click');
+  }
   const ad = rows[0];
   const creative = safePublicUrl(ad.creative_url);
   const target = safePublicUrl(ad.target_url);
+  if (ad.landing_mode === 'direct' && target) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    return res.redirect(302, target);
+  }
   const rawButtons = parseJsonColumn(ad.telegram_buttons, []);
   const buttons = Array.isArray(rawButtons)
     ? rawButtons.filter((button) => button && safePublicUrl(button.url)).slice(0, 12)
     : [];
-  const media = ad.asset_type === 'video'
+  const media = !creative ? '' : ad.asset_type === 'video'
     ? `<video controls playsinline preload="metadata" src="${escapeHtml(creative)}"></video>`
     : `<img src="${escapeHtml(creative)}" alt="${escapeHtml(ad.headline)}">`;
   const buttonHtml = buttons.map((button) => (
@@ -1083,7 +1131,8 @@ app.get('/api/ad-tunnel/:adId', asyncRoute(async (req, res) => {
   const targetButton = target
     ? `<a class="button primary" href="${escapeHtml(target)}" rel="noopener noreferrer">مشاهده پیشنهاد</a>`
     : '';
-  res.setHeader('Cache-Control', 'public, max-age=60');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Referrer-Policy', 'no-referrer');
   res.type('html').send(`<!doctype html>
 <html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(ad.headline)} | Filmwork</title>
@@ -1133,16 +1182,17 @@ app.use('/uploads', (req, res, next) => {
 
 app.get('/api/advertiser/profile', requireUser, requireRole('advertiser'), asyncRoute(async (req, res) => {
   await settleExpiredCampaigns(req.user.id);
-  const [walletRows, campaignRows, transactionRows] = await Promise.all([
+  const [walletRows, campaignRows, transactionRows, analyticsRows] = await Promise.all([
     query('SELECT balance, currency FROM advertiser_wallets WHERE user_id = :userId LIMIT 1', { userId: req.user.id }),
     query(
       `SELECT a.public_id, a.campaign_name, a.headline, a.placement, a.asset_type,
-              a.creative_url, a.budget, a.spent, a.status, a.starts_at, a.ends_at, a.created_at,
+              a.creative_url, a.telegram_click_mode, a.landing_mode, a.budget, a.spent, a.status, a.starts_at, a.ends_at, a.created_at,
+              (SELECT GROUP_CONCAT(ap.placement ORDER BY ap.placement SEPARATOR ',') FROM ad_campaign_placements ap WHERE ap.ad_id = a.id) AS placements,
               (SELECT COUNT(*) FROM ad_events ae WHERE ae.ad_id = a.id AND ae.event_type = 'impression') AS impressions,
               (SELECT COUNT(*) FROM ad_events ae WHERE ae.ad_id = a.id AND ae.event_type = 'click') AS clicks,
               (SELECT COUNT(*) FROM ad_events ae WHERE ae.ad_id = a.id AND ae.event_type = 'complete') AS completes,
               (SELECT COUNT(*) FROM ad_events ae WHERE ae.ad_id = a.id AND ae.event_type = 'skip') AS skips
-       FROM ads a WHERE a.advertiser_id = :userId ORDER BY a.created_at DESC LIMIT 50`,
+       FROM ads a WHERE a.advertiser_id = :userId AND a.deleted_at IS NULL AND a.owner_campaign = FALSE ORDER BY a.created_at DESC LIMIT 50`,
       { userId: req.user.id },
     ),
     query(
@@ -1150,15 +1200,16 @@ app.get('/api/advertiser/profile', requireUser, requireRole('advertiser'), async
        FROM wallet_transactions WHERE user_id = :userId ORDER BY created_at DESC LIMIT 20`,
       { userId: req.user.id },
     ),
+    query(`SELECT
+      (SELECT COUNT(*) FROM ad_events e JOIN ads a ON a.id = e.ad_id WHERE a.advertiser_id = :userId AND a.owner_campaign = FALSE AND e.event_type = 'impression') AS impressions,
+      (SELECT COUNT(*) FROM ad_events e JOIN ads a ON a.id = e.ad_id WHERE a.advertiser_id = :userId AND a.owner_campaign = FALSE AND e.event_type = 'click') AS clicks,
+      (SELECT COUNT(*) FROM ad_events e JOIN ads a ON a.id = e.ad_id WHERE a.advertiser_id = :userId AND a.owner_campaign = FALSE AND e.event_type = 'complete') AS completes,
+      (SELECT COUNT(*) FROM ad_events e JOIN ads a ON a.id = e.ad_id WHERE a.advertiser_id = :userId AND a.owner_campaign = FALSE AND e.event_type = 'skip') AS skips,
+      ((SELECT COALESCE(SUM(spent), 0) FROM ads WHERE advertiser_id = :userId AND owner_campaign = FALSE) + (SELECT COALESCE(SUM(spent), 0) FROM ad_financial_archive WHERE advertiser_id = :userId AND owner_campaign = FALSE)) AS spent`,
+      { userId: req.user.id }),
   ]);
-  const analytics = campaignRows.reduce((total, row) => {
-    total.impressions += Number(row.impressions || 0);
-    total.clicks += Number(row.clicks || 0);
-    total.completes += Number(row.completes || 0);
-    total.skips += Number(row.skips || 0);
-    total.spent += Number(row.spent || 0);
-    return total;
-  }, { impressions: 0, clicks: 0, completes: 0, skips: 0, spent: 0 });
+  const totals = analyticsRows[0] || {};
+  const analytics = Object.fromEntries(['impressions', 'clicks', 'completes', 'skips', 'spent'].map((key) => [key, Number(totals[key] || 0)]));
   analytics.ctr = analytics.impressions > 0
     ? Number(((analytics.clicks / analytics.impressions) * 100).toFixed(2))
     : 0;
@@ -1173,8 +1224,11 @@ app.get('/api/advertiser/profile', requireUser, requireRole('advertiser'), async
       name: row.campaign_name,
       headline: row.headline,
       placement: row.placement,
+      placements: row.placements ? row.placements.split(',') : [row.placement],
+      landingMode: row.landing_mode,
       assetType: row.asset_type,
       creativeUrl: row.creative_url,
+      telegramClickMode: row.telegram_click_mode,
       budget: Number(row.budget),
       spent: Number(row.spent),
       impressions: Number(row.impressions || 0),
@@ -1199,12 +1253,17 @@ app.patch('/api/advertiser/campaigns/:adId', requireUser, requireRole('advertise
   const status = asEnum(req.body?.status, 'وضعیت', ['active', 'paused']);
   const result = await query(
     `UPDATE ads SET status = :status
-     WHERE public_id = :adId AND advertiser_id = :userId
+     WHERE public_id = :adId AND advertiser_id = :userId AND owner_campaign = FALSE AND deleted_at IS NULL
        AND status IN ('active', 'paused') AND ends_at > UTC_TIMESTAMP(3)`,
     { status, adId: req.params.adId, userId: req.user.id },
   );
   assert(result.affectedRows, 409, 'CAMPAIGN_NOT_CHANGEABLE', 'این کمپین قابل تغییر نیست.');
   res.json({ updated: true, status });
+}));
+
+app.delete('/api/advertiser/campaigns/:adId', requireUser, requireRole('advertiser'), asyncRoute(async (req, res) => {
+  const result = await deleteCampaign(req.params.adId, req.user.id);
+  res.json(result);
 }));
 
 function parseButtons(value) {
@@ -1230,19 +1289,26 @@ app.post(
   asyncRoute(async (req, res) => {
     let uploadedPath = req.file?.path || null;
     try {
-      const placement = asEnum(req.body?.placement, 'جایگاه', adSettingsLib.PLACEMENT_KEYS);
+      const placements = parsePlacements(req.body || {});
+      const placement = placements[0];
       const adPolicy = adSettingsLib.adPolicy(await adPlatform.readSettings().catch(() => ({ ...adSettingsLib.DEFAULTS })));
       const campaignName = asString(req.body?.campaignName, 'نام کمپین', { min: 3, max: 180 });
       const headline = asString(req.body?.headline, 'عنوان تبلیغ', { min: 3, max: 180 });
       const body = asString(req.body?.body, 'متن تبلیغ', { max: 1000, optional: true });
-      const budget = asPositiveNumber(req.body?.budget, 'بودجه', { min: 1, max: 1_000_000_000_000_000 });
+      const budget = String(req.body?.budget ?? '').trim();
+      const budgetCents = moneyCents(budget);
+      assert(budgetCents >= 100n, 422, 'BUDGET_TOO_LOW', 'حداقل بودجه یک ریال است.');
       const startsAt = asDate(req.body?.startsAt, 'زمان شروع');
       const endsAt = asDate(req.body?.endsAt, 'زمان پایان');
       assert(endsAt > startsAt, 422, 'INVALID_CAMPAIGN_DATES', 'زمان پایان باید بعد از شروع باشد.');
       assert(startsAt.getTime() >= Date.now() - 5 * 60_000, 422, 'CAMPAIGN_START_IN_PAST', 'زمان شروع نمی‌تواند در گذشته باشد.');
       assert(endsAt.getTime() - startsAt.getTime() <= 180 * 86400_000, 422, 'CAMPAIGN_TOO_LONG', 'مدت کمپین نمی‌تواند بیشتر از ۱۸۰ روز باشد.');
       const skipAfter = Math.round(asPositiveNumber(req.body?.skipAfterSeconds ?? 5, 'زمان رد کردن', { min: 0, max: 30 }));
-      const targetUrl = asHttpUrl(req.body?.targetUrl, 'نشانی مقصد', { optional: true, httpsOnly: isProduction });
+      let targetUrl = asHttpUrl(req.body?.targetUrl, 'نشانی مقصد', { optional: placement !== 'link_file_button', httpsOnly: isProduction });
+      const clickMode = placement === 'link_file_button' ? asEnum(req.body?.telegramClickMode || 'tracked', 'شیوهٔ هدایت', ['tracked','direct']) : 'tracked';
+      const landingMode = placement === 'link_file_button' ? 'intermediate' : asEnum(req.body?.landingMode || 'intermediate', 'شیوهٔ هدایت', ['intermediate','direct']);
+      if (landingMode === 'direct') assert(targetUrl, 422, 'TARGET_REQUIRED', 'برای هدایت مستقیم نشانی مقصد لازم است.');
+      if (placement === 'link_file_button') { targetUrl = telegramTarget(targetUrl); if (clickMode === 'tracked') trackedOrigin(); assert(headline.length <= 64, 422, 'BUTTON_TEXT_TOO_LONG', 'عنوان دکمه حداکثر ۶۴ نویسه است.'); }
       const buttons = parseButtons(req.body?.telegramButtons);
       const telegramPostText = asString(req.body?.telegramPostText, 'متن صفحه واسط', { max: 5000, optional: true });
 
@@ -1254,15 +1320,19 @@ app.post(
         creativeUrl = `${appUrl}/uploads/${encodeURIComponent(req.file.filename)}`;
         creativeLocalPath = req.file.filename;
         assetType = req.file.mimetype.startsWith('video/') ? 'video' : 'image';
+      } else if (['text','link'].includes(adSettingsLib.placementMeta(placement).asset)) {
+        creativeUrl = ''; assetType = 'image';
       } else {
         creativeUrl = asHttpUrl(req.body?.creativeUrl, 'فایل تبلیغ', { httpsOnly: isProduction });
         assetType = asEnum(req.body?.assetType, 'نوع فایل', ['video', 'image']);
       }
       const slotMeta = adSettingsLib.placementMeta(placement);
+      const bid = normalizeBid(req.body?.bidMultiplier, placement, adPolicy.maxPriorityMultiplier);
+      if (['text','link'].includes(slotMeta.asset)) assert(!req.file, 422, 'TEXT_ONLY', 'برای تبلیغ متنی فایل ارسال نکنید.');
       if (slotMeta.asset === 'video') {
         assert(assetType === 'video', 422, 'VIDEO_REQUIRED', 'این جایگاه به فایل ویدیویی نیاز دارد.');
       }
-      if (slotMeta.asset === 'image' || slotMeta.asset === 'link') {
+      if (slotMeta.asset === 'image') {
         assert(assetType === 'image', 422, 'IMAGE_REQUIRED', 'این جایگاه به تصویر نیاز دارد.');
       }
       // Owner rules: upload caps and local files are stored with the campaign so a
@@ -1283,12 +1353,18 @@ app.post(
 
       const publicId = crypto.randomUUID();
       const created = await withTransaction(async (connection) => {
-        const [prices] = await connection.execute(
-          'SELECT * FROM ad_placement_prices WHERE placement = :placement AND is_active = TRUE AND is_enabled = TRUE FOR UPDATE',
-          { placement },
-        );
-        assert(prices[0], 422, 'PLACEMENT_UNAVAILABLE', 'این جایگاه در حال حاضر فعال نیست.');
-        assert(budget >= Number(prices[0].minimum_budget), 422, 'BUDGET_TOO_LOW', `حداقل بودجه این جایگاه ${Number(prices[0].minimum_budget).toLocaleString('fa-IR')} ریال است.`);
+        // Lock in a deterministic order; reject the whole purchase if any slot
+        // is disabled or the one shared budget is below that slot's minimum.
+        const prices = new Map();
+        for (const key of [...placements].sort()) {
+          const [rows] = await connection.execute(
+            'SELECT *, CAST(price_per_thousand AS CHAR) AS price_exact, (CAST(:budget AS DECIMAL(20,5)) >= minimum_budget) AS budget_sufficient FROM ad_placement_prices WHERE placement = :placement AND is_active = TRUE AND is_enabled = TRUE FOR UPDATE',
+            { placement:key, budget },
+          );
+          assert(rows[0], 422, 'PLACEMENT_UNAVAILABLE', 'یکی از جایگاه‌های انتخاب‌شده فعال نیست.');
+          assert(rows[0].budget_sufficient, 422, 'BUDGET_TOO_LOW', `حداقل بودجهٔ جایگاه ${rows[0].display_name_fa} ${Number(rows[0].minimum_budget).toLocaleString('fa-IR')} ریال است.`);
+          prices.set(key, rows[0]);
+        }
         await connection.execute(
           `INSERT INTO advertiser_wallets (user_id, balance)
            VALUES (:userId, 0) ON DUPLICATE KEY UPDATE user_id = VALUES(user_id)`,
@@ -1298,18 +1374,22 @@ app.post(
           'SELECT balance, currency FROM advertiser_wallets WHERE user_id = :userId FOR UPDATE',
           { userId: req.user.id },
         );
-        const currentBalance = Number(wallets[0].balance);
-        assert(currentBalance >= budget, 409, 'INSUFFICIENT_BALANCE', 'موجودی کیف پول برای این بودجه کافی نیست.');
-        const newBalance = currentBalance - budget;
+        const [debit] = await connection.execute(
+          'UPDATE advertiser_wallets SET balance = balance - :budget WHERE user_id = :userId AND balance >= :budget',
+          { budget, userId: req.user.id },
+        );
+        assert(debit.affectedRows === 1, 409, 'INSUFFICIENT_BALANCE', 'موجودی کیف پول برای این بودجه کافی نیست.');
+        const [updatedWallets] = await connection.execute('SELECT CAST(balance AS CHAR) AS balance FROM advertiser_wallets WHERE user_id = :userId', { userId: req.user.id });
+        const newBalance = updatedWallets[0].balance;
         const [adResult] = await connection.execute(
           `INSERT INTO ads
             (public_id, advertiser_id, campaign_name, headline, body, placement, asset_type,
-             creative_url, creative_local_path, target_url, telegram_post_text, telegram_buttons,
-             unit_price, budget, skip_after_seconds, duration_seconds, starts_at, ends_at, status)
+             creative_url, creative_local_path, target_url, telegram_click_mode, landing_mode, telegram_post_text, telegram_buttons,
+             unit_price, bid_multiplier, budget, skip_after_seconds, duration_seconds, starts_at, ends_at, status)
            VALUES
             (:publicId, :userId, :campaignName, :headline, :body, :placement, :assetType,
-             :creativeUrl, :localPath, :targetUrl, :postText, :buttons,
-             :unitPrice, :budget, :skipAfter, :duration, :startsAt, :endsAt, :status)`,
+             :creativeUrl, :localPath, :targetUrl, :clickMode, :landingMode, :postText, :buttons,
+             ROUND(:basePrice * :bid, 2), :bid, :budget, :skipAfter, :duration, :startsAt, :endsAt, :status)`,
           {
             publicId,
             userId: req.user.id,
@@ -1321,21 +1401,25 @@ app.post(
             creativeUrl,
             localPath: creativeLocalPath,
             targetUrl,
+            clickMode,
+            landingMode,
             duration: slotMeta.group === 'banner' ? adPolicy.defaultBannerDuration : adPolicy.defaultVideoDuration,
             status: adPolicy.autoApprove ? 'active' : 'pending',
             postText: telegramPostText,
             buttons: JSON.stringify(buttons),
-            unitPrice: prices[0].price_per_thousand,
+            basePrice: prices.get(placement).price_exact,
+            bid,
             budget,
             skipAfter,
             startsAt,
             endsAt,
           },
         );
-        await connection.execute(
-          'UPDATE advertiser_wallets SET balance = :balance WHERE user_id = :userId',
-          { balance: newBalance, userId: req.user.id },
-        );
+        for (const key of placements) {
+          await connection.execute(`INSERT INTO ad_campaign_placements (ad_id, placement, unit_price, bid_multiplier)
+            VALUES (:adId, :placement, ROUND(:basePrice * :bid, 2), :bid)`,
+          {adId:adResult.insertId, placement:key, basePrice:prices.get(key).price_exact, bid});
+        }
         await connection.execute(
           `INSERT INTO wallet_transactions
             (user_id, ad_id, transaction_type, amount, balance_after, reference)
@@ -1353,7 +1437,7 @@ app.post(
 
       uploadedPath = null;
       res.status(201).json({
-        campaign: { id: publicId, status: 'pending' },
+        campaign: { id: publicId, status: adPolicy.autoApprove ? 'active' : 'pending', placements },
         wallet: created,
       });
     } finally {
@@ -1436,6 +1520,26 @@ app.post('/api/admin/parse', requireAdmin, requireAdminCsrf, asyncRoute(async (r
   const draft = await buildParseDraft({ text, link });
   res.setHeader('Cache-Control', 'no-store');
   res.json({ draft });
+}));
+
+// IMPAwards uses HTTP/hotlink restrictions: relay only allowlisted image URLs
+// on demand, without writing files or caching on the server.
+app.get('/img', rateLimit({ windowMs: 60_000, max: 120, standardHeaders: true, legacyHeaders: false }), asyncRoute(async (req, res) => {
+  const image = await posterImage(asString(req.query.url, 'لینک پوستر', { min: 10, max: 2048 }));
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.type({ '.jpg':'image/jpeg', '.png':'image/png', '.webp':'image/webp' }[image.extension]).send(image.data);
+}));
+app.post('/api/admin/import-poster', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  const source = await resolvePoster(asString(req.body?.url, 'لینک پوستر', { min: 10, max: 2048 }));
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ path: `/img?url=${encodeURIComponent(source)}`, source });
+}));
+app.post('/api/admin/imdb-posters', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  const url = asString(req.body?.url, 'لینک IMDb', { min: 10, max: 2048 });
+  const posters = await imdbPosters(url, Number(req.body?.count));
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ posters });
 }));
 
 /**
@@ -1610,7 +1714,7 @@ app.get('/api/admin/diagnostics', requireAdmin, asyncRoute(async (_req, res) => 
   const report = {
     mode: store.kind,
     node: process.version,
-    migrations: { contentVersions: false, mediaLinkColumn: false },
+    migrations: { contentVersions: false, ownerConsoleV2: false },
     database: { version: null, engine: null, ok: false, error: null },
     checks: [],
   };
@@ -1649,10 +1753,61 @@ app.get('/api/admin/diagnostics', requireAdmin, asyncRoute(async (_req, res) => 
       check(`جدول ${table}`, await tableExists(table), null);
     }
     report.migrations.contentVersions = await tableExists('content_versions') && await tableExists('content_version_links');
-    report.migrations.mediaLinkColumn = await columnExists('media_links', 'content_version_link_id');
-    check('مهاجرت پنل نسخه ۲', report.migrations.contentVersions && report.migrations.mediaLinkColumn,
-      report.migrations.mediaLinkColumn ? null : 'فایل database/migrations/2026-11-owner-console-v2.sql اجرا نشده است.');
+    // The version relation lives in content_version_links.media_link_id; no
+    // content_version_link_id column exists in either schema or migration.
+    // Check actual columns rather than claim to know whether a file was run.
+    const ownerRequired = {
+      contents: ['last_air_year','series_running','current_season','broadcast_note','episode_count','season_count','directors','cast_members','network','has_dub','has_sub','poster_gallery','featured_hero','view_count','last_viewed_at','hero_slot'],
+      content_versions: ['id','content_id','kind','title','resolution','sort_order','created_at','updated_at'],
+      content_version_links: ['id','version_id','season_number','episode_number','episode_title','label','size_text','stream_url','subtitle_url','dub_url','telegram_url','media_link_id','source','created_at','updated_at'],
+      admin_events: ['id','kind','title','detail','created_at'],
+    };
+    const ownerColumns = await query(`SELECT table_name AS tableName, column_name AS columnName
+      FROM information_schema.columns WHERE table_schema = DATABASE()
+        AND table_name IN ('contents','content_versions','content_version_links','admin_events')`);
+    const existingOwnerColumns = new Set(ownerColumns.map((row) => `${row.tableName}.${row.columnName}`));
+    const ownerMissing = Object.entries(ownerRequired).flatMap(([table, columns]) => columns.map((column) => `${table}.${column}`).filter((key) => !existingOwnerColumns.has(key)));
+    report.migrations.ownerConsoleV2 = ownerMissing.length === 0;
+    check('ساختار پنل نسخه ۲', report.migrations.ownerConsoleV2,
+      ownerMissing.length ? `ستون‌های موجودنشده: ${ownerMissing.join('، ')}. فایل قدیمی migration را دوباره کامل اجرا نکنید؛ ابتدا از دیتابیس پشتیبان بگیرید و ساختار را بررسی کنید.` : null);
     check('ستون ژانر', await columnExists('contents', 'genres'), null);
+    // A GitHub update copies SQL files but does not run them. Check the features
+    // separately so an owner can identify a partially applied upgrade.
+    const viewReceipts = await tableExists('content_view_receipts');
+    const adDeletedAt = await columnExists('ads', 'deleted_at');
+    const adBid = await columnExists('ads', 'bid_multiplier');
+    const telegramMode = await columnExists('ads', 'telegram_click_mode');
+    const adColumns = await query(`SELECT table_name AS tableName, column_name AS columnName, column_type AS columnType, numeric_precision AS precisionValue, numeric_scale AS scaleValue
+      FROM information_schema.columns WHERE table_schema = DATABASE()
+        AND ((table_name IN ('ads','ad_placement_prices') AND column_name = 'placement')
+          OR (table_name = 'ads' AND column_name IN ('budget','spent'))
+          OR (table_name = 'advertiser_wallets' AND column_name = 'balance')
+          OR (table_name = 'wallet_transactions' AND column_name IN ('amount','balance_after'))) `);
+    const pagePlacements = ['banner_home','text_home','banner_detail','text_detail','banner_search','text_search'];
+    const placementTypes = ['ads','ad_placement_prices'].every((table) => {
+      const column = adColumns.find((row) => row.tableName === table && row.columnName === 'placement');
+      return column && pagePlacements.every((name) => String(column.columnType).includes(`'${name}'`));
+    });
+    const preciseMoney = [['ads','budget'],['ads','spent'],['advertiser_wallets','balance'],['wallet_transactions','amount'],['wallet_transactions','balance_after']].every(([table, column]) => {
+      const row = adColumns.find((item) => item.tableName === table && item.columnName === column);
+      return row && Number(row.scaleValue) >= 5 && Number(row.precisionValue) - Number(row.scaleValue) >= 15;
+    });
+    report.migrations.contentViewReceipts = viewReceipts;
+    report.migrations.adSoftDelete = adDeletedAt;
+    report.migrations.adPageBidding = Boolean(adBid && telegramMode && placementTypes && preciseMoney);
+    check('جدول ثبت بازدید آثار', viewReceipts, viewReceipts ? null : 'پس از پشتیبان‌گیری، migration 2026-11-content-view-receipts.sql را اجرا کنید.');
+    check('ستون حذف کمپین', adDeletedAt, adDeletedAt ? null : 'پس از پشتیبان‌گیری، migration 2026-11-soft-delete-campaigns.sql را اجرا کنید.');
+    check('ساختار تبلیغات صفحه و ربات', report.migrations.adPageBidding, report.migrations.adPageBidding ? null : 'پس از پشتیبان‌گیری و بررسی پیش‌نیازها، migration 2026-11-page-ads-bidding.sql را اجرا کنید.');
+    const multiplePlacements = await tableExists('ad_campaign_placements') && await columnExists('ads', 'landing_mode') && await columnExists('ad_events', 'placement');
+    report.migrations.adMultiplePlacements = multiplePlacements;
+    check('جایگاه‌های چندگانه و صفحهٔ واسط اختیاری', multiplePlacements, multiplePlacements ? null : 'پس از پشتیبان‌گیری و اجرای migrationهای قبلی، فایل 2026-11-ad-multiple-placements.sql را اجرا کنید.');
+    const downloadVideoEnums = ['ads','ad_placement_prices'].every((table) => adColumns.some((column) => column.tableName === table && column.columnName === 'placement' && String(column.columnType).includes("'video_download'")));
+    const downloadVideoRow = downloadVideoEnums && (await query("SELECT COUNT(*) AS found FROM ad_placement_prices WHERE placement='video_download'"))[0]?.found > 0;
+    report.migrations.pauseBannerDownloadVideo = Boolean(downloadVideoEnums && downloadVideoRow);
+    check('بنر توقف و ویدیوی قبل از دانلود', report.migrations.pauseBannerDownloadVideo, report.migrations.pauseBannerDownloadVideo ? null : 'پس از پشتیبان‌گیری و اجرای migrationهای قبلی، فایل 2026-11-pause-banner-download-video.sql را اجرا کنید.');
+    report.migrations.permanentDeletion = await tableExists('ad_financial_archive') && await tableExists('ad_financial_placement_rates') && await columnExists('wallet_transactions', 'campaign_public_id') && await columnExists('admin_events', 'content_asset_id') && await columnExists('admin_events', 'ad_public_id');
+    check('حذف قطعی و حفظ اطلاعات مالی', report.migrations.permanentDeletion, report.migrations.permanentDeletion ? null : 'پس از بکاپ و migrationهای قبلی، فایل 2026-11-permanent-deletion-finance.sql را اجرا کنید.');
+
   } catch (error) {
     check('بررسی ساختار دیتابیس', false, error.message);
   }
@@ -2008,6 +2163,13 @@ app.get('/api/admin/ads/campaigns', requireAdmin, asyncRoute(async (req, res) =>
   res.json({ items });
 }));
 
+app.delete('/api/admin/ads/campaigns/:adId', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
+  const result = adStoreKind() === 'demo'
+    ? await contentStore().deleteAdCampaign(req.params.adId)
+    : await deleteCampaign(req.params.adId);
+  res.json(result);
+}));
+
 /** Approve/reject/pause a campaign. Rejection refunds unspent budget and purges uploads. */
 app.post('/api/admin/ads/campaigns/:adId/review', requireAdmin, requireAdminCsrf, asyncRoute(async (req, res) => {
   const status = asEnum(req.body?.status, 'وضعیت', ['active', 'rejected', 'paused', 'completed']);
@@ -2016,8 +2178,8 @@ app.post('/api/admin/ads/campaigns/:adId/review', requireAdmin, requireAdminCsrf
     ? await contentStore().reviewAdCampaign(req.params.adId, { status, note })
     : await adPlatform.reviewCampaign(req.params.adId, { status, note });
   await query(
-    "INSERT INTO admin_events (kind, title, detail) VALUES ('ad', :title, :detail)",
-    { title: `کمپین ${status === 'active' ? 'تأیید' : status === 'rejected' ? 'رد' : status} شد`, detail: note || req.params.adId },
+    "INSERT INTO admin_events (kind, title, detail, ad_public_id) VALUES ('ad', :title, :detail, :adPublicId)",
+    { adPublicId: req.params.adId, title: `کمپین ${status === 'active' ? 'تأیید' : status === 'rejected' ? 'رد' : status} شد`, detail: note || req.params.adId },
   ).catch(() => {});
   res.json(result);
 }));
@@ -2028,9 +2190,16 @@ app.post('/api/admin/ads/campaigns/:adId/review', requireAdmin, requireAdminCsrf
  * per-placement on/off switch and the dates).
  */
 app.post('/api/admin/ads/campaigns', requireAdmin, requireAdminCsrf, upload.single('creative'), asyncRoute(async (req, res) => {
+  let retainUpload = false;
+  try {
   const appUrl = String(process.env.APP_URL || '').replace(/\/$/, '');
   const payload = {
     campaignName: req.body?.campaignName,
+    bidMultiplier: req.body?.bidMultiplier,
+    placements: req.body?.placements,
+    landingMode: req.body?.landingMode,
+    telegramPostText: req.body?.telegramPostText,
+    telegramClickMode: req.body?.telegramClickMode,
     headline: req.body?.headline,
     body: req.body?.body,
     placement: req.body?.placement,
@@ -2042,15 +2211,24 @@ app.post('/api/admin/ads/campaigns', requireAdmin, requireAdminCsrf, upload.sing
     creativeUrl: req.body?.creativeUrl,
     creativeLocalPath: req.file ? req.file.filename : null,
   };
+  if (req.file) {
+    const placementType = adSettingsLib.placementMeta(parsePlacements(payload)[0]).asset;
+    const matches = (placementType === 'video' && req.file.mimetype.startsWith('video/')) || (placementType === 'image' && req.file.mimetype.startsWith('image/'));
+    if (!matches) throw new AppError(422, 'CREATIVE_TYPE_MISMATCH', 'فایل با نوع جایگاه انتخاب‌شده سازگار نیست.');
+  }
   if (req.file) payload.creativeUrl = `${appUrl}/uploads/${encodeURIComponent(req.file.filename)}`;
   const created = adStoreKind() === 'demo'
     ? await contentStore().createOwnerAdCampaign(payload)
     : await adPlatform.createOwnerCampaign(payload);
+  retainUpload = true;
   await query(
-    "INSERT INTO admin_events (kind, title, detail) VALUES ('ad', 'کمپین مالک ساخته شد', :detail)",
-    { detail: String(payload.campaignName || '') },
+    "INSERT INTO admin_events (kind, title, detail, ad_public_id) VALUES ('ad', 'کمپین مالک ساخته شد', :detail, :adPublicId)",
+    { detail: String(payload.campaignName || ''), adPublicId: created.id },
   ).catch(() => {});
   res.status(201).json({ campaign: created });
+  } finally {
+    if (req.file && !retainUpload) await fs.promises.unlink(req.file.path).catch(() => {});
+  }
 }));
 
 app.get('/api/admin/ads', requireAdmin, asyncRoute(async (_req, res) => {
@@ -2062,6 +2240,7 @@ app.get('/api/admin/ads', requireAdmin, asyncRoute(async (_req, res) => {
     `SELECT a.public_id, a.campaign_name, a.headline, a.placement, a.budget, a.status,
             a.created_at, u.account_name
      FROM ads a JOIN users u ON u.id = a.advertiser_id
+     WHERE a.deleted_at IS NULL
      ORDER BY a.created_at DESC LIMIT 200`,
   );
   res.json({ items: rows.map((row) => ({ ...row, budget: Number(row.budget) })) });
@@ -2154,6 +2333,10 @@ app.use((error, req, res, next) => {
     normalized = new AppError(422, 'UPLOAD_ERROR', error.code === 'LIMIT_FILE_SIZE' ? 'حجم فایل تبلیغ بیش از حد مجاز است.' : 'بارگذاری فایل ناموفق بود.');
   } else if (error?.type === 'entity.parse.failed') {
     normalized = new AppError(400, 'INVALID_JSON', 'بدنه JSON معتبر نیست.');
+  } else if (/^\/api\/advertiser(?:\/|$)/.test(req.path) && ['ER_BAD_FIELD_ERROR', 'ER_NO_SUCH_TABLE', 'ER_BAD_TABLE_ERROR'].includes(error?.code)) {
+    // Do not hide the original database error from operators or expose SQL to clients.
+    console.error(`[${req.requestId}] Advertiser schema error`, error);
+    normalized = new AppError(503, 'AD_SCHEMA_UNAVAILABLE', 'ساختار پایگاه دادهٔ تبلیغات کامل نیست؛ با پشتیبانی سایت تماس بگیرید.');
   } else if (error?.code === 'ER_DUP_ENTRY') {
     normalized = new AppError(409, 'DUPLICATE_RECORD', 'این رکورد پیش‌تر ثبت شده است.');
   }
@@ -2349,4 +2532,4 @@ if (require.main === module) {
   process.once('SIGINT', () => shutdown('SIGINT').then(() => process.exit(0)));
 }
 
-module.exports = { app, start, shutdown, botStatus, numberFromEnv, hooks };
+module.exports = { app, start, shutdown, botStatus, numberFromEnv, hooks, contentDto };

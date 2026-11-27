@@ -5,9 +5,11 @@ import static org.junit.Assert.*;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.os.SystemClock;
 import android.view.TextureView;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 
@@ -184,4 +186,60 @@ public final class NativePlaybackTest {
       });
     }
   }
+  private static void tapAt(int x, int y) {
+    long time = SystemClock.uptimeMillis();
+    InstrumentationRegistry.getInstrumentation().sendPointerSync(MotionEvent.obtain(time, time, MotionEvent.ACTION_DOWN, x, y, 0));
+    InstrumentationRegistry.getInstrumentation().sendPointerSync(MotionEvent.obtain(time, time + 40, MotionEvent.ACTION_UP, x, y, 0));
+  }
+
+  @Test public void pauseBannerAndPlayButtonHaveIndependentTouchTargets() throws Exception {
+    Context target = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    File video = copyAsset("test-video.mkv", target);
+    Intent intent = new Intent(target, NativePlayerActivity.class).setData(Uri.parse("https://example.com/test.mkv"));
+    try (ActivityScenario<NativePlayerActivity> scenario = ActivityScenario.launch(intent)) {
+      scenario.onActivity(activity -> {
+        try {
+          Field phase = activity.getClass().getDeclaredField("phase"); phase.setAccessible(true);
+          @SuppressWarnings({"rawtypes", "unchecked"}) Object content = Enum.valueOf((Class) phase.getType(), "CONTENT");
+          phase.set(activity, content);
+          // The real ad transition hides its full-screen layer before content.
+          ((View) field(activity, "adLayer")).setVisibility(View.GONE);
+          Method play = activity.getClass().getDeclaredMethod("playStream", Uri.class); play.setAccessible(true); play.invoke(activity, Uri.fromFile(video));
+        } catch (Exception e) { throw new AssertionError(e); }
+      });
+      SystemClock.sleep(2500);
+      AtomicBoolean bannerTapped = new AtomicBoolean();
+      scenario.onActivity(activity -> {
+        try {
+          ((MediaPlayer) field(activity,"player")).pause();
+          NativeAdClient.Ad ad = new NativeAdClient.Ad("00000000-0000-4000-8000-000000000001", "session", "banner_pause", "https://example.com/a.jpg", "banner", "", "image", 0, 1);
+          Method render = activity.getClass().getDeclaredMethod("renderBanner", NativeAdClient.Ad.class, Bitmap.class); render.setAccessible(true);
+          render.invoke(activity, ad, Bitmap.createBitmap(50, 40, Bitmap.Config.ARGB_8888));
+          ViewGroup host = (ViewGroup) field(activity, "pauseBannerHost");
+          assertTrue(host.getChildAt(0).hasOnClickListeners());
+          host.getChildAt(0).setOnClickListener(v -> bannerTapped.set(true));
+        } catch (Exception e) { throw new AssertionError(e); }
+      });
+      SystemClock.sleep(1300); // longer than the configured duration; pause ad must remain.
+      final int[] points = new int[4];
+      scenario.onActivity(activity -> {
+        try {
+          View banner = (View) field(activity, "pauseBannerHost"); View play = (View) field(activity, "play");
+          assertEquals(View.VISIBLE, banner.getVisibility());
+          Rect adRect = new Rect(), playRect = new Rect();
+          assertTrue(banner.getGlobalVisibleRect(adRect)); assertTrue(play.getGlobalVisibleRect(playRect));
+          assertFalse("ad must not overlap play", Rect.intersects(adRect, playRect));
+          points[0]=adRect.centerX(); points[1]=adRect.centerY(); points[2]=playRect.centerX(); points[3]=playRect.centerY();
+          Method visibility=activity.getClass().getDeclaredMethod("setControlsVisible", boolean.class); visibility.setAccessible(true); visibility.invoke(activity, false);
+          assertEquals("paused banner cannot be hidden",View.VISIBLE, banner.getVisibility());
+          assertEquals(View.VISIBLE, ((View) field(activity,"topControls")).getVisibility());
+        } catch (Exception e) { throw new AssertionError(e); }
+      });
+      tapAt(points[0], points[1]); InstrumentationRegistry.getInstrumentation().waitForIdleSync(); assertTrue(bannerTapped.get());
+      scenario.onActivity(activity -> { try { assertFalse(((MediaPlayer)field(activity,"player")).isPlaying()); } catch (Exception e) { throw new AssertionError(e); } });
+      tapAt(points[2], points[3]); InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+      scenario.onActivity(activity -> { try { assertEquals(View.GONE, ((View)field(activity,"pauseBannerHost")).getVisibility()); } catch (Exception e) { throw new AssertionError(e); } });
+    }
+  }
+
 }

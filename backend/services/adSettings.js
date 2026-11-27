@@ -13,18 +13,24 @@ const PLACEMENTS = [
   { placement: 'pre_roll', group: 'video', label: 'پیش از پخش (Pre-roll)', order: 1, asset: 'video' },
   { placement: 'mid_roll', group: 'video', label: 'میان‌پخش (Mid-roll)', order: 2, asset: 'video' },
   { placement: 'timed_banner', group: 'video', label: 'پس از پخش (Post-roll)', order: 3, asset: 'video' },
-  { placement: 'pause_overlay', group: 'video', label: 'لایه هنگام توقف (Pause)', order: 4, asset: 'video' },
+  { placement: 'video_download', group: 'video', label: 'ویدیو قبل از دانلود', order: 4, asset: 'video' },
   { placement: 'banner_player', group: 'banner', label: 'بنر روی پلیر (۷۲۸×۹۰)', order: 5, asset: 'image' },
   { placement: 'banner_pause', group: 'banner', label: 'بنر توقف (۳۰۰×۲۵۰)', order: 6, asset: 'image' },
   { placement: 'banner_download', group: 'banner', label: 'بنر قبل از دانلود (۱۰۸۰×۱۹۲۰)', order: 7, asset: 'image' },
   { placement: 'link_file_button', group: 'link', label: 'دکمه لینک زیر فایل (ربات)', order: 8, asset: 'link' },
+  { placement: 'banner_home', group: 'banner', label: 'بنر صفحهٔ اصلی', order: 9, asset: 'image' },
+  { placement: 'text_home', group: 'banner', label: 'تبلیغ متنی صفحهٔ اصلی', order: 10, asset: 'text' },
+  { placement: 'banner_detail', group: 'banner', label: 'بنر صفحهٔ جزئیات اثر', order: 11, asset: 'image' },
+  { placement: 'text_detail', group: 'banner', label: 'تبلیغ متنی صفحهٔ جزئیات اثر', order: 12, asset: 'text' },
+  { placement: 'banner_search', group: 'banner', label: 'بنر صفحهٔ جست‌وجو', order: 13, asset: 'image' },
+  { placement: 'text_search', group: 'banner', label: 'تبلیغ متنی صفحهٔ جست‌وجو', order: 14, asset: 'text' },
 ];
 
 const PLACEMENT_KEYS = PLACEMENTS.map((item) => item.placement);
 
 const GROUPS = [
   { group: 'video', label: 'ویدیویی', hint: '۴ جایگاه · تبلیغ ویدیویی داخل پلیر' },
-  { group: 'banner', label: 'بنری', hint: '۳ جایگاه · تصویر ثابت' },
+  { group: 'banner', label: 'بنری', hint: 'جایگاه‌های بنری و متنی' },
   { group: 'link', label: 'لینکی', hint: '۱ جایگاه · دکمه لینک زیر فایل' },
 ];
 
@@ -48,7 +54,7 @@ const DEFAULTS = {
   'ads.cpv_link': '0',
   'ads.min_budget': '50000',
   'ads.daily_budget_cap': '0',
-  'ads.max_priority_multiplier': '5',
+  'ads.max_priority_multiplier': '10',
   'ads.link_allowlist': '',
   'ads.rules': '',
   'ads.reject_purge_minutes': '60',

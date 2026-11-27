@@ -51,16 +51,28 @@ function splitList(value, limit = 24) {
     .slice(0, limit);
 }
 
-// New posts can assert individual pairs with semicolons; two legacy comma
-// lists on either side of a pipe remain separate rather than guessed.
+// The channel's documented convention is two equally sized, ordered blocks:
+// Persian names first, then the corresponding English names. Never zip a mixed,
+// duplicated or unequal list; leave it visible to the owner for manual review.
 function splitCredits(value, limit) {
-  const result = [];
-  for (const group of clean(value).split(/[؛;]+/u)) {
-    const pair = group.split('|').map(clean).filter(Boolean);
-    if (pair.length === 2 && !/[,،/]|\s+و\s+/u.test(group) && pair.every((name) => name.length <= 58)) result.push(pair.join(' | '));
-    else result.push(...splitList(group, limit));
-  }
-  return result.slice(0, limit);
+  const text = clean(value);
+  const orderedPairs = (names) => {
+    if (!names.length || names.length % 2) return null;
+    const middle = names.length / 2;
+    const fa = names.slice(0, middle), en = names.slice(middle);
+    if (!fa.every((v) => PERSIAN_RANGE.test(v) && !LATIN_RANGE.test(v)) ||
+        !en.every((v) => LATIN_RANGE.test(v) && !PERSIAN_RANGE.test(v))) return null;
+    if (new Set(names.map((v) => v.toLocaleLowerCase())).size !== names.length) return null;
+    return fa.map((v, i) => `${v} | ${en[i]}`);
+  };
+  // Explicit per-person pairs separated by semicolons remain supported.
+  const groups = text.split(/[؛;]+/u);
+  if (groups.some((group) => group.includes('|')) && groups.every((group) => {
+    const parts = group.split('|').map(clean).filter(Boolean);
+    return parts.length === 2 && !/[,،/]|\s+و\s+/u.test(group) && parts.every((v) => v.length <= 58);
+  })) return groups.map((group) => group.split('|').map(clean).join(' | ')).slice(0, limit);
+  const names = splitList(text, limit * 2);
+  return (orderedPairs(names) || names).slice(0, limit);
 }
 
 /** Longest-first alias matching keeps `امتیاز IMDb` from being read by `امتیاز`. */
@@ -364,6 +376,10 @@ function parseContentPost(rawText) {
   // generous rather than tuned to one language.
   fields.directors = splitCredits(values.directors, 24);
   fields.cast = splitCredits(values.cast, 60);
+  if ([values.directors, values.cast].some((value) => {
+    const names = splitList(value, 120);
+    return names.some((v) => PERSIAN_RANGE.test(v)) && names.some((v) => LATIN_RANGE.test(v)) && !splitCredits(value, 60).some((v) => v.includes('|'));
+  })) notes.push('نام‌های دوزبانه به دلیل تعداد یا ترتیب نامشخص جفت نشدند؛ در پنل بررسی کنید.');
   fields.countries = splitList(values.countries, 8);
   fields.ageRating = clean(values.ageRating).slice(0, 20);
   fields.network = clean(values.network).slice(0, 120);

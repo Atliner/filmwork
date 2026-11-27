@@ -748,3 +748,19 @@ table.data .muted { color: var(--muted); font-size: 10.5px; }
 .crew-associate small { display:block; color:var(--muted); margin-bottom:8px; line-height:1.7; }
 .crew-associate > div { display:flex; gap:8px; flex-wrap:wrap; }
 .crew-associate .input { flex:1 1 170px; min-width:0; }
+
+.poster-import-row { display:flex; gap:8px; flex-wrap:wrap; }
+.poster-import-row .input { flex:1 1 200px; min-width:0; }
+
+.imdb-import-row { margin-top: 10px; }
+.imdb-import-row .imdb-count { flex: 0 0 84px; width: 84px; }
+@media (max-width: 600px) { .imdb-import-row { flex-wrap: wrap; } .imdb-import-row [data-imdb-url] { flex: 1 1 100%; min-width: 0; } }
+
+#owner-ad-form [hidden] { display:none !important; }
+.owner-ad-placements { border:1px solid var(--line);border-radius:14px;padding:12px;margin:12px 0; }
+.owner-ad-placements legend { padding:0 6px;font-weight:700;font-size:12px; }
+.owner-ad-placements p { color:var(--muted);font-size:11px; }
+.owner-ad-slot { display:flex;gap:9px;align-items:center;padding:8px;border-bottom:1px solid var(--line);font-size:12px; }
+.owner-ad-slot input { accent-color:#a855f7; }
+
+[data-owner-bid] input[type=range] { width:100%; accent-color:#a855f7; }

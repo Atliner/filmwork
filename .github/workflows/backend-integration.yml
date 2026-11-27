@@ -1,0 +1,88 @@
+name: Backend and MySQL integration
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  mysql:
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        database: ['mysql:8.0', 'mariadb:11.4']
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: ${{ matrix.database }}
+        env:
+          MYSQL_ROOT_PASSWORD: integration-test
+          MYSQL_DATABASE: filmwork_test
+          MYSQL_ROOT_HOST: "%"
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="${{ matrix.database == 'mariadb:11.4' && 'healthcheck.sh --connect --innodb_initialized' || 'mysqladmin ping -h 127.0.0.1 -pintegration-test' }}"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+    env:
+      NODE_ENV: development
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_NAME: filmwork_test
+      DB_USER: root
+      DB_PASSWORD: integration-test
+      MYSQL_PWD: integration-test
+      JWT_SECRET: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      AUTH_CODE_PEPPER: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      PHONE_ENCRYPTION_KEY: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      APP_URL: https://film.example
+      ADMIN_OWNER_IDS: '123456789'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: backend
+      - run: npm test
+        working-directory: backend
+        env:
+          DB_PORT: '1' # Unit/demo tests intentionally run without a live database.
+      - name: Install MySQL client
+        run: command -v mysql || (sudo apt-get update && sudo apt-get install -y default-mysql-client)
+      - name: Install schema and verify old-campaign upgrade and repeatability
+        run: |
+          trap 'echo "::error::Migration verification failed at line $LINENO (status $?)"' ERR
+          mysql -h 127.0.0.1 -u root filmwork_test < database/schema.sql
+          # Simulate a pre-upgrade install; old enum migrations predate video_download.
+          mysql -h 127.0.0.1 -u root filmwork_test -e "DELETE FROM ad_placement_prices WHERE placement='video_download'"
+          for migration in database/migrations/2026-11-content-view-receipts.sql database/migrations/2026-11-soft-delete-campaigns.sql database/migrations/2026-11-page-ads-bidding.sql; do
+            mysql -h 127.0.0.1 -u root filmwork_test < "$migration"
+          done
+          # Simulate a campaign created by the old application before the upgrade.
+          mysql -h 127.0.0.1 -u root filmwork_test -e "INSERT INTO users (tg_user_id,tg_chat_id,account_name,encrypted_phone) VALUES (900001,900001,'legacy','x'); SET @u=LAST_INSERT_ID(); INSERT INTO ads (public_id,advertiser_id,campaign_name,headline,placement,asset_type,creative_url,unit_price,bid_multiplier,budget,spent,starts_at,ends_at,status) VALUES ('00000000-0000-4000-8000-000000000001',@u,'legacy','legacy','text_home','image','',123.45,2,50,4,UTC_TIMESTAMP()-INTERVAL 1 DAY,UTC_TIMESTAMP()+INTERVAL 1 DAY,'active');"
+          for iteration in 1 2; do
+            mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-ad-multiple-placements.sql
+          done
+          result=$(mysql -N -B -h 127.0.0.1 -u root filmwork_test -e "SELECT COUNT(*) FROM ads a JOIN ad_campaign_placements ap ON ap.ad_id=a.id WHERE a.public_id='00000000-0000-4000-8000-000000000001' AND ap.placement='text_home' AND ap.unit_price=123.45 AND ap.bid_multiplier=2 AND a.spent=4 AND a.budget=50 AND a.landing_mode='intermediate'")
+          test "$result" = 1
+          mysql -h 127.0.0.1 -u root filmwork_test -e "SET @u=(SELECT id FROM users WHERE tg_user_id=900001); INSERT INTO ads (public_id,advertiser_id,campaign_name,headline,placement,asset_type,creative_url,unit_price,bid_multiplier,budget,spent,starts_at,ends_at,status) VALUES ('00000000-0000-4000-8000-000000000002',@u,'old pause','old pause','pause_overlay','video','https://example.com/ad.mp4',50000,1,50,4,UTC_TIMESTAMP()-INTERVAL 1 DAY,UTC_TIMESTAMP()+INTERVAL 1 DAY,'active'); INSERT INTO ad_campaign_placements (ad_id,placement,unit_price,bid_multiplier) SELECT id,'pause_overlay',unit_price,bid_multiplier FROM ads WHERE public_id='00000000-0000-4000-8000-000000000002';"
+          for iteration in 1 2; do mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-pause-banner-download-video.sql; done
+          result=$(mysql -N -B -h 127.0.0.1 -u root filmwork_test -e "SELECT COUNT(*) FROM ads a JOIN ad_campaign_placements p ON p.ad_id=a.id WHERE a.public_id='00000000-0000-4000-8000-000000000002' AND a.status='paused' AND a.budget=50 AND a.spent=4 AND p.placement='pause_overlay' AND p.unit_price=50000")
+          test "$result" = 1
+          test "$(mysql -N -B -h 127.0.0.1 -u root filmwork_test -e "SELECT COUNT(*) FROM ad_placement_prices WHERE placement='video_download' AND is_enabled=0")" = 1
+          mysql -h 127.0.0.1 -u root filmwork_test -e "DELETE FROM ads WHERE public_id='00000000-0000-4000-8000-000000000002'"
+          mysql -h 127.0.0.1 -u root filmwork_test -e "DELETE FROM ads WHERE public_id='00000000-0000-4000-8000-000000000001'; DELETE FROM users WHERE tg_user_id=900001"
+          for iteration in 1 2; do mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-permanent-deletion-finance.sql; done
+      - name: Exercise transactions and delivery against MySQL
+        shell: bash
+        run: |
+          set +e
+          node --test backend/tests/mysqlAds.integration.js > /tmp/mysql-test-output 2>&1
+          result=$?
+          cat /tmp/mysql-test-output
+          if [ "$result" -ne 0 ]; then
+            message=$(python3 -c 's=open("/tmp/mysql-test-output").read()[-12000:]; print(s.replace("%", "%25").replace(chr(13), "%0D").replace(chr(10), "%0A"))')
+            echo "::error::$message"
+            exit "$result"
+          fi

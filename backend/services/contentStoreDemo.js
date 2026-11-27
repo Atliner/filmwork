@@ -195,7 +195,7 @@ function buildState() {
   const ads = [
     { id: 'ad-1', campaign: 'اسپانسر پخش زنده', advertiser: 'دیجی‌مارکت', placement: 'pre_roll', budget: 320_000_000, spent: 180_000_000, status: 'active', createdAt: iso(6) },
     { id: 'ad-2', campaign: 'تخفیف پاییزه', advertiser: 'کتاب‌راز', placement: 'timed_banner', budget: 90_000_000, spent: 12_000_000, status: 'pending', createdAt: iso(2) },
-    { id: 'ad-3', campaign: 'اپلیکیشن سفر', advertiser: 'علی‌بابا', placement: 'pause_overlay', budget: 210_000_000, spent: 60_000_000, status: 'active', createdAt: iso(14) },
+    { id: 'ad-3', campaign: 'اپلیکیشن سفر', advertiser: 'علی‌بابا', placement: 'banner_pause', budget: 210_000_000, spent: 60_000_000, status: 'active', createdAt: iso(14) },
     { id: 'ad-4', campaign: 'کمپین پایان‌یافته', advertiser: 'اسنپ', placement: 'pre_roll', budget: 150_000_000, spent: 150_000_000, status: 'completed', createdAt: iso(45) },
   ];
 
@@ -425,6 +425,15 @@ const store = {
       posterGallery: item.posterGallery }, versions: item.versions };
   },
 
+  async recordContentView(assetId, visitId) {
+    const item = findContent(assetId);
+    assert(item.status === 'published', 404, 'CONTENT_NOT_FOUND', 'اثر پیدا نشد.');
+    item.viewReceipts ||= new Set();
+    const counted = !item.viewReceipts.has(visitId);
+    if (counted) { item.viewReceipts.add(visitId); item.views += 1; }
+    return { views: item.views, counted };
+  },
+
   async createContent(payload) {
     const data = ensureState();
     const item = {
@@ -618,7 +627,10 @@ store.deleteUser = async (userId) => {
   pushEvent('user', `کاربر حذف شد: ${removed.accountName}`, 'حذف کامل همراه داده‌های وابسته');
   return { id: removed.id, accountName: removed.accountName };
 };
-store.listAds = async () => ensureState().ads;
+store.listAds = async () => {
+  const data = demoAdState();
+  return [...data.ads, ...data.ownerCampaigns].filter((ad) => !ad.deletedAt);
+};
 
 /* ------------------------------------------------------------- ad platform */
 const demoAdState = () => {
@@ -630,12 +642,15 @@ const demoAdState = () => {
       { placement: 'pre_roll', group: 'video', label: 'پیش از پخش (Pre-roll)', asset: 'video', order: 1, enabled: true, cpm: 50000, minBudget: 50000, durationSeconds: 15, currency: 'IRR' },
       { placement: 'mid_roll', group: 'video', label: 'میان‌پخش (Mid-roll)', asset: 'video', order: 2, enabled: true, cpm: 45000, minBudget: 50000, durationSeconds: 15, currency: 'IRR' },
       { placement: 'timed_banner', group: 'video', label: 'پس از پخش (Post-roll)', asset: 'video', order: 3, enabled: true, cpm: 45000, minBudget: 50000, durationSeconds: 10, currency: 'IRR' },
-      { placement: 'pause_overlay', group: 'video', label: 'لایه هنگام توقف (Pause)', asset: 'video', order: 4, enabled: true, cpm: 32000, minBudget: 50000, durationSeconds: 15, currency: 'IRR' },
+      { placement: 'video_download', group: 'video', label: 'ویدیو قبل از دانلود', asset: 'video', order: 4, enabled: false, active: true, cpm: 50000, minBudget: 50000, durationSeconds: 15, currency: 'IRR' },
       { placement: 'banner_player', group: 'banner', label: 'بنر روی پلیر (۷۲۸×۹۰)', asset: 'image', order: 5, enabled: true, cpm: 50000, minBudget: 50000, durationSeconds: 8, currency: 'IRR' },
       { placement: 'banner_pause', group: 'banner', label: 'بنر توقف (۳۰۰×۲۵۰)', asset: 'image', order: 6, enabled: true, cpm: 40000, minBudget: 50000, durationSeconds: 8, currency: 'IRR' },
       { placement: 'banner_download', group: 'banner', label: 'بنر قبل از دانلود (۱۰۸۰×۱۹۲۰)', asset: 'image', order: 7, enabled: false, cpm: 60000, minBudget: 50000, durationSeconds: 8, currency: 'IRR' },
       { placement: 'link_file_button', group: 'link', label: 'دکمه لینک زیر فایل (ربات)', asset: 'link', order: 8, enabled: true, cpm: 50000, minBudget: 50000, durationSeconds: 0, currency: 'IRR' },
     ];
+    for (const slot of require('./adSettings').PLACEMENTS.filter((item) => /^(?:banner|text)_(?:home|detail|search)$/.test(item.placement))) {
+      data.adPlacements.push({ ...slot, enabled:false, active:false, cpm:50000, minBudget:50000, durationSeconds:0, currency:'IRR' });
+    }
     data.ownerCampaigns = [
       {
         id: 'owner-ad-1', campaignName: 'معرفی فیلم‌ورک پلاس', headline: 'فیلم‌ورک پلاس را امتحان کنید',
@@ -663,7 +678,7 @@ store.updateAdPlacement = async (placement, patch) => {
   const data = demoAdState();
   const row = data.adPlacements.find((item) => item.placement === placement);
   if (!row) throw new AppError(422, 'INVALID_PLACEMENT', 'جایگاه نامعتبر است.');
-  if (patch.enabled !== undefined) row.enabled = Boolean(patch.enabled);
+  if (patch.enabled !== undefined) { row.enabled = Boolean(patch.enabled); row.active = Boolean(patch.enabled); }
   if (patch.pricePerThousand !== undefined) row.cpm = Number(patch.pricePerThousand);
   if (patch.minimumBudget !== undefined) row.minBudget = Number(patch.minimumBudget);
   if (patch.durationSeconds !== undefined) row.durationSeconds = Number(patch.durationSeconds);
@@ -679,9 +694,19 @@ store.listAdCampaigns = async (filters = {}) => {
     ...data.ownerCampaigns,
   ];
   return all
+    .filter((ad) => !ad.deletedAt)
     .filter((ad) => (filters.status ? ad.status === filters.status : true))
     .filter((ad) => (filters.owner === 'owner' ? ad.ownerCampaign : filters.owner === 'users' ? !ad.ownerCampaign : true))
     .map((ad) => ({ ...ad, campaignName: ad.campaignName || ad.campaign || 'کمپین' }));
+};
+
+store.deleteAdCampaign = async (id) => {
+  const data = demoAdState();
+  const ad = [...data.ownerCampaigns, ...(data.ads || [])].find((item) => item.id === id && !item.deletedAt);
+  assert(ad, 404, 'AD_NOT_FOUND', 'کمپین پیدا نشد.');
+  data.ownerCampaigns = data.ownerCampaigns.filter((item) => item.id !== id);
+  data.ads = (data.ads || []).filter((item) => item.id !== id);
+  return { deleted: true, refunded: 0 };
 };
 
 store.reviewAdCampaign = async (id, { status, note }) => {
@@ -702,14 +727,17 @@ store.reviewAdCampaign = async (id, { status, note }) => {
 
 store.createOwnerAdCampaign = async (payload) => {
   const data = demoAdState();
+  const placements = require('./adPlacements').parsePlacements(payload);
   const id = `owner-ad-${data.ownerCampaigns.length + 1}`;
   data.ownerCampaigns.unshift({
     id,
     campaignName: payload.campaignName,
     headline: payload.headline,
-    placement: payload.placement,
-    group: 'video',
-    assetType: 'video',
+    placement: placements[0],
+    placements,
+    landingMode: payload.landingMode || 'intermediate',
+    group: require('./adSettings').placementMeta(placements[0]).group,
+    assetType: require('./adSettings').placementMeta(placements[0]).asset === 'video' ? 'video' : 'image',
     status: 'active',
     ownerCampaign: true,
     budget: 0,

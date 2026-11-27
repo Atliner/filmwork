@@ -11,6 +11,7 @@ const {
   telegramErrorDescription,
 } = require('../lib/telegram');
 const { ownerIds } = require('../middleware/auth');
+const { AppError } = require('../lib/errors');
 
 const {
   normalizeDigits,
@@ -48,7 +49,7 @@ function cleanLabelValue(value) {
 }
 
 function directiveValue(text, name) {
-  const expression = new RegExp(`#${name}(?=\\s)\\s+([\\s\\S]*?)(?=\\s+#(?:اثر|نسخه|نوع|زیرنویس|رزولوشن|سریال|کیفیت|انکودر)(?=\\s|$)|$)`, 'iu');
+  const expression = new RegExp(`#${name}(?=\\s|$)([\\s\\S]*?)(?=#(?:اثر|نسخه|نوع|زیرنویس|رزولوشن|سریال|کیفیت|انکودر)(?=\\s|$)|$)`, 'iu');
   return cleanLabelValue(text.match(expression)?.[1] || '');
 }
 
@@ -67,8 +68,8 @@ function parseDirectives(rawText) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(assetUuid)) {
     return { error: 'شناسه #اثر باید یک UUID معتبر باشد.' };
   }
-  if (!version || !typeRaw || !subtitleRaw || !resolution) {
-    return { error: 'دستور باید شامل #نسخه، #نوع، #زیرنویس و #رزولوشن باشد.' };
+  if (!version || !typeRaw) {
+    return { error: 'دستور باید شامل #اثر، #نسخه و #نوع باشد.' };
   }
 
   let audioType = 'original';
@@ -76,7 +77,7 @@ function parseDirectives(rawText) {
   else if (/هارد\s*ساب|هاردساب/iu.test(typeRaw)) audioType = 'hard_sub';
   else if (/سافت\s*ساب|سافتساب/iu.test(typeRaw)) audioType = 'soft_sub';
 
-  let subtitleType = 'none';
+  let subtitleType = subtitleRaw ? 'none' : null;
   if (/مجزا|جدا/u.test(subtitleRaw)) subtitleType = 'separate';
   else if (/داخلی|چسبیده|embedded/iu.test(subtitleRaw)) subtitleType = 'embedded';
 
@@ -95,51 +96,76 @@ function parseDirectives(rawText) {
     sourceType: typeRaw.slice(0, 80),
     audioType,
     subtitleType,
-    resolution: resolution.slice(0, 24),
-    quality: (quality || typeRaw).slice(0, 80),
+    resolution: resolution ? resolution.slice(0, 24) : null,
+    quality: quality ? quality.slice(0, 80) : null,
     encoder: encoder ? encoder.slice(0, 100) : null,
     seasonNumber,
     episodeNumber,
   };
 }
 
+// Hashtags take precedence; infer only recognizable, bounded filename tokens.
+// Telegram sometimes supplies no filename, so unknown fields remain explicitly unknown.
+function resolveMediaDirectives(directives, fileName) {
+  const name = normalizeDigits(String(fileName || ''));
+  const episode = name.match(/(?:^|[.\-_\s])S(?:eason)?\s*0*(\d{1,3})[.\-_\s]*E(?:pisode)?\s*0*(\d{1,4})(?=$|[.\-_\s])/iu);
+  const resolution = name.match(/(?:^|[.\-_\s])((?:2160|1080|720|576|480|360)p|4k)(?=$|[.\-_\s])/iu)?.[1];
+  const quality = name.match(/(?:^|[.\-_\s])(WEB[.\-_ ]?DL|WEB[.\-_ ]?Rip|Blu[.\-_ ]?Ray|BDRip|BRRip|HDTV)(?=$|[.\-_\s])/iu)?.[1];
+  const encoder = name.match(/(?:^|[.\-_\s])(x264|x265|h[.\-_]?264|h[.\-_]?265|HEVC|AV1)(?=$|[.\-_\s])/iu)?.[1];
+  const hasEmbeddedSubtitle = /(?:^|[.\-_\s])(?:soft[.\-_ ]?sub(?:bed)?|hard[.\-_ ]?sub(?:bed)?|embedded[.\-_ ]?sub(?:title)?s?)(?=$|[.\-_\s])/iu.test(name);
+  return {
+    ...directives,
+    resolution: directives.resolution || (resolution ? resolution.toLowerCase() : 'نامشخص'),
+    quality: directives.quality || (quality ? quality.replace(/[._ ]/g, '-').toUpperCase() : directives.sourceType || null),
+    encoder: directives.encoder || encoder || null,
+    seasonNumber: directives.seasonNumber ?? (episode ? Number(episode[1]) : null),
+    episodeNumber: directives.episodeNumber ?? (episode ? Number(episode[2]) : null),
+    subtitleType: directives.subtitleType || (hasEmbeddedSubtitle ? 'embedded' : 'none'),
+  };
+}
+
+// Telegram's widget contains HTML entities; this decoder deliberately handles
+// only text (not markup) and rejects invalid Unicode rather than throwing.
+function decodeHtmlEntities(value) {
+  const named = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', zwnj: '\u200c', zwj: '\u200d', hellip: '…' };
+  return String(value).replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, code) => {
+    if (code[0] !== '#') return named[code.toLowerCase()] ?? entity;
+    const numeric = code[1].toLowerCase() === 'x' ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
+    return Number.isInteger(numeric) && numeric > 0 && numeric <= 0x10ffff && !(numeric >= 0xd800 && numeric <= 0xdfff) ? String.fromCodePoint(numeric) : entity;
+  });
+}
+
 async function fetchPublicTelegramPost(rawUrl) {
   let url;
-  try {
-    url = new URL(rawUrl);
-  } catch {
-    throw new Error('لینک پست تلگرام معتبر نیست.');
-  }
-  if (!['t.me', 'telegram.me'].includes(url.hostname.toLowerCase())) {
-    throw new Error('فقط لینک عمومی t.me پذیرفته می‌شود.');
+  try { url = new URL(rawUrl); } catch { throw new AppError(422, 'TELEGRAM_LINK_INVALID', 'لینک پست تلگرام معتبر نیست.'); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.port || !['t.me', 'telegram.me'].includes(url.hostname.toLowerCase())) {
+    throw new AppError(422, 'TELEGRAM_LINK_INVALID', 'فقط لینک عمومی t.me پذیرفته می‌شود.');
   }
   const parts = url.pathname.split('/').filter(Boolean);
-  if (parts.length < 2 || ['c', 's', 'joinchat', '+'].includes(parts[0].toLowerCase()) || !/^\d+$/.test(parts[1])) {
-    throw new Error('لینک باید به یک پیام کانال عمومی مانند t.me/channel/123 اشاره کند.');
+  if (parts.length !== 2 || ['c', 's', 'joinchat', '+'].includes(parts[0].toLowerCase()) || !/^\d+$/.test(parts[1])) {
+    throw new AppError(422, 'TELEGRAM_LINK_INVALID', 'لینک باید به یک پیام کانال عمومی مانند t.me/channel/123 اشاره کند.');
   }
   const username = parts[0].replace(/^@/, '');
-  if (!/^[A-Za-z0-9_]{5,32}$/.test(username)) throw new Error('نام کانال عمومی معتبر نیست.');
+  if (!/^[A-Za-z0-9_]{5,32}$/.test(username)) throw new AppError(422, 'TELEGRAM_LINK_INVALID', 'نام کانال عمومی معتبر نیست.');
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
+  const timer = setTimeout(() => controller.abort(), 10000);
   try {
     const response = await fetch(`https://t.me/${username}/${parts[1]}?embed=1&mode=tme`, {
-      redirect: 'follow',
-      signal: controller.signal,
-      headers: { 'user-agent': 'Filmwork-AdminParser/1.0' },
+      redirect: 'error', signal: controller.signal,
+      headers: { 'user-agent': 'Mozilla/5.0 (compatible; Filmwork/1.0)', accept: 'text/html' },
     });
-    if (!response.ok) throw new Error(`تلگرام پاسخ HTTP ${response.status} داد.`);
+    if (!response.ok) throw new AppError(502, 'TELEGRAM_HTTP_ERROR', `تلگرام پاسخ HTTP ${response.status} داد؛ عمومی بودن پست را بررسی کنید.`);
     const html = await response.text();
-    const match = html.match(/<div[^>]+class="[^"]*tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-    if (!match) throw new Error('متن عمومی این پیام قابل دریافت نیست.');
-    return decodeHtmlEntities(
-      match[1]
-        .replace(/<br\s*\/?>/gi, '\n')
-        .replace(/<\/p\s*>/gi, '\n')
-        .replace(/<[^>]+>/g, ''),
-    ).trim();
-  } finally {
-    clearTimeout(timer);
-  }
+    if (html.length > 2_000_000) throw new AppError(502, 'TELEGRAM_RESPONSE_LARGE', 'پاسخ تلگرام بیش از اندازه بزرگ است.');
+    const match = html.match(/<div\b[^>]*\bclass\s*=\s*["'][^"']*\btgme_widget_message_text\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+    if (!match) throw new AppError(422, 'TELEGRAM_POST_UNAVAILABLE', 'متن این پست عمومی قابل دریافت نیست؛ متن را مستقیماً در کادر بچسبانید.');
+    const text = decodeHtmlEntities(match[1].replace(/<br\s*\/?>/gi, '\n').replace(/<\/p\s*>/gi, '\n').replace(/<[^>]+>/g, '')).trim();
+    if (!text) throw new AppError(422, 'TELEGRAM_POST_EMPTY', 'متنی در این پست پیدا نشد.');
+    return text;
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError(502, 'TELEGRAM_UNREACHABLE', 'سرور به تلگرام دسترسی ندارد یا زمان اتصال تمام شد؛ متن پست را در کادر بچسبانید یا دسترسی خروجی هاست به t.me را بررسی کنید.');
+  } finally { clearTimeout(timer); }
 }
 
 function slugify(title, suffix) {
@@ -293,7 +319,8 @@ class AdminBotService {
 
       const directives = parseDirectives(text);
       if (directives) {
-        await this.handleDirectives(ctx, directives);
+        const accepted = await this.handleDirectives(ctx, directives);
+        if (accepted && mediaFromMessage(message)) await this.handleMedia(ctx, message);
         return;
       }
 
@@ -370,7 +397,7 @@ class AdminBotService {
   async handleDirectives(ctx, directives) {
     if (directives.error) {
       await safeReply(ctx, directives.error);
-      return;
+      return false;
     }
     const contentRows = await query(
       'SELECT id, title FROM contents WHERE asset_uuid = :assetUuid LIMIT 1',
@@ -378,7 +405,7 @@ class AdminBotService {
     );
     if (!contentRows[0]) {
       await safeReply(ctx, 'اثری با این UUID پیدا نشد.');
-      return;
+      return false;
     }
     const sourceChatId = String(ctx.chat.id);
     const ownerId = ctx.from?.id || [...ownerIds()][0];
@@ -402,6 +429,7 @@ class AdminBotService {
       );
     });
     await safeReply(ctx, `دستور ${contentRows[0].title} ثبت شد؛ فایل رسانه را تا ۳۰ دقیقه آینده ارسال کنید.`);
+    return true;
   }
 
   async activeSession(chatId) {
@@ -473,6 +501,7 @@ class AdminBotService {
       return;
     }
 
+    session.directives = resolveMediaDirectives(session.directives, metadata.fileName);
     const copies = await this.replicateMessage(ctx, message);
     const videoPayload = { metadata, copies };
     if (session.directives.subtitleType === 'separate') {
@@ -569,7 +598,7 @@ class AdminBotService {
   }
 
   async insertMediaLink(session, videoPayload, subtitlePayload, ingestKey) {
-    const d = session.directives;
+    const d = resolveMediaDirectives(session.directives, videoPayload.metadata.fileName);
     const v = videoPayload;
     const s = subtitlePayload;
     await query(
@@ -645,6 +674,7 @@ module.exports = {
   normalizeDigits,
   parsePublicPost,
   parseDirectives,
+  resolveMediaDirectives,
   fetchPublicTelegramPost,
   AdminBotService,
   adminBotService,

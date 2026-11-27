@@ -183,6 +183,7 @@
 
   function confirmDialog({ title, message, confirmLabel = 'تأیید', danger = true }) {
     return new Promise((resolve) => {
+      let confirmed = false;
       const { root, close } = openOverlay(`
         <div class="modal modal--sm" role="dialog" aria-modal="true" aria-label="${esc(title)}">
           <div class="modal__head">
@@ -194,8 +195,8 @@
             <button class="button button--ghost button--sm" type="button" data-close>بستن</button>
             <button class="button ${danger ? 'button--danger' : 'button--primary'} button--sm" type="button" data-confirm>${esc(confirmLabel)}</button>
           </div>
-        </div>`, { onClose: () => resolve(false) });
-      $('[data-confirm]', root).addEventListener('click', () => { close(); resolve(true); });
+        </div>`, { onClose: () => resolve(confirmed) });
+      $('[data-confirm]', root).addEventListener('click', () => { confirmed = true; close(); });
     });
   }
 
@@ -1003,15 +1004,17 @@
 
         <div class="field-grid field-grid--wide">
           <label class="field"><span>لینک پوستر</span>
-            <input class="input" type="url" dir="ltr" data-field="posterUrl" data-poster-input value="${esc(draft.posterUrl)}" placeholder="https://example.com/poster.jpg">
-            <small>لینک تصویر عمودی پوستر که در سایت نمایش داده می‌شود.</small></label>
+            <div class="poster-import-row"><input class="input" type="url" dir="ltr" data-field="posterUrl" data-poster-input value="${esc(draft.posterUrl)}" placeholder="https://example.com/poster.jpg"><button class="button button--ghost button--sm" type="button" data-import-main-poster>دریافت از IMPAwards</button></div>
+            <small>لینک تصویر یا صفحهٔ پوستر IMPAwards را وارد کنید. فقط نشانی ذخیره می‌شود؛ تصویر روی دیسک هاست ذخیره نمی‌شود.</small></label>
           <label class="field"><span>لینک پس‌زمینه (هیرو)</span>
             <input class="input" type="url" dir="ltr" data-field="backdropUrl" value="${esc(draft.backdropUrl)}" placeholder="https://example.com/backdrop.jpg"></label>
-          <label class="field span-full"><span>گالری پوسترها (IMPAwards)</span>
+          <label class="field span-full"><span>گالری پوسترها</span>
             <div style="display:flex;gap:8px">
-              <input class="input" type="url" dir="ltr" data-gallery-input placeholder="https://.../poster.jpg">
+              <input class="input" type="url" dir="ltr" data-gallery-input placeholder="لینک تصویر یا صفحهٔ IMPAwards">
               <button class="button button--ghost button--sm" type="button" data-add-gallery>${ICONS.plus} افزودن</button>
             </div>
+            <div class="poster-import-row imdb-import-row"><input class="input" type="url" dir="ltr" data-imdb-url placeholder="https://www.imdb.com/title/tt31938062/"><input class="input imdb-count" type="number" data-imdb-count min="1" max="50" value="10" aria-label="تعداد پوستر"><button class="button button--ghost button--sm" type="button" data-imdb-posters>افزودن از IMDb</button></div>
+            <small>لینک صفحهٔ اثر در IMDb و تعداد دلخواه (۱ تا ۵۰) را وارد کنید. فقط لینک پوسترها ثبت می‌شود؛ اگر تعداد موجود کمتر باشد همان تعداد اضافه خواهد شد.</small>
             <small>اولین تصویر گالری به‌عنوان پوستر اصلی پیشنهاد می‌شود؛ با ستاره می‌توانید هر تصویر را اصلی کنید.</small>
           </label>
         </div>
@@ -1186,10 +1189,20 @@
     };
   }
 
+  function isImpAwards(value) {
+    try { return ['impawards.com', 'www.impawards.com'].includes(new URL(value).hostname.toLowerCase()); } catch { return false; }
+  }
+  async function resolvePoster(value) {
+    if (!isImpAwards(value)) return value;
+    const imported = await api('/api/admin/import-poster', { method: 'POST', body: { url: value } });
+    if (!/^\/img\?url=/.test(imported.path || '')) throw new Error('نشانی تصویر دریافت‌شده معتبر نیست.');
+    return new URL(imported.path, window.location.origin).toString();
+  }
+
   async function saveEditor() {
     const editor = state.editor;
     if (!editor || state.busy) return;
-    const payload = readEditorDraft();
+    let payload = readEditorDraft();
     if (!payload.titleFa && !payload.titleEn) {
       toast('عنوان فارسی یا انگلیسی را وارد کنید.', 'error');
       editor.step = 2;
@@ -1199,6 +1212,18 @@
     state.busy = true;
     paintEditor();
     try {
+      // Also convert legacy links at save time, so a page URL is never stored as
+      // an image. Keep imported URLs in the draft if a later save fails.
+      const resolved = new Map();
+      const convert = async (url) => {
+        if (!isImpAwards(url)) return url;
+        if (!resolved.has(url)) resolved.set(url, resolvePoster(url));
+        return resolved.get(url);
+      };
+      editor.draft.posterUrl = await convert(editor.draft.posterUrl);
+      editor.draft.posterGallery = await Promise.all((editor.draft.posterGallery || []).map(convert));
+      payload = readEditorDraft();
+      if (!payload || state.editor !== editor) return;
       if (editor.mode === 'create') {
         const created = await api('/api/admin/contents', { method: 'POST', body: payload });
         toast('محتوا ثبت شد.');
@@ -1240,7 +1265,7 @@
         titleEn: fields.titleEn || editor.draft.titleEn,
         description: fields.description || editor.draft.description,
         releaseYear: fields.releaseYear ?? editor.draft.releaseYear,
-        lastAirYear: fields.lastAirYear ?? '',
+        lastAirYear: fields.lastAirYear ?? editor.draft.lastAirYear ?? '',
         seriesRunning: Boolean(fields.seriesRunning),
         currentSeason: fields.currentSeason ?? '',
         broadcastNote: fields.broadcastNote || '',
@@ -1265,7 +1290,7 @@
       }
       editor.qualities = (fields.qualities?.length ? fields.qualities : ['1080p', '720p']).join('، ');
       editor.meta = draft.meta;
-      editor.sourceKind = 'telegram_link';
+      editor.sourceKind = draft.source?.label || (link ? 'telegram_link' : 'text');
       if (draft.versions?.length) {
         editor.versions = draft.versions.map((version) => ({
           kind: version.kind,
@@ -1566,7 +1591,7 @@
     root.innerHTML = '<section class="view"><div class="skeleton" style="height:260px"></div></section>';
     const data = await api('/api/admin/ads');
     const rows = data.items.length ? data.items.map((ad) => `<tr>
-      <td><strong>${esc(ad.campaign_name || ad.campaign)}</strong><div class="muted">${esc(ad.headline || ad.advertiser || '')}</div></td>
+      <td><strong>${esc(ad.campaign_name || ad.campaignName || ad.campaign)}</strong><div class="muted">${esc(ad.headline || ad.advertiser || '')}</div></td>
       <td>${esc(ad.advertiser || ad.account_name || '—')}</td>
       <td><span class="tag">${esc(ad.placement)}</span></td>
       <td>${faNum(ad.budget)}</td>
@@ -1574,13 +1599,14 @@
       <td><select class="select" style="height:34px;min-width:120px" data-ad-status="${esc(ad.public_id || ad.id)}">
         ${['pending', 'active', 'paused', 'completed', 'rejected'].map((status) => `<option value="${status}" ${ad.status === status ? 'selected' : ''}>${statusLabel(status)}</option>`).join('')}
       </select></td>
-    </tr>`).join('') : '<tr><td colspan="6" class="muted">کمپینی وجود ندارد.</td></tr>';
+      <td><button class="button button--danger button--xs" type="button" data-ad-delete="${esc(ad.public_id || ad.id)}">حذف</button></td>
+    </tr>`).join('') : '<tr><td colspan="7" class="muted">کمپینی وجود ندارد.</td></tr>';
 
     root.innerHTML = `<section class="view">
       <div class="page-head"><div><h1>تبلیغات</h1><p>بررسی و تغییر وضعیت کمپین‌ها</p></div></div>
       <div class="panel"><div class="panel__body" style="padding-top:16px">
         <div class="table-wrap"><table class="data">
-          <thead><tr><th>کمپین</th><th>تبلیغ‌دهنده</th><th>جایگاه</th><th>بودجه (ریال)</th><th>وضعیت</th><th>تغییر</th></tr></thead>
+          <thead><tr><th>کمپین</th><th>تبلیغ‌دهنده</th><th>جایگاه</th><th>بودجه (ریال)</th><th>وضعیت</th><th>تغییر</th><th>حذف</th></tr></thead>
           <tbody>${rows}</tbody>
         </table></div>
       </div></div>
@@ -1643,7 +1669,7 @@
         <div class="ad-row__title"><strong>${esc(campaign.headline || campaign.campaignName)}</strong>
           <span class="status-badge status-badge--${campaign.status === 'active' ? 'published' : campaign.status === 'pending' ? 'draft' : campaign.status === 'rejected' ? 'archived' : 'draft'}">${statusLabels[campaign.status] || campaign.status}</span></div>
         <div class="ad-row__meta">
-          <span>${esc(campaign.group === 'video' ? 'ویدیویی' : campaign.group === 'banner' ? 'بنری' : 'لینکی')} · ${esc(campaign.placement)}</span>
+          <span>${esc(campaign.group === 'video' ? 'ویدیویی' : campaign.group === 'banner' ? 'بنری' : 'لینکی')} · ${esc((campaign.placements || [campaign.placement]).map((key) => adState.placements.find((p) => p.placement === key)?.label || key).join('، '))}</span>
           <span>${esc(campaign.advertiser || '')}</span>
           <span>${faNum(campaign.impressions || 0)} نمایش · ${faNum(campaign.clicks || 0)} کلیک</span>
           ${campaign.ownerCampaign ? '<span>بدون کسر کیف پول</span>' : `<span>${faNum(Math.round(Number(campaign.budget || 0) / 10))} تومان بودجه</span>`}
@@ -1655,6 +1681,7 @@
           <button class="button button--danger button--xs" type="button" data-ad-review="rejected" data-ad-id="${esc(campaign.id)}">رد</button>` : ''}
         ${campaign.status === 'active' ? `<button class="button button--ghost button--xs" type="button" data-ad-review="paused" data-ad-id="${esc(campaign.id)}">توقف</button>` : ''}
         ${campaign.status === 'paused' ? `<button class="button button--ghost button--xs" type="button" data-ad-review="active" data-ad-id="${esc(campaign.id)}">فعال‌سازی</button>` : ''}
+        <button class="button button--danger button--xs" type="button" data-ad-delete="${esc(campaign.id)}">حذف</button>
       </div>
     </article>`;
   }
@@ -1692,21 +1719,24 @@
         <div class="panel"><div class="panel__head"><div><h2>کمپین مالک</h2><p>بدون کسر از کیف پول، فوراً فعال؛ فقط جایگاه باید روشن باشد</p></div></div>
           <div class="panel__body">
             <form id="owner-ad-form">
+              <label class="field"><span>۱. نوع محتوای تبلیغ</span><select class="select" name="creativeType" required><option value="">نوع محتوا را انتخاب کنید</option>${[['video','ویدیو'],['image','تصویر / بنر'],['text','متن'],['link','دکمهٔ تلگرام']].filter(([type]) => data.placements.some((slot) => slot.asset === type && slot.enabled && slot.active !== false)).map(([type,label]) => `<option value="${type}">${label}</option>`).join('')}</select></label>
+              <fieldset class="owner-ad-placements"><legend>۲. جایگاه‌ها (یک یا چند مورد)</legend><p data-owner-slot-prompt>ابتدا نوع محتوا را انتخاب کنید.</p>${data.placements.filter((slot) => slot.enabled && slot.active !== false).map((slot) => `<label class="owner-ad-slot" data-owner-slot-type="${esc(slot.asset)}" hidden><input type="checkbox" name="placements" value="${esc(slot.placement)}"> <span>${esc(slot.label)}</span></label>`).join('')}</fieldset>
               <div class="grid-2">
                 <label class="field"><span>نام کمپین</span><input class="input" name="campaignName" required minlength="3" maxlength="180" placeholder="مثلاً معرفی فیلم‌ورک پلاس"></label>
                 <label class="field"><span>عنوان نمایشی</span><input class="input" name="headline" required minlength="3" maxlength="180" placeholder="مثلاً فیلم‌ورک پلاس را امتحان کنید"></label>
               </div>
-              <label class="field"><span>جایگاه</span><select class="select" name="placement">
-                ${data.placements.filter((slot) => slot.group === adState.group && slot.enabled).map((slot) => `<option value="${esc(slot.placement)}">${esc(slot.label)}</option>`).join('') || '<option value="">جایگاه روشنی نیست</option>'}
-              </select></label>
-              <div class="grid-2">
+              <div class="grid-2" data-owner-creative hidden>
                 <label class="field"><span>فایل تبلیغ (آپلود)</span><input class="input" type="file" name="creative" accept="video/mp4,video/webm,image/jpeg,image/png,image/webp"></label>
                 <label class="field"><span>یا لینک فایل</span><input class="input" dir="ltr" name="creativeUrl" placeholder="https://cdn.example.com/ad.mp4"></label>
               </div>
+              <label class="field" data-owner-bid hidden><span>ضریب پیشنهاد</span><input class="input" type="range" name="bidMultiplier" min="1" max="${esc(data.policy?.maxPriorityMultiplier || 10)}" step="0.01" value="1"><output data-owner-bid-value>۱×</output><small>ضریب بیشتر، احتمال انتخاب را بیشتر می‌کند. کمپین مالک هزینه ندارد.</small></label>
               <div class="grid-2">
                 <label class="field"><span>لینک مقصد</span><input class="input" dir="ltr" name="targetUrl" placeholder="https://example.com"></label>
                 <label class="field"><span>مدت نمایش (ثانیه)</span><input class="input" type="number" name="durationSeconds" min="0" max="120" value="${esc(data.policy?.defaultVideoDuration || 15)}"></label>
               </div>
+              <label class="field" data-owner-landing hidden><span>پس از کلیک</span><select class="select" name="landingMode"><option value="direct">مستقیم به مقصد (با ثبت کلیک)</option><option value="intermediate">صفحهٔ واسط سایت، سپس مقصد</option></select></label>
+              <label class="field" data-owner-landing-fields hidden><span>متن صفحهٔ واسط (اختیاری)</span><textarea class="textarea" name="telegramPostText" maxlength="5000"></textarea></label>
+              <label class="field" data-owner-telegram hidden><span>دکمهٔ ربات: شیوهٔ هدایت</span><select class="select" name="telegramClickMode"><option value="tracked">از سایت، با ثبت کلیک</option><option value="direct">مستقیم به تلگرام، بدون آمار کلیک</option></select><small>فقط برای دکمهٔ ربات؛ مقصد باید لینک t.me باشد. تعرفه به‌ازای هزار ارسال فایل است.</small></label>
               <div class="grid-2">
                 <label class="field"><span>شروع</span><input class="input" type="datetime-local" name="startsAt"></label>
                 <label class="field"><span>پایان</span><input class="input" type="datetime-local" name="endsAt"></label>
@@ -1810,7 +1840,9 @@
       toggle.disabled = true;
       try {
         const result = await api(`/api/admin/ads/placements/${encodeURIComponent(placement)}`, { method: 'PATCH', body: { enabled: next } });
-        adState.placements = result.placements;
+        adState.placements = result.placements || [];
+        const saved = adState.placements.find((slot) => slot.placement === placement);
+        if (!saved || Boolean(saved.enabled && saved.active !== false) !== next) throw new Error('وضعیت جایگاه ذخیره نشد؛ ساختار دیتابیس را بررسی کنید.');
         toast(next ? 'جایگاه روشن شد.' : 'جایگاه خاموش شد.', 'success');
         paintAdSettings();
       } catch (error) {
@@ -1877,6 +1909,14 @@
       }
       return;
     }
+    const removeAd = event.target.closest('[data-ad-delete]');
+    if (removeAd) {
+      if (!(await confirmDialog({ title:'حذف کمپین', message:'کمپین و آمار آن برای همیشه از دیتابیس حذف می‌شود. ماندهٔ بودجه به کیف پول برمی‌گردد و سوابق مالی و تراکنش‌ها باقی می‌مانند.', confirmLabel:'حذف کمپین' }))) return;
+      removeAd.disabled = true;
+      try { await api(`/api/admin/ads/campaigns/${encodeURIComponent(removeAd.dataset.adDelete)}`, { method:'DELETE' }); toast('کمپین حذف شد.', 'success'); if (state.view === 'ads') await renderAds(); else await renderAdSettings(); }
+      catch (error) { removeAd.disabled = false; toast(error.message, 'error'); }
+      return;
+    }
     const ownerFilter = event.target.closest('[data-ad-owner]');
     if (ownerFilter) {
       $$('[data-ad-owner]').forEach((button) => button.classList.toggle('is-active', button === ownerFilter));
@@ -1886,14 +1926,46 @@
     }
   });
 
+  function updateOwnerAdForm(form) {
+    const type = $('[name="creativeType"]', form).value;
+    $$('[data-owner-slot-type]', form).forEach((label) => {
+      const visible = Boolean(type) && label.dataset.ownerSlotType === type;
+      label.hidden = !visible;
+      const box = $('input', label); box.disabled = !visible; if (!visible) box.checked = false;
+    });
+    $('[data-owner-slot-prompt]', form).hidden = Boolean(type);
+    $('[data-owner-creative]', form).hidden = !['image','video'].includes(type);
+    const file = $('[name="creative"]', form); file.disabled = !['image','video'].includes(type);
+    file.accept = type === 'video' ? 'video/mp4,video/webm' : 'image/jpeg,image/png,image/webp';
+    $('[name="creativeUrl"]', form).disabled = file.disabled;
+    $('[data-owner-bid]', form).hidden = !type || type === 'link';
+    if (type === 'link') { $('[name="bidMultiplier"]', form).value = '1'; $('[data-owner-bid-value]', form).textContent = '۱×'; }
+    $('[data-owner-telegram]', form).hidden = type !== 'link';
+    $('[data-owner-landing]', form).hidden = !type || type === 'link';
+    const intermediate = type && type !== 'link' && $('[name="landingMode"]', form).value === 'intermediate';
+    $('[data-owner-landing-fields]', form).hidden = !intermediate;
+    $('[name="targetUrl"]', form).required = type === 'link' || (Boolean(type) && !intermediate);
+    $('[name="headline"]', form).maxLength = type === 'link' ? 64 : 180;
+  }
+  document.addEventListener('input', (event) => {
+    if (event.target.matches('#owner-ad-form [name=bidMultiplier]')) $('[data-owner-bid-value]', event.target.form).textContent = `${Number(event.target.value).toLocaleString('fa-IR')}×`;
+  });
+  document.addEventListener('change', (event) => {
+    if (event.target.closest('#owner-ad-form') && event.target.matches('[name=creativeType], [name=landingMode]')) updateOwnerAdForm(event.target.form);
+  });
+
   document.addEventListener('submit', async (event) => {
     if (event.target.id !== 'owner-ad-form') return;
     event.preventDefault();
     const form = event.target;
+    const selected = $$('[name=placements]:checked', form).map((input) => input.value);
+    if (!selected.length) { toast('حداقل یک جایگاه انتخاب کنید.', 'error'); return; }
     const submit = $('button[type="submit"]', form);
     submit.disabled = true;
     try {
       const body = new FormData(form);
+      body.delete('placements'); body.set('placements', JSON.stringify(selected));
+      if (body.get('landingMode') !== 'intermediate') body.delete('telegramPostText');
       const response = await fetch('/api/admin/ads/campaigns', {
         method: 'POST',
         credentials: 'same-origin',
@@ -2030,6 +2102,7 @@
     const changedFiles = (lastRun?.files || []);
     root.innerHTML = `<section class="view">
       <div class="page-head"><div><h1>به‌روزرسانی از گیت‌هاب</h1><p>هر تغییری که در گیت‌هاب می‌دهید، از همین صفحه روی هاست اعمال می‌شود؛ لازم نیست فایل‌ها را با File Manager عوض کنید</p></div></div>
+      <div class="callout callout--warn">${ICONS.warn}<span>این ابزار فقط فایل‌ها را کپی می‌کند و migrationهای پایگاه داده را اجرا نمی‌کند. پیش از اعمال نسخه‌های نیازمند migration از دیتابیس پشتیبان بگیرید و دستورهای راهنما را اجرا کنید. <button class="button button--ghost button--xs" type="button" data-diagnostics>بررسی ساختار دیتابیس</button></span></div>
       ${status.configured ? '' : `<div class="callout callout--warn">${ICONS.warn}<span>برای فعال شدن این صفحه، در <code>.env</code> مقدار <code>GITHUB_REPO=Atliner/filmwork</code> را بگذارید (برای ریپوی خصوصی <code>GITHUB_TOKEN</code> هم لازم است) و سرویس Node را یک‌بار ری‌استارت کنید.</span></div>`}
       <div class="deploy-grid">
         <article class="panel"><div class="panel__head"><div><h2>وضعیت</h2><p>مخزن و شاخه‌ای که روی هاست اعمال می‌شود</p></div></div>
@@ -2231,7 +2304,7 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
           <div class="guide__body">
             <ul>
               <li>دکمه ستاره روی هر کارت، آن اثر را به بنر هیرو صفحه اصلی می‌برد؛ فقط یک اثر هم‌زمان در هیرو است.</li>
-              <li>گالری پوستر (IMPAwards): لینک تصاویر را در مرحله ۲ اضافه کنید و با ستاره، پوستر اصلی را انتخاب کنید.</li>
+              <li>گالری پوستر: لینک تصویر یا صفحهٔ IMPAwards و یا لینک اثر IMDb را در مرحله ۲ اضافه کنید و با ستاره، پوستر اصلی را انتخاب کنید.</li>
               <li>لینک پس‌زمینه (backdrop) برای تصویر بزرگ هیرو استفاده می‌شود.</li>
             </ul>
           </div>
@@ -2280,7 +2353,7 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
         <details>
           <summary>۱۰. تنظیمات تبلیغات (جایگاه‌ها، تعرفه، بررسی و کمپین مالک)</summary>
           <div class="guide__body">
-            <p style="margin:0 0 8px"><b>سه نوع تبلیغ، هشت جایگاه:</b> ویدیویی ۴ جایگاه (پیش از پخش، میان‌پخش، پس از پخش، لایه توقف) · بنری ۳ جایگاه (روی پلیر ۷۲۸×۹۰، بنر توقف ۳۰۰×۲۵۰، بنر قبل از دانلود ۱۰۸۰×۱۹۲۰) · لینکی ۱ جایگاه (دکمه لینک زیر فایل در ربات).</p>
+            <p style="margin:0 0 8px"><b>جایگاه‌های تبلیغ:</b> ویدیویی ۴ جایگاه (پیش از پخش، میان‌پخش، پس از پخش، لایه توقف) · بنری و متنی (پلیر، توقف، دانلود، صفحهٔ اصلی، جزئیات و جست‌وجو) · لینکی ۱ جایگاه (دکمه لینک زیر فایل در ربات).</p>
             <ul>
               <li><b>روشن/خاموش:</b> هر جایگاه یک کلید دارد. خاموش یعنی حتی اگر کمپین فعال باشد، هیچ تبلیغی در آن جایگاه سرو نمی‌شود و آن جایگاه از فرم تبلیغ‌دهنده هم حذف می‌شود.</li>
               <li><b>مدت نمایش:</b> برای هر جایگاه ویدیویی/بنری مدت پیش‌فرض را تعیین کنید؛ برای کمپین‌ها هم مقدار جدا ذخیره می‌شود. «دکمه رد کردن پس از» مشخص می‌کند کاربر چند ثانیه بعد بتواند تبلیغ را رد کند.</li>
@@ -2486,7 +2559,7 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
       if (button.matches('[data-delete-content]')) {
         const confirmed = await confirmDialog({
           title: 'حذف محتوا',
-          message: `«${esc(button.dataset.deleteTitle || 'این محتوا')}» و همه نسخه‌ها و لینک‌های آن حذف می‌شوند. این کار قابل بازگشت نیست.`,
+          message: `«${esc(button.dataset.deleteTitle || 'این محتوا')}» و همه نسخه‌ها، لینک‌ها، دیدگاه‌ها، نشان‌ها، سابقهٔ دانلود و پیشرفت تماشا از دیتابیس حذف می‌شوند. این کار قابل بازگشت نیست.`,
           confirmLabel: 'حذف قطعی',
         });
         if (!confirmed) return;
@@ -2600,13 +2673,49 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
         paintEditor();
         return;
       }
+      if (button.matches('[data-import-main-poster]')) {
+        const editor = state.editor; const value = editor?.draft.posterUrl?.trim();
+        if (!value || !isImpAwards(value)) { toast('لینک صفحه یا تصویر IMPAwards را در کادر پوستر وارد کنید.', 'error'); return; }
+        button.disabled = true;
+        try {
+          const result = await resolvePoster(value);
+          if (state.editor !== editor) return;
+          editor.draft.posterUrl = result;
+          if (!editor.draft.posterGallery.includes(result)) editor.draft.posterGallery.push(result);
+          paintEditor(); toast('پوستر دریافت شد؛ برای ثبت نهایی، اثر را ذخیره کنید.');
+        } catch (error) { toast(error.message, 'error'); button.disabled = false; }
+        return;
+      }
+      if (button.matches('[data-imdb-posters]')) {
+        const editor = state.editor;
+        const url = $('[data-imdb-url]')?.value?.trim();
+        const count = Number($('[data-imdb-count]')?.value);
+        if (!editor || !url || !Number.isInteger(count) || count < 1 || count > 50) { toast('لینک IMDb و تعداد بین ۱ تا ۵۰ را وارد کنید.', 'error'); return; }
+        button.disabled = true;
+        try {
+          const result = await api('/api/admin/imdb-posters', { method:'POST', body:{ url, count } });
+          if (state.editor !== editor) return;
+          const before = editor.draft.posterGallery.length;
+          for (const image of result.posters || []) if (!editor.draft.posterGallery.includes(image)) editor.draft.posterGallery.push(image);
+          if (!editor.draft.posterUrl && editor.draft.posterGallery.length) editor.draft.posterUrl = editor.draft.posterGallery[0];
+          const added = editor.draft.posterGallery.length - before;
+          paintEditor(); toast(`${added} پوستر به گالری اضافه شد؛ برای ثبت نهایی اثر را ذخیره کنید.`);
+        } catch (error) { toast(error.message, 'error'); button.disabled = false; }
+        return;
+      }
       if (button.matches('[data-add-gallery]')) {
+        const editor = state.editor;
         const input = $('[data-gallery-input]');
         const url = safeUrl(input?.value?.trim());
-        if (!url) { toast('لینک تصویر معتبر نیست.', 'error'); return; }
-        if (!state.editor.draft.posterGallery.includes(url)) state.editor.draft.posterGallery.push(url);
-        if (!state.editor.draft.posterUrl) state.editor.draft.posterUrl = url;
-        paintEditor();
+        if (!editor || !url) { toast('لینک تصویر معتبر نیست.', 'error'); return; }
+        button.disabled = true;
+        try {
+          const image = await resolvePoster(url);
+          if (state.editor !== editor) return;
+          if (!editor.draft.posterGallery.includes(image)) editor.draft.posterGallery.push(image);
+          if (!editor.draft.posterUrl) editor.draft.posterUrl = image;
+          paintEditor();
+        } catch (error) { toast(error.message, 'error'); button.disabled = false; }
         return;
       }
       if (button.matches('[data-remove-gallery]')) {
