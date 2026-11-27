@@ -128,3 +128,36 @@ test('restart request creates the Passenger marker in the configured application
     assert.ok((await fs.stat(path.join(dir, 'tmp', 'restart.txt'))).isFile());
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+test('shutdown during lock acquisition cannot leave a leader running', async () => {
+  const pending = deferred(); let released = false; let unlocked = false;
+  const connection = { execute: async (sql) => {
+    if (sql.includes('GET_LOCK')) return pending.promise;
+    if (sql.includes('RELEASE_LOCK')) { unlocked = true; return [[{}]]; }
+    throw new Error('unexpected query');
+  }, release: () => { released = true; }, destroy: () => { released = true; } };
+  const leader = new BotLeader({ getConnection: async () => connection }, async () => {}, { name: 'test' });
+  const acquiring = leader.acquire();
+  await new Promise((resolve) => setImmediate(resolve));
+  const closing = leader.close();
+  pending.resolve([[{ acquired: 1 }]]);
+  assert.equal(await acquiring, false);
+  await closing;
+  assert.equal(unlocked, true);
+  assert.equal(released, true);
+  assert.equal(leader.connection, null);
+});
+
+test('a stalled leader heartbeat destroys the connection and signals loss', async () => {
+  let lost = 0; let destroyed = false;
+  const connection = { execute: async (sql) => sql.includes('GET_LOCK') ? [[{ acquired: 1 }]] : new Promise(() => {}), release: () => {}, destroy: () => { destroyed = true; } };
+  const leader = new BotLeader({ getConnection: async () => connection }, async () => { lost++; }, { name: 'test', heartbeatTimeoutMs: 10 });
+  assert.equal(await leader.acquire(), true);
+  const keepAlive = setTimeout(() => {}, 100);
+  await leader.check();
+  clearTimeout(keepAlive);
+  assert.equal(lost, 1);
+  assert.equal(destroyed, true);
+  assert.equal(leader.connection, null);
+  await leader.close();
+});
