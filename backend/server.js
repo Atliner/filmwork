@@ -34,6 +34,7 @@ const multer = require('multer');
 
 const { pool, query, withTransaction, healthCheck, closePool } = require('./config/db');
 const { BotLeader } = require('./lib/botLeader');
+const { telegramBotUrl } = require('./lib/telegram');
 const { requestPassengerRestart } = require('./lib/deployRestart');
 const { AppError, assert, asyncRoute } = require('./lib/errors');
 const { parseCatalogFilters, catalogFacets } = require('./lib/catalogFilters');
@@ -408,14 +409,13 @@ app.get('/api/config', asyncRoute(async (_req, res) => {
      ORDER BY display_order, placement`,
   ).catch(() => []);
   const username = String(process.env.AUTH_BOT_USERNAME || '').replace(/^@/, '');
-  const downloadUsername = String(process.env.DOWNLOAD_BOT_USERNAME || '').replace(/^@/, '');
   const publicSettings = await siteSettings.read().catch(() => siteSettings.DEFAULTS);
   res.setHeader('Cache-Control', 'public, max-age=60');
   res.json({
     site: { name: publicSettings['site.name'], tagline: publicSettings['site.tagline'] },
     player: { enabled: publicSettings['player.enabled'] === '1', buttonVisible: publicSettings['player.button_visible'] === '1' },
     authBotUrl: username ? `https://t.me/${encodeURIComponent(username)}` : null,
-    downloadBotUrl: downloadUsername ? `https://t.me/${encodeURIComponent(downloadUsername)}` : null,
+    downloadBotUrl: telegramBotUrl(process.env.DOWNLOAD_BOT_USERNAME),
     maxPriorityMultiplier: adSettingsLib.adPolicy(await adPlatform.readSettings().catch(() => ({ ...adSettingsLib.DEFAULTS }))).maxPriorityMultiplier,
     placementPrices: adSettingsLib.publicPlacementPrices(prices).map((price) => ({
       placement: price.placement,
@@ -987,7 +987,13 @@ app.post('/api/download', requireUser, asyncRoute(async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.json({
     ...result,
-    message: 'فایل به گفت‌وگوی شما با ربات Filmwork ارسال شد.',
+    // Never send the storage-channel URL as the UI's open-in-Telegram link.
+    // Keep the old field for cached clients, but make it point to the bot too.
+    telegramLink: telegramBotUrl(process.env.DOWNLOAD_BOT_USERNAME),
+    downloadBotUrl: telegramBotUrl(process.env.DOWNLOAD_BOT_USERNAME),
+    message: result.deliveryMethod === 'telegram_link'
+      ? 'لینک فایل به گفت‌وگوی شما با ربات Filmwork ارسال شد.'
+      : 'فایل به گفت‌وگوی شما با ربات Filmwork ارسال شد.',
   });
 }));
 

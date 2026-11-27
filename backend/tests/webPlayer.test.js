@@ -9,7 +9,7 @@ const script = fs.readFileSync(path.join(root, 'frontend/app.js'), 'utf8');
 const html = fs.readFileSync(path.join(root, 'frontend/index.html'), 'utf8');
 const delay = (ms = 10) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function setup({ ad = null, midAd = null, downloadAd = null, downloadVideo = null, pauseAd = null, sources = [], stored = 0, signedIn = false, mediaItems = [], prices = [], native = false, noNativeBridge = false, streamUrl = 'https://media.example/video.mp4' } = {}) {
+async function setup({ ad = null, midAd = null, downloadAd = null, downloadVideo = null, pauseAd = null, sources = [], stored = 0, signedIn = false, mediaItems = [], prices = [], native = false, noNativeBridge = false, streamUrl = 'https://media.example/video.mp4', downloadBotUrl = null, deliveryResponse = null } = {}) {
   const dom = new JSDOM(html, { url: 'https://example.com/#/player/asset', runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
   const requests = [];
@@ -31,7 +31,8 @@ async function setup({ ad = null, midAd = null, downloadAd = null, downloadVideo
   w.fetch = async (url, options = {}) => {
     requests.push({ url: String(url), options });
     let data;
-    if (url === '/api/config') data = { player: { enabled: true }, placementPrices: prices };
+    if (url === '/api/config') data = { player: { enabled: true }, placementPrices: prices, downloadBotUrl };
+    else if (url === '/api/download') data = deliveryResponse || { delivered: true, message: 'ارسال شد', telegramLink: 'https://t.me/c/123/456' };
     else if (url === '/api/me') data = { user: { id: '1', accountName: 'آزمایش' } };
     else if (url === '/api/progress') data = { items: [] };
     else if (url === '/api/advertiser/profile') data = { campaigns: [], wallet: { balance: 0, currency: 'IRR' }, analytics: {} };
@@ -385,5 +386,32 @@ test('before download requests its own video placement followed by the image ban
     assert.ok(d.querySelector('#preroll-video')); assert.ok(requests.some(r=>r.url==='/api/ads/serve?placement=video_download'));
     d.querySelector('#skip-ad').click(); await delay(); assert.ok(d.querySelector('#download-banner-slot img'));
     assert.ok(!requests.some(r=>r.url==='/api/ads/serve?placement=pre_roll'));
+  } finally { dom.window.close(); }
+});
+
+test('delivery confirmation opens the download bot, never the storage channel', async () => {
+  const mediaItems = [{ id: 'm1', audioLabel: 'دوبله', resolution: '720p', version: '720p', fileSizeBytes: 100 }];
+  const { dom, d } = await setup({ signedIn: true, mediaItems, downloadBotUrl: 'https://t.me/my_download_bot', deliveryResponse: { delivered: true, message: 'ارسال شد', telegramLink: 'https://t.me/c/3981503084/935' } });
+  try {
+    d.querySelector('[data-open-download]').click(); await delay();
+    d.querySelector('[data-download-media="m1"]').click(); await delay(); await delay();
+    d.querySelector('#confirm-delivery').click(); await delay();
+    const link = [...d.querySelectorAll('#modal-root a')].find((a) => a.textContent.includes('ربات دریافت'));
+    assert.ok(link);
+    assert.equal(link.href, 'https://t.me/my_download_bot');
+    assert.ok(!d.querySelector('a[href*="t.me/c/"]'));
+  } finally { dom.window.close(); }
+});
+
+test('delivery without a valid bot username never falls back to a private storage link', async () => {
+  const mediaItems = [{ id: 'm1', audioLabel: 'دوبله', resolution: '720p', version: '720p', fileSizeBytes: 100 }];
+  const { dom, d } = await setup({ signedIn: true, mediaItems, downloadBotUrl: 'https://t.me/c/123/456', deliveryResponse: { delivered: true, deliveryMethod: 'telegram_link', message: 'لینک ارسال شد', telegramLink: 'https://t.me/c/123/456', downloadBotUrl: 'https://t.me/c/123/456' } });
+  try {
+    d.querySelector('[data-open-download]').click(); await delay();
+    d.querySelector('[data-download-media="m1"]').click(); await delay(); await delay();
+    d.querySelector('#confirm-delivery').click(); await delay();
+    assert.equal(d.querySelector('#modal-root a[href*="t.me"]'), null);
+    assert.match(d.querySelector('#modal-root').textContent, /ربات دریافت را در تلگرام باز کنید/);
+    assert.match(d.querySelector('#modal-root').textContent, /لینک ارسال شد/);
   } finally { dom.window.close(); }
 });

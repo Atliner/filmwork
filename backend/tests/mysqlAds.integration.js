@@ -334,3 +334,95 @@ test('admin bot persists a dubbed file without a subtitle tag in real SQL', asyn
   assert.equal(Number(rows[0].episode_number), 2);
   await query('DELETE FROM media_links WHERE ingest_key=:key', { key });
 });
+
+test('one admin directive accepts multiple files until a new directive replaces it', async () => {
+  const { AdminBotService, parseDirectives } = require('../bots/adminBot');
+  const service = new AdminBotService();
+  const chatId = -1009988776655;
+  const messages = [];
+  const ctx = { chat: { id: chatId }, from: { id: 123456789 }, reply: async (text) => messages.push(text) };
+  const copy = { chatId: '-100123', messageId: 10, link: 'https://t.me/c/123/10' };
+  service.replicateMessage = async () => ({ primary: copy, fallback1: copy, fallback2: copy });
+  const directives = parseDirectives(`#اثر ${assetId} #نسخه Kingmovie #نوع دوبله`);
+  assert.equal(await service.handleDirectives(ctx, directives), true);
+  const firstSession = await service.activeSession(chatId);
+  assert.equal(firstSession.directives.persistent, true);
+  // Permanent sessions remain usable beyond the old 30-minute deadline.
+  await query('UPDATE bot_ingest_sessions SET expires_at=DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 1 DAY) WHERE id=:id', { id: firstSession.id });
+  const sendVideo = async (episode, quality) => service.handleMedia(ctx, {
+    message_id: episode, document: { file_id: `file-${episode}`, file_unique_id: `unique-${episode}`, file_name: `The.Pitt.S01E0${episode}.${quality}.WEB-DL.mkv`, file_size: 100, mime_type: 'video/x-matroska' },
+  });
+  await sendVideo(1, '1080p'); await sendVideo(2, '720p'); await sendVideo(3, '480p');
+  assert.equal((await service.activeSession(chatId)).id, firstSession.id);
+  const content = await query('SELECT id FROM contents WHERE asset_uuid=:assetId', { assetId });
+  const rows = await query('SELECT season_number,episode_number,resolution,subtitle_type FROM media_links WHERE content_id=:id AND ingest_key LIKE :prefix ORDER BY episode_number', { id: content[0].id, prefix: `tg:${content[0].id}:%` });
+  assert.deepEqual(rows.map(r => [Number(r.episode_number), r.resolution, r.subtitle_type]), [[1, '1080p', 'none'], [2, '720p', 'none'], [3, '480p', 'none']]);
+  const other = crypto.randomUUID();
+  await query("INSERT INTO contents (asset_uuid,content_type,title,slug,status) VALUES (:id,'series','other',:slug,'published')", { id: other, slug: `other-${other}` });
+  try {
+    assert.equal(await service.handleDirectives(ctx, parseDirectives(`#اثر ${other} #نسخه A #نوع دوبله`)), true);
+    const active = await service.activeSession(chatId);
+    assert.notEqual(active.id, firstSession.id);
+    assert.equal((await query('SELECT status FROM bot_ingest_sessions WHERE id=:id', { id: firstSession.id }))[0].status, 'expired');
+    await sendVideo(4, '720p');
+    assert.equal(Number((await query('SELECT COUNT(*) AS total FROM media_links ml JOIN contents c ON c.id=ml.content_id WHERE c.asset_uuid=:id AND ml.episode_number=4', { id: other }))[0].total), 1);
+    // An expired pre-upgrade session without the persistent marker is not revived.
+    await query("UPDATE bot_ingest_sessions SET directives='{}',expires_at=DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 1 DAY) WHERE id=:id", { id: active.id });
+    assert.equal(await service.activeSession(chatId), null);
+  } finally {
+    await query('DELETE FROM bot_ingest_sessions WHERE source_chat_id=:chatId', { chatId });
+    await query('DELETE FROM contents WHERE asset_uuid=:id', { id: other });
+    await query('DELETE FROM media_links WHERE content_id=:id AND ingest_key LIKE :prefix', { id: content[0].id, prefix: `tg:${content[0].id}:%` });
+  }
+});
+
+test('separate subtitles attach once in order and old bundle completion does not close a new session', async () => {
+  const { AdminBotService, parseDirectives } = require('../bots/adminBot');
+  const service = new AdminBotService();
+  const chatId = -1009988776656;
+  const ctx = { chat: { id: chatId }, from: { id: 123456789 }, reply: async () => {} };
+  const copy = { chatId: '-100123', messageId: 10, link: 'https://t.me/c/123/10' };
+  service.replicateMessage = async () => ({ primary: copy, fallback1: copy, fallback2: copy });
+  service.scheduleFinalize = () => {};
+  await service.handleDirectives(ctx, parseDirectives(`#اثر ${assetId} #نسخه A #نوع سافتساب #زیرنویس مجزا`));
+  const old = await service.activeSession(chatId);
+  for (let i = 1; i <= 2; i++) await service.handleMedia(ctx, { message_id: i, document: { file_id: `f${i}`, file_unique_id: `u${i}`, file_name: `Show.S01E0${i}.720p.mkv`, file_size: 100 } });
+  for (let i = 1; i <= 2; i++) await service.handleMedia(ctx, { message_id: 10 + i, document: { file_id: `s${i}`, file_unique_id: `su${i}`, file_name: `sub${i}.srt`, file_size: 10, mime_type: 'application/x-subrip' } });
+  const bundles = await query('SELECT id,subtitle_payload FROM bot_media_bundles WHERE session_id=:id ORDER BY id', { id: old.id });
+  assert.equal(bundles.length, 2);
+  for (let i = 0; i < 2; i++) {
+    const payload = typeof bundles[i].subtitle_payload === 'string' ? JSON.parse(bundles[i].subtitle_payload) : bundles[i].subtitle_payload;
+    assert.equal(payload.metadata.fileName, `sub${i + 1}.srt`);
+  }
+  await service.handleDirectives(ctx, parseDirectives(`#اثر ${assetId} #نسخه B #نوع دوبله`));
+  const newer = await service.activeSession(chatId);
+  for (const bundle of bundles) await service.finalizeBundle(bundle.id);
+  assert.equal((await service.activeSession(chatId)).id, newer.id);
+  const completed = await query('SELECT COUNT(*) AS n FROM bot_media_bundles WHERE session_id=:id AND status=\'complete\'', { id: old.id });
+  assert.equal(Number(completed[0].n), 2);
+  await query('DELETE FROM media_links WHERE ingest_key IN (:one, :two)', { one: `bundle:${(await query('SELECT bundle_key FROM bot_media_bundles WHERE id=:id', {id:bundles[0].id}))[0].bundle_key}`, two: `bundle:${(await query('SELECT bundle_key FROM bot_media_bundles WHERE id=:id', {id:bundles[1].id}))[0].bundle_key}` });
+  await query('DELETE FROM bot_ingest_sessions WHERE source_chat_id=:chatId', { chatId });
+});
+
+test('download API exposes the bot link rather than the stored-channel link', async () => {
+  const { downloadBotService } = require('../bots/downloadBot');
+  const { ensureReady, copyMedia } = downloadBotService;
+  const oldUsername = process.env.DOWNLOAD_BOT_USERNAME;
+  process.env.DOWNLOAD_BOT_USERNAME = '@example_download_bot';
+  downloadBotService.ensureReady = () => ({});
+  downloadBotService.copyMedia = async () => ({ message_id: 1 });
+  const id = crypto.randomUUID();
+  const content = await query('SELECT id FROM contents WHERE asset_uuid=:assetId', {assetId});
+  const inserted = await query("INSERT INTO media_links (public_id,content_id,version_label,resolution,file_size_bytes,tg_link_primary,primary_chat_id,primary_message_id) VALUES (:id,:content,'test','720p',100,'https://t.me/c/123/456',-100123,10)", { id, content: content[0].id });
+  try {
+    const result = await request('/api/download','POST',{mediaId:id});
+    assert.equal(result.response.status, 200, JSON.stringify(result.data));
+    assert.equal(result.data.telegramLink, 'https://t.me/example_download_bot');
+    assert.equal(result.data.downloadBotUrl, 'https://t.me/example_download_bot');
+    assert.equal(JSON.stringify(result.data).includes('t.me/c/123/456'), false);
+  } finally {
+    downloadBotService.ensureReady = ensureReady; downloadBotService.copyMedia = copyMedia;
+    if (oldUsername === undefined) delete process.env.DOWNLOAD_BOT_USERNAME; else process.env.DOWNLOAD_BOT_USERNAME = oldUsername;
+    await query('DELETE FROM media_links WHERE id=:id', { id: inserted.insertId });
+  }
+});

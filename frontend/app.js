@@ -101,6 +101,14 @@
     }
   }
 
+  function safeTelegramBotUrl(value) {
+    try {
+      const url = new URL(String(value || ''));
+      if (url.protocol !== 'https:' || url.hostname !== 't.me' || url.port || url.username || url.password || url.search || url.hash || !/^\/[A-Za-z0-9_]{5,32}$/.test(url.pathname)) return '';
+      return safeUrl(url.href);
+    } catch { return ''; }
+  }
+
   function firstLetter(value) {
     return [...String(value || 'م').trim()][0] || 'م';
   }
@@ -1634,8 +1642,8 @@
     if (button) { button.disabled = true; button.innerHTML = '<span class="spinner"></span> در حال بررسی سه نسخه'; }
     try {
       const result = await api('/download', { method: 'POST', body: JSON.stringify({ mediaId }) });
-      const link = safeUrl(result.telegramLink);
-      openModal(`${modalHeader('فایل ارسال شد')}<div class="empty-state"><div class="empty-icon" style="color:#86efac">✓</div><h2>تلگرام خود را بررسی کنید</h2><p>${escapeHtml(result.message)}${result.subtitleDelivered ? ' زیرنویس مجزا نیز پس از ویدیو ارسال شد.' : ''}</p>${link ? `<a class="primary-button" style="margin-top:18px" href="${link}" target="_blank" rel="noopener">باز کردن در تلگرام</a>` : ''}</div>`);
+      const link = safeTelegramBotUrl(result.downloadBotUrl) || safeTelegramBotUrl(state.config.downloadBotUrl);
+      openModal(`${modalHeader(result.deliveryMethod === 'telegram_link' ? 'لینک ارسال شد' : 'فایل ارسال شد')}<div class="empty-state"><div class="empty-icon" style="color:#86efac">✓</div><h2>تلگرام خود را بررسی کنید</h2><p>${escapeHtml(result.message)}${result.subtitleDelivered ? ' زیرنویس مجزا نیز پس از ویدیو ارسال شد.' : ''}</p>${link ? `<a class="primary-button" style="margin-top:18px" href="${link}" target="_blank" rel="noopener">باز کردن ربات دریافت</a>` : '<p>برای مشاهده پیام، ربات دریافت را در تلگرام باز کنید.</p>'}</div>`);
     } catch (error) {
       toast(apiErrorMessage(error), 'error');
       if (button) { button.disabled = false; button.textContent = 'تلاش دوباره'; }

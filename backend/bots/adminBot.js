@@ -422,24 +422,28 @@ class AdminBotService {
           ownerId,
           sourceChatId,
           contentId: contentRows[0].id,
-          directives: JSON.stringify(directives),
+          // Persistent sessions are opt-in, so expired sessions from older releases
+          // are not accidentally revived. The legacy expiry column remains populated.
+          directives: JSON.stringify({ ...directives, persistent: true }),
         },
       );
     });
-    await safeReply(ctx, `دستور ${contentRows[0].title} ثبت شد؛ فایل رسانه را تا ۳۰ دقیقه آینده ارسال کنید.`);
+    await safeReply(ctx, `دستور ${contentRows[0].title} ثبت شد؛ فایل‌ها را ارسال کنید. این دستور تا ثبت دستور جدید فعال می‌ماند.`);
     return true;
   }
 
   async activeSession(chatId) {
     const rows = await query(
-      `SELECT id, content_id, directives
+      `SELECT id, content_id, directives, expires_at > UTC_TIMESTAMP(3) AS unexpired
        FROM bot_ingest_sessions
-       WHERE source_chat_id = :chatId AND status = 'waiting_media' AND expires_at > UTC_TIMESTAMP(3)
+       WHERE source_chat_id = :chatId AND status = 'waiting_media'
        ORDER BY id DESC LIMIT 1`,
       { chatId: String(chatId) },
     );
     if (!rows[0]) return null;
-    return { ...rows[0], directives: jsonValue(rows[0].directives) };
+    const directives = jsonValue(rows[0].directives);
+    if (directives?.persistent !== true && !Number(rows[0].unexpired)) return null;
+    return { ...rows[0], directives };
   }
 
   async replicateMessage(ctx, message) {
@@ -482,7 +486,8 @@ class AdminBotService {
       const pending = await query(
         `SELECT id FROM bot_media_bundles
          WHERE session_id = :sessionId AND status = 'waiting_subtitle'
-         ORDER BY id DESC LIMIT 1`,
+           AND subtitle_payload IS NULL AND finalize_after > UTC_TIMESTAMP(3)
+         ORDER BY id ASC LIMIT 1`,
         { sessionId: session.id },
       );
       if (!pending[0]) {
@@ -491,10 +496,14 @@ class AdminBotService {
       }
       const copies = await this.replicateMessage(ctx, message);
       const subtitlePayload = { metadata, copies };
-      await query(
-        'UPDATE bot_media_bundles SET subtitle_payload = :payload WHERE id = :id AND status = \'waiting_subtitle\'',
+      const attached = await query(
+        'UPDATE bot_media_bundles SET subtitle_payload = :payload WHERE id = :id AND status = \'waiting_subtitle\' AND subtitle_payload IS NULL',
         { payload: JSON.stringify(subtitlePayload), id: pending[0].id },
       );
+      if (!attached.affectedRows) {
+        await safeReply(ctx, 'مهلت اتصال زیرنویس در هنگام ذخیره به پایان رسید؛ اتصال آن را در پنل بررسی کنید.');
+        return;
+      }
       await safeReply(ctx, 'زیرنویس دریافت شد و در همان کارت دانلود قرار می‌گیرد.');
       return;
     }
@@ -523,7 +532,6 @@ class AdminBotService {
       null,
       `tg:${session.content_id}:${session.directives.seasonNumber || 0}:${session.directives.episodeNumber || 0}:${ingestIdentity}`.slice(0, 190),
     );
-    await query('UPDATE bot_ingest_sessions SET status = \'complete\' WHERE id = :id', { id: session.id });
     await safeReply(ctx, 'فایل در هر سه کانال ذخیره و کارت دانلود ایجاد شد ✅');
   }
 
@@ -580,10 +588,6 @@ class AdminBotService {
         await connection.execute(
           'UPDATE bot_media_bundles SET status = \'complete\', last_error = NULL WHERE id = :id',
           { id: bundleId },
-        );
-        await connection.execute(
-          'UPDATE bot_ingest_sessions SET status = \'complete\' WHERE id = :id',
-          { id: work.session.id },
         );
       });
     } catch (error) {

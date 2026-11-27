@@ -1,5 +1,10 @@
 'use strict';
 
+function telegramBotUrl(username) {
+  const name = String(username || '').trim().replace(/^@/, '');
+  return /^[A-Za-z0-9_]{5,32}$/.test(name) ? `https://t.me/${name}` : null;
+}
+
 function normalizedChatId(chatId) {
   const value = String(chatId || '').trim();
   if (!/^-?\d+$/.test(value)) throw new Error(`Invalid Telegram chat id: ${value}`);
@@ -119,6 +124,7 @@ async function probeTelegramLink(url, timeoutMs = 5000) {
 }
 
 module.exports = {
+  telegramBotUrl,
   normalizedChatId,
   privateChannelPath,
   buildTelegramMessageLink,
