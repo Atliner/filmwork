@@ -10,6 +10,7 @@ const DEFAULTS = Object.freeze({
   'download.delay_minutes': '1,2,10,30',
   'download.reset_minutes': '60',
   'download.daily_cap': '0',
+  'download.delete_after_minutes': '0',
   'download.caption': '🎬 {title}\n📦 {version}\n\nدریافت امن از Vizosten',
   'player.enabled': '1',
   'player.button_visible': '1',
@@ -27,10 +28,10 @@ function validate(values) {
     if (key === 'download.caption') assert(value.length <= 900, 422, 'INVALID_SETTING', 'کپشن حداکثر ۹۰۰ نویسه است.');
     if (key === 'download.delay_minutes') assert(/^\s*\d{1,3}(\s*,\s*\d{1,3}){0,9}\s*$/.test(value), 422, 'INVALID_SETTING', 'زمان‌های انتظار را به‌شکل ۱،۲،۱۰ وارد کنید.');
     if (['player.enabled', 'player.button_visible'].includes(key)) assert(['0', '1'].includes(value), 422, 'INVALID_SETTING', 'مقدار این گزینه باید روشن یا خاموش باشد.');
-    if (['download.burst_limit', 'download.reset_minutes', 'download.daily_cap'].includes(key)) {
+    if (['download.burst_limit', 'download.reset_minutes', 'download.daily_cap', 'download.delete_after_minutes'].includes(key)) {
       const number = Number(value);
-      const maxima = { 'download.burst_limit': 100, 'download.reset_minutes': 1440, 'download.daily_cap': 10000 };
-      const minimum = key === 'download.daily_cap' ? 0 : 1;
+      const maxima = { 'download.burst_limit': 100, 'download.reset_minutes': 1440, 'download.daily_cap': 10000, 'download.delete_after_minutes': 2760 };
+      const minimum = ['download.daily_cap', 'download.delete_after_minutes'].includes(key) ? 0 : 1;
       assert(Number.isSafeInteger(number) && number >= minimum && number <= maxima[key], 422, 'INVALID_SETTING', `مقدار ${key} خارج از محدوده است.`);
     }
     output[key] = value;
@@ -48,6 +49,13 @@ async function write(values) {
   const clean = validate(values);
   if (process.env.DEMO_DATA === '1') Object.assign(demoValues, clean);
   else {
+    if (Number(clean['download.delete_after_minutes']) > 0) {
+      try { await query('SELECT id FROM telegram_deletion_queue LIMIT 1'); }
+      catch (error) {
+        console.error('Telegram deletion queue is unavailable:', error.message);
+        assert(false, 503, 'DELETION_QUEUE_UNAVAILABLE', 'ابتدا migration صف حذف تلگرام را اجرا و برنامه را بازنشانی کنید.');
+      }
+    }
     for (const [setting_key, setting_value] of Object.entries(clean)) {
       await query(`INSERT INTO app_settings (setting_key, setting_value) VALUES (:setting_key, :setting_value)
         ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`, { setting_key, setting_value });

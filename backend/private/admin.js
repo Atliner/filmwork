@@ -2000,6 +2000,7 @@
           ${text('download.delay_minutes', 'زمان انتظار هر مرحله (دقیقه، جداشده با کاما)', 'مثال: 1,2,10,30')}
           ${text('download.reset_minutes', 'بازنشانی شمارش پس از چند دقیقه بی‌دانلود', '', 'type="number" min="1" max="1440"')}
           ${text('download.daily_cap', 'سقف دانلود روزانه (۰ = نامحدود)', '', 'type="number" min="0" max="10000"')}
+          ${text('download.delete_after_minutes', 'حذف پیام فایل بعد از چند دقیقه (۰ = خاموش)', 'فقط پیام‌های جدید در گفت‌وگوی کاربر؛ حداکثر ۲۷۶۰ دقیقه. حذف به اتصال و محدودیت تلگرام وابسته است.', 'type="number" min="0" max="2760"')}
         </div></article>
         <article class="panel"><div class="panel__head"><div><h2>کپشن زیر فایل ارسالی</h2><p>متغیرهای قابل استفاده: {title} و {version}</p></div></div><div class="panel__body"><label class="field"><span>قالب کپشن</span><textarea class="input" data-site-setting="download.caption" maxlength="900" rows="5">${esc(s['download.caption'] || '')}</textarea><small class="muted">متغیرهای قابل استفاده: {title} و {version}</small></label></div></article>
         <article class="panel"><div class="panel__head"><div><h2>پخش آنلاین</h2><p>گزینه‌های کنترل پلیر و محدودیت نشست</p></div></div><div class="panel__body setting-grid">

@@ -69,6 +69,7 @@ const {
   ownerIds,
 } = require('./middleware/auth');
 const { deliverMedia } = require('./services/mediaDelivery');
+const { processDeletions } = require('./services/telegramDeletion');
 const { checkDownloadAllowance } = require('./services/downloadPolicy');
 const { changeCampaignStatus, settleExpiredCampaigns, deleteCampaign } = require('./services/adAccounting');
 const { eventDecision, shouldChargeImpression } = require('./services/adEventRules');
@@ -2382,6 +2383,8 @@ app.use((error, req, res, next) => {
 
 let httpServer;
 let campaignSettlementTimer;
+let deletionTimer;
+let deletionRunning = false;
 // Set by the hosting entry point (app.js) when it already owns the listening port.
 const hooks = { listenOnceReady: null };
 let botRetryTimer;
@@ -2508,6 +2511,18 @@ async function start({ listen = true } = {}) {
     }, 5 * 60_000);
     campaignSettlementTimer.unref?.();
   }
+  if (process.env.DEMO_DATA !== '1' && !deletionTimer) {
+    const runDeletions = async () => {
+      if (deletionRunning || shuttingDown) return;
+      deletionRunning = true;
+      try { await processDeletions(); }
+      catch (error) { console.error('Telegram deletion worker failed:', error.message); }
+      finally { deletionRunning = false; }
+    };
+    runDeletions();
+    deletionTimer = setInterval(runDeletions, 30_000);
+    deletionTimer.unref?.();
+  }
   // Adopt a listener that was opened to show the startup diagnostic page, then hand
   // it the real app: this is how a retried boot takes over the port without a clash.
   if (listen && !httpServer && hooks.listenOnceReady) {
@@ -2546,6 +2561,7 @@ async function shutdown(signal) {
   const forceTimer = setTimeout(() => process.exit(1), 15_000);
   forceTimer.unref();
   if (campaignSettlementTimer) clearInterval(campaignSettlementTimer);
+  if (deletionTimer) clearInterval(deletionTimer);
   if (botRetryTimer) clearTimeout(botRetryTimer);
   await Promise.allSettled([
     authBotService.stop(signal),

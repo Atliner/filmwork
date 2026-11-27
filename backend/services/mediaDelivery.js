@@ -8,6 +8,7 @@ const {
   probeTelegramLink,
 } = require('../lib/telegram');
 const { downloadBotService } = require('../bots/downloadBot');
+const { scheduleDeletion } = require('./telegramDeletion');
 const { deliverWithTelegramAd } = require('./telegramAds');
 
 async function getMedia(publicId) {
@@ -87,7 +88,7 @@ async function promoteFallback(mediaId, expectedPrimaryMessageId, expectedPrimar
   }, { isolationLevel: 'READ COMMITTED' });
 }
 
-async function deliverSubtitleBestEffort(user, media) {
+async function deliverSubtitleBestEffort(user, media, settings) {
   if (!media.subtitle_primary_message_id || !media.primary_chat_id) return false;
   const attempts = [
     [media.primary_chat_id, media.subtitle_primary_message_id],
@@ -96,8 +97,8 @@ async function deliverSubtitleBestEffort(user, media) {
   ].filter((pair) => pair[0] && pair[1]);
   for (const [chatId, messageId] of attempts) {
     try {
-      await downloadBotService.sendSubtitle(user.tg_chat_id, chatId, messageId);
-      return true;
+      const sent = await downloadBotService.sendSubtitle(user.tg_chat_id, chatId, messageId);
+      return await scheduleDeletion(user.tg_chat_id, sent, settings['download.delete_after_minutes']);
     } catch (error) {
       console.warn('Subtitle copy failed; trying next replica:', telegramErrorDescription(error));
     }
@@ -146,7 +147,10 @@ async function deliverMedia(publicId, user, settings = {}) {
     // that Bot API copying was possible.
     if (!media.primary_chat_id || !media.primary_message_id) {
       try {
-        await deliverWithTelegramAd(user.id, (adButton) => downloadBotService.sendFallbackLink(user.tg_chat_id, media.tg_link_primary, caption, adButton));
+        const sent = await deliverWithTelegramAd(user.id, (adButton) => downloadBotService.sendFallbackLink(user.tg_chat_id, media.tg_link_primary, caption, adButton));
+        if (!await scheduleDeletion(user.tg_chat_id, sent, settings['download.delete_after_minutes'])) {
+          throw new AppError(503, 'DELETION_QUEUE_UNAVAILABLE', 'ثبت زمان حذف پیام ممکن نشد؛ پیام ارسال‌شده ممکن است فوراً حذف شده باشد.');
+        }
       } catch (error) {
         if (error.code === 'BOT_UNAVAILABLE' || /bot was blocked by the user|chat not found|bot can't initiate conversation/i.test(telegramErrorDescription(error))) {
           throw new AppError(503, 'DELIVERY_BOT_START_REQUIRED', `برای دریافت فایل، ابتدا ربات دریافت را باز کنید و /start بزنید${process.env.DOWNLOAD_BOT_USERNAME ? `: @${String(process.env.DOWNLOAD_BOT_USERNAME).replace(/^@/, '')}` : ''}.`);
@@ -163,8 +167,11 @@ async function deliverMedia(publicId, user, settings = {}) {
     }
 
     try {
-      await deliverWithTelegramAd(user.id, (adButton) => downloadBotService.copyMedia(user.tg_chat_id, media.primary_chat_id, media.primary_message_id, caption, adButton));
-      const subtitleDelivered = await deliverSubtitleBestEffort(user, media);
+      const sent = await deliverWithTelegramAd(user.id, (adButton) => downloadBotService.copyMedia(user.tg_chat_id, media.primary_chat_id, media.primary_message_id, caption, adButton));
+      if (!await scheduleDeletion(user.tg_chat_id, sent, settings['download.delete_after_minutes'])) {
+        throw new AppError(503, 'DELETION_QUEUE_UNAVAILABLE', 'ثبت زمان حذف پیام ممکن نشد؛ پیام ارسال‌شده ممکن است فوراً حذف شده باشد.');
+      }
+      const subtitleDelivered = await deliverSubtitleBestEffort(user, media, settings);
       await markHealthy(media.id);
       return {
         delivered: true,
@@ -173,6 +180,7 @@ async function deliverMedia(publicId, user, settings = {}) {
         subtitleDelivered,
       };
     } catch (error) {
+      if (error.code === 'DELETION_QUEUE_UNAVAILABLE') throw error;
       if (error.code === 'BOT_UNAVAILABLE' || /bot was blocked by the user|chat not found|bot can't initiate conversation/i.test(telegramErrorDescription(error))) {
         throw new AppError(503, 'DELIVERY_BOT_START_REQUIRED', `برای دریافت فایل، ابتدا ربات دریافت را باز کنید و /start بزنید${process.env.DOWNLOAD_BOT_USERNAME ? `: @${String(process.env.DOWNLOAD_BOT_USERNAME).replace(/^@/, '')}` : ''}.`);
       }

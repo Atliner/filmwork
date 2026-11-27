@@ -74,6 +74,10 @@ jobs:
           mysql -h 127.0.0.1 -u root filmwork_test -e "DELETE FROM ads WHERE public_id='00000000-0000-4000-8000-000000000002'"
           mysql -h 127.0.0.1 -u root filmwork_test -e "DELETE FROM ads WHERE public_id='00000000-0000-4000-8000-000000000001'; DELETE FROM users WHERE tg_user_id=900001"
           for iteration in 1 2; do mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-permanent-deletion-finance.sql; done
+      - name: Verify Telegram deletion migration is repeatable
+        run: |
+          mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-telegram-deletion-queue.sql
+          mysql -h 127.0.0.1 -u root filmwork_test < database/migrations/2026-11-telegram-deletion-queue.sql
       - name: Exercise transactions and delivery against MySQL
         shell: bash
         run: |

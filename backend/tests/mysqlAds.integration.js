@@ -426,3 +426,15 @@ test('download API exposes the bot link rather than the stored-channel link', as
     await query('DELETE FROM media_links WHERE id=:id', { id: inserted.insertId });
   }
 });
+
+test('persistent Telegram deletion queue claims due work once across workers and recovers stale leases', async () => {
+  const { scheduleDeletion, processDeletions } = require('../services/telegramDeletion');
+  const messages = [];
+  const bot = { deleteMessage: async (chat, id) => { messages.push([Number(chat), Number(id)]); } };
+  await scheduleDeletion(777001, { message_id: 1001 }, 1, { bot });
+  await scheduleDeletion(777001, { message_id: 1002 }, 1, { bot });
+  await query("UPDATE telegram_deletion_queue SET delete_after = DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 1 MINUTE), lease_token = 'stale', lease_until = DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 1 MINUTE) WHERE chat_id = 777001");
+  await Promise.all([processDeletions({ bot }), processDeletions({ bot })]);
+  assert.deepEqual(messages.sort((a,b) => a[1]-b[1]), [[777001,1001],[777001,1002]]);
+  assert.equal((await query('SELECT id FROM telegram_deletion_queue WHERE chat_id = 777001')).length, 0);
+});

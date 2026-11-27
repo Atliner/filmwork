@@ -47,6 +47,9 @@ class DownloadBotService {
       reply_markup: { inline_keyboard: [[{ text: 'باز کردن فایل در تلگرام', url: link }], ...(adButton ? [[adButton]] : [])] }, link_preview_options: { is_disabled: true },
     });
   }
+  async deleteMessage(chatId, messageId) {
+    return this.ensureReady().telegram.deleteMessage(chatId, messageId);
+  }
   async stop(reason = 'shutdown') { await stopPolling(this, reason); }
 }
 
