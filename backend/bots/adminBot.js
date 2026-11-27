@@ -9,6 +9,7 @@ const {
   buildTelegramMessageLink,
   mediaFromMessage,
   isSubtitleMessage,
+  isAudioMessage,
   telegramErrorDescription,
 } = require('../lib/telegram');
 const { ownerIds } = require('../middleware/auth');
@@ -51,7 +52,7 @@ function cleanLabelValue(value) {
 }
 
 function directiveValue(text, name) {
-  const expression = new RegExp(`#${name}(?=\\s|$)([\\s\\S]*?)(?=#(?:اثر|نسخه|نوع|زیرنویس|رزولوشن|سریال|کیفیت|انکودر)(?=\\s|$)|$)`, 'iu');
+  const expression = new RegExp(`#${name}(?=\\s|$)([\\s\\S]*?)(?=#(?:اثر|نسخه|نوع|زیرنویس|صوت|رزولوشن|سریال|کیفیت|انکودر)(?=\\s|$)|$)`, 'iu');
   return cleanLabelValue(text.match(expression)?.[1] || '');
 }
 
@@ -62,6 +63,7 @@ function parseDirectives(rawText) {
   const version = directiveValue(text, 'نسخه');
   const typeRaw = directiveValue(text, 'نوع');
   const subtitleRaw = directiveValue(text, 'زیرنویس');
+  const audioRaw = directiveValue(text, 'صوت');
   const resolution = directiveValue(text, 'رزولوشن');
   const seriesRaw = directiveValue(text, 'سریال');
   const quality = directiveValue(text, 'کیفیت');
@@ -98,6 +100,7 @@ function parseDirectives(rawText) {
     sourceType: typeRaw.slice(0, 80),
     audioType,
     subtitleType,
+    separateAudio: /مجزا|جدا/u.test(audioRaw),
     resolution: resolution ? resolution.slice(0, 24) : null,
     quality: quality ? quality.slice(0, 80) : null,
     encoder: encoder ? encoder.slice(0, 100) : null,
@@ -481,40 +484,41 @@ class AdminBotService {
       return;
     }
 
-    if (isSubtitleMessage(message)) {
-      if (session.directives.subtitleType !== 'separate') {
-        await safeReply(ctx, 'این دستور برای زیرنویس مجزا تنظیم نشده است.');
+    const subtitle = isSubtitleMessage(message);
+    const audio = isAudioMessage(message);
+    if (subtitle || audio) {
+      const kind = subtitle ? 'subtitle' : 'audio';
+      if (subtitle ? session.directives.subtitleType !== 'separate' : !session.directives.separateAudio) {
+        await safeReply(ctx, `این دستور برای ${subtitle ? 'زیرنویس' : 'صوت'} مجزا تنظیم نشده است.`);
         return;
       }
-      const pending = await query(
-        `SELECT id FROM bot_media_bundles
-         WHERE session_id = :sessionId AND status = 'waiting_subtitle'
-           AND subtitle_payload IS NULL AND finalize_after > UTC_TIMESTAMP(3)
-         ORDER BY id ASC LIMIT 1`,
-        { sessionId: session.id },
-      );
+      // Strict FIFO per session and track type; never attach a track to a later
+      // unrelated session or an already finalized video.
+      const column = kind === 'subtitle' ? 'subtitle_payload' : 'audio_payload';
+      const pending = await query(`SELECT id FROM bot_media_bundles
+        WHERE session_id = :sessionId AND status = 'waiting_subtitle'
+          AND ${column} IS NULL AND finalize_after > UTC_TIMESTAMP(3)
+        ORDER BY id ASC LIMIT 1`, { sessionId: session.id });
       if (!pending[0]) {
-        await safeReply(ctx, 'ابتدا فایل ویدیو را بفرستید؛ مهلت اتصال زیرنویس ده ثانیه است.');
+        await safeReply(ctx, 'ابتدا فایل ویدیو را بفرستید؛ مهلت اتصال فایل مجزا ده ثانیه است.');
         return;
       }
       const copies = await this.replicateMessage(ctx, message);
-      const subtitlePayload = { metadata, copies };
-      const attached = await query(
-        'UPDATE bot_media_bundles SET subtitle_payload = :payload WHERE id = :id AND status = \'waiting_subtitle\' AND subtitle_payload IS NULL',
-        { payload: JSON.stringify(subtitlePayload), id: pending[0].id },
-      );
+      const attached = await query(`UPDATE bot_media_bundles SET ${column} = :payload
+        WHERE id = :id AND status = 'waiting_subtitle' AND ${column} IS NULL AND finalize_after > UTC_TIMESTAMP(3)`,
+      { payload: JSON.stringify({ metadata, copies }), id: pending[0].id });
       if (!attached.affectedRows) {
-        await safeReply(ctx, 'مهلت اتصال زیرنویس در هنگام ذخیره به پایان رسید؛ اتصال آن را در پنل بررسی کنید.');
+        await safeReply(ctx, 'مهلت اتصال فایل هنگام ذخیره پایان یافت؛ اتصال آن را در پنل بررسی کنید.');
         return;
       }
-      await safeReply(ctx, 'زیرنویس دریافت شد و در همان کارت دانلود قرار می‌گیرد.');
+      await safeReply(ctx, `${subtitle ? 'زیرنویس' : 'صوت'} دریافت شد و در همان کارت دانلود قرار می‌گیرد.`);
       return;
     }
 
     session.directives = resolveMediaDirectives(session.directives, metadata.fileName);
     const copies = await this.replicateMessage(ctx, message);
     const videoPayload = { metadata, copies };
-    if (session.directives.subtitleType === 'separate') {
+    if (session.directives.subtitleType === 'separate' || session.directives.separateAudio) {
       const bundleKey = crypto.randomUUID();
       const result = await query(
         `INSERT INTO bot_media_bundles
@@ -524,7 +528,7 @@ class AdminBotService {
         { sessionId: session.id, bundleKey, videoPayload: JSON.stringify(videoPayload) },
       );
       this.scheduleFinalize(result.insertId, 10_100);
-      await safeReply(ctx, 'ویدیو ذخیره شد؛ ۱۰ ثانیه برای ارسال فایل SRT/VTT فرصت دارید.');
+      await safeReply(ctx, 'ویدیو ذخیره شد؛ ۱۰ ثانیه برای ارسال زیرنویس یا صوت مجزای مشخص‌شده فرصت دارید.');
       return;
     }
 
@@ -586,7 +590,8 @@ class AdminBotService {
     try {
       const videoPayload = jsonValue(work.bundle.video_payload);
       const subtitlePayload = jsonValue(work.bundle.subtitle_payload);
-      await this.insertMediaLink(work.session, videoPayload, subtitlePayload, `bundle:${work.bundle.bundle_key}`);
+      const audioPayload = jsonValue(work.bundle.audio_payload);
+      await this.insertMediaLink(work.session, videoPayload, subtitlePayload, `bundle:${work.bundle.bundle_key}`, audioPayload);
       await withTransaction(async (connection) => {
         await connection.execute(
           'UPDATE bot_media_bundles SET status = \'complete\', last_error = NULL WHERE id = :id',
@@ -602,10 +607,11 @@ class AdminBotService {
     }
   }
 
-  async insertMediaLink(session, videoPayload, subtitlePayload, ingestKey) {
+  async insertMediaLink(session, videoPayload, subtitlePayload, ingestKey, audioPayload = null) {
     const d = resolveMediaDirectives(session.directives, videoPayload.metadata.fileName);
     const v = videoPayload;
     const s = subtitlePayload;
+    const a = audioPayload;
     await query(
       `INSERT INTO media_links (
          public_id, content_id, season_number, episode_number, version_label,
@@ -616,7 +622,8 @@ class AdminBotService {
          fallback_2_chat_id, fallback_2_message_id, fallback_3_chat_id, fallback_3_message_id,
          subtitle_link_primary, subtitle_link_fallback_1, subtitle_link_fallback_2, subtitle_link_fallback_3,
          subtitle_primary_message_id, subtitle_fallback_1_message_id, subtitle_fallback_2_message_id, subtitle_fallback_3_message_id,
-         subtitle_file_size_bytes, ingest_key
+         subtitle_file_size_bytes, audio_link_primary, audio_link_fallback_1, audio_link_fallback_2, audio_link_fallback_3,
+         audio_primary_message_id, audio_fallback_1_message_id, audio_fallback_2_message_id, audio_fallback_3_message_id, audio_file_size_bytes, ingest_key
        ) VALUES (
          :publicId, :contentId, :season, :episode, :version,
          :audioType, :subtitleType, :resolution, :quality, :encoder,
@@ -626,7 +633,8 @@ class AdminBotService {
          :fallback2ChatId, :fallback2MessageId, :fallback3ChatId, :fallback3MessageId,
          :subtitlePrimaryLink, :subtitleFallback1Link, :subtitleFallback2Link, :subtitleFallback3Link,
          :subtitlePrimaryMessageId, :subtitleFallback1MessageId, :subtitleFallback2MessageId, :subtitleFallback3MessageId,
-         :subtitleFileSize, :ingestKey
+         :subtitleFileSize, :audioPrimaryLink, :audioFallback1Link, :audioFallback2Link, :audioFallback3Link,
+         :audioPrimaryMessageId, :audioFallback1MessageId, :audioFallback2MessageId, :audioFallback3MessageId, :audioFileSize, :ingestKey
        )`,
       {
         publicId: crypto.randomUUID(),
@@ -662,6 +670,15 @@ class AdminBotService {
         subtitleFallback2MessageId: s?.copies?.fallback2?.messageId || null,
         subtitleFallback3MessageId: s?.copies?.fallback3?.messageId || null,
         subtitleFileSize: s?.metadata?.fileSize || null,
+        audioPrimaryLink: a?.copies?.primary?.link || null,
+        audioFallback1Link: a?.copies?.fallback1?.link || null,
+        audioFallback2Link: a?.copies?.fallback2?.link || null,
+        audioFallback3Link: a?.copies?.fallback3?.link || null,
+        audioPrimaryMessageId: a?.copies?.primary?.messageId || null,
+        audioFallback1MessageId: a?.copies?.fallback1?.messageId || null,
+        audioFallback2MessageId: a?.copies?.fallback2?.messageId || null,
+        audioFallback3MessageId: a?.copies?.fallback3?.messageId || null,
+        audioFileSize: a?.metadata?.fileSize || null,
         ingestKey,
       },
     );

@@ -49,6 +49,12 @@ function isSubtitleMessage(message) {
   return name.endsWith('.srt') || name.endsWith('.vtt') || mime.includes('subrip') || mime === 'text/vtt';
 }
 
+function isAudioMessage(message) {
+  if (message?.audio) return true;
+  const doc = message?.document;
+  return Boolean(doc && (/^audio\//i.test(String(doc.mime_type || '')) || /\.(?:mp3|m4a|aac|ac3|eac3|dts|flac|ogg|opus|wav)$/i.test(String(doc.file_name || ''))));
+}
+
 function telegramErrorDescription(error) {
   return String(
     error?.response?.description ||
@@ -130,6 +136,7 @@ module.exports = {
   buildTelegramMessageLink,
   mediaFromMessage,
   isSubtitleMessage,
+  isAudioMessage,
   telegramErrorDescription,
   isTelegramDeletionError,
   probeTelegramLink,

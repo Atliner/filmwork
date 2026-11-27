@@ -88,3 +88,19 @@ test('optional fourth configured channel receives a copy and link', async () => 
     assert.equal(result.fallback3.link,'https://t.me/c/103/55');
   } finally { names.forEach((name,index) => old[index] === undefined ? delete process.env[name] : process.env[name]=old[index]); }
 });
+
+test('separate audio directive and audio attachment are distinct from video and subtitle', async () => {
+  const d = parseDirectives(`#اثر ${uuid} #نسخه A #نوع دوبله #صوت مجزا #زیرنویس مجزا`);
+  assert.equal(d.separateAudio, true); assert.equal(d.subtitleType, 'separate'); assert.equal(d.sourceType, 'دوبله');
+  const { isAudioMessage, isSubtitleMessage } = require('../lib/telegram');
+  assert.equal(isAudioMessage({audio:{file_name:'x.mp3'}}),true);
+  assert.equal(isAudioMessage({document:{file_name:'x.ac3'}}),true);
+  assert.equal(isAudioMessage({document:{file_name:'x.mkv'}}),false);
+  assert.equal(isSubtitleMessage({document:{file_name:'x.srt'}}),true);
+  calls.length = 0;
+  const copy = { chatId:'-100123', messageId: 77, link:'https://t.me/c/123/77' };
+  const service = setupService();
+  await service.insertMediaLink({content_id:12,directives:d},{metadata:{fileName,fileSize:100},copies:{primary:copy,fallback1:copy,fallback2:copy}},null,'bundle:audio',{metadata:{fileSize:12},copies:{primary:copy,fallback1:copy,fallback2:copy}});
+  const params=calls.find(c=>c.sql.includes('INSERT INTO media_links')).params;
+  assert.equal(params.audioPrimaryMessageId,77); assert.equal(params.audioPrimaryLink,'https://t.me/c/123/77'); assert.equal(params.audioFileSize,12);
+});

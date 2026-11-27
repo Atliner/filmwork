@@ -48,6 +48,9 @@ class DownloadBotService {
     const bot = this.ensureReady();
     return bot.telegram.copyMessage(chatId, sourceChatId, messageId, { caption: 'زیرنویس مجزای فایل بالا', protect_content: false });
   }
+  async sendAudio(chatId, sourceChatId, messageId) {
+    return this.ensureReady().telegram.copyMessage(chatId, sourceChatId, messageId, { caption: 'صوت مجزای فایل بالا', protect_content: false });
+  }
   async sendFallbackLink(chatId, link, caption, adButton = null) {
     const bot = this.ensureReady();
     return bot.telegram.sendMessage(chatId, caption || 'اگر دریافت خودکار انجام نشد، پیام ذخیره‌شده را باز کنید:', {

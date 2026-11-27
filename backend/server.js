@@ -6,7 +6,7 @@ const os = require('os');
 const fsp = fs.promises;
 const { spawn } = require('child_process');
 const crypto = require('crypto');
-const botRuntimeFiles = ['server.js', 'bots/authBot.js', 'bots/adminBot.js', 'bots/downloadBot.js', 'lib/botPolling.js', 'lib/botLeader.js', 'lib/botBranding.js', 'services/siteSettings.js'];
+const botRuntimeFiles = ['server.js', 'bots/authBot.js', 'bots/adminBot.js', 'bots/downloadBot.js', 'lib/botPolling.js', 'lib/botLeader.js', 'lib/botBranding.js', 'lib/telegram.js', 'services/siteSettings.js', 'services/mediaDelivery.js'];
 function botSourceFingerprint() {
   const hash = crypto.createHash('sha256');
   for (const file of botRuntimeFiles) {

@@ -58,3 +58,11 @@ test('online playback tracks are independent from Telegram subtitles and validat
   assert.notEqual(revision(row),revision({...row,playback_audio_url:'https://cdn.example/audio.mp3'}));
   await assert.rejects(prepareChanges(row, {playback_subtitle_url:'javascript:alert(1)'}));
 });
+
+test('audio links are editable, have synchronized message IDs, and cannot silently move channels', async () => {
+  const row = sample();
+  const edit=await prepareChanges(row,{audio_link_primary:'https://t.me/c/123/50', audio_file_size_bytes:500});
+  assert.equal(edit.changed.audio_primary_message_id,50); assert.equal(edit.changed.audio_file_size_bytes,500);
+  await assert.rejects(prepareChanges(row,{audio_link_primary:'https://t.me/c/999/50'}),{code:'SUBTITLE_CHANNEL_MISMATCH'});
+  await assert.rejects(prepareChanges({...row, audio_link_primary:'https://t.me/c/123/50',audio_primary_message_id:50}, {tg_link_primary:'https://t.me/c/999/10',subtitle_link_primary:'https://t.me/c/999/11'}),{code:'SUBTITLE_CHANNEL_MISMATCH'});
+});

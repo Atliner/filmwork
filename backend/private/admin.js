@@ -1032,10 +1032,10 @@
     const input = (index, item, key, label, attrs = '') => `<label class="field"><span>${esc(label)}</span><input class="input" data-bot-index="${index}" data-bot-field="${key}" value="${esc(item[key])}" ${attrs}></label>`;
     const select = (index, item, key, label, options) => `<label class="field"><span>${esc(label)}</span><select class="select" data-bot-index="${index}" data-bot-field="${key}">${options.map(([value, text]) => `<option value="${value}" ${item[key] === value ? 'selected' : ''}>${esc(text)}</option>`).join('')}</select></label>`;
     const replicas = [
-      ['اصلی', 'tg_link_primary', 'primary_chat_id', 'primary_message_id', 'subtitle_link_primary', 'subtitle_primary_message_id'],
-      ['پشتیبان ۱', 'tg_link_fallback_1', 'fallback_1_chat_id', 'fallback_1_message_id', 'subtitle_link_fallback_1', 'subtitle_fallback_1_message_id'],
-      ['پشتیبان ۲', 'tg_link_fallback_2', 'fallback_2_chat_id', 'fallback_2_message_id', 'subtitle_link_fallback_2', 'subtitle_fallback_2_message_id'],
-      ['پشتیبان ۳', 'tg_link_fallback_3', 'fallback_3_chat_id', 'fallback_3_message_id', 'subtitle_link_fallback_3', 'subtitle_fallback_3_message_id'],
+      ['اصلی', 'tg_link_primary', 'primary_chat_id', 'primary_message_id', 'subtitle_link_primary', 'subtitle_primary_message_id', 'audio_link_primary', 'audio_primary_message_id'],
+      ['پشتیبان ۱', 'tg_link_fallback_1', 'fallback_1_chat_id', 'fallback_1_message_id', 'subtitle_link_fallback_1', 'subtitle_fallback_1_message_id', 'audio_link_fallback_1', 'audio_fallback_1_message_id'],
+      ['پشتیبان ۲', 'tg_link_fallback_2', 'fallback_2_chat_id', 'fallback_2_message_id', 'subtitle_link_fallback_2', 'subtitle_fallback_2_message_id', 'audio_link_fallback_2', 'audio_fallback_2_message_id'],
+      ['پشتیبان ۳', 'tg_link_fallback_3', 'fallback_3_chat_id', 'fallback_3_message_id', 'subtitle_link_fallback_3', 'subtitle_fallback_3_message_id', 'audio_link_fallback_3', 'audio_fallback_3_message_id'],
     ];
     return `<div class="callout">${ICONS.info}<span>فایل‌های ربات مستقیم از پایگاه داده نمایش داده می‌شوند. هر فایل دکمهٔ ذخیره و حذف مستقل دارد. تغییر لینک، شناسهٔ کانال و پیام را نیز برای ربات دریافت به‌روزرسانی می‌کند؛ نسخه‌های کانال‌ها حذف نمی‌شوند. لینک‌های زیرنویس باید در همان کانال فایل باشند.</span></div>
       <div class="version-list"><h3>فایل‌های ثبت‌شده با ربات (${fa(media.length)})</h3>${media.map((item, index) => `<details class="version-card">
@@ -1054,16 +1054,18 @@
             ${input(index, item, 'encoder', 'انکودر', 'maxlength="100"')}
             ${input(index, item, 'file_size_bytes', 'حجم فایل (بایت)', 'type="number" min="1" dir="ltr"')}
             ${input(index, item, 'subtitle_file_size_bytes', 'حجم زیرنویس (بایت)', 'type="number" min="1" dir="ltr"')}
+            ${input(index, item, 'audio_file_size_bytes', 'حجم صوت (بایت)', 'type="number" min="1" dir="ltr"')}
             ${input(index, item, 'mime_type', 'نوع فایل (MIME)', 'maxlength="120" dir="ltr"')}
             ${input(index, item, 'stream_url', 'لینک پخش آنلاین', 'type="url" dir="ltr"')}
             ${input(index, item, 'playback_subtitle_url', 'لینک زیرنویس پخش آنلاین', 'type="url" dir="ltr"')}
             ${input(index, item, 'playback_audio_url', 'لینک صوت دوبله پخش آنلاین', 'type="url" dir="ltr"')}
             <label class="setting-check"><input type="checkbox" data-bot-index="${index}" data-bot-field="is_active" ${item.is_active ? 'checked' : ''}><span>فایل فعال برای دانلود</span></label>
           </div>
-          ${replicas.map(([label, link, chat, message, sub, subMessage]) => `<h4>${esc(label)}</h4><div class="field-grid">
+          ${replicas.map(([label, link, chat, message, sub, subMessage, audio, audioMessage]) => `<h4>${esc(label)}</h4><div class="field-grid">
             ${input(index, item, link, 'لینک فایل', 'type="url" dir="ltr" placeholder="https://t.me/c/…/…"')}
             ${input(index, item, sub, 'لینک زیرنویس مجزا', 'type="url" dir="ltr" placeholder="اختیاری"')}
-            <small dir="ltr">Chat: ${esc(item[chat] ?? '—')} · Message: ${esc(item[message] ?? '—')} · Subtitle: ${esc(item[subMessage] ?? '—')}</small>
+            ${input(index, item, audio, 'لینک صوت مجزای دانلود', 'type="url" dir="ltr" placeholder="اختیاری"')}
+            <small dir="ltr">Chat: ${esc(item[chat] ?? '—')} · Message: ${esc(item[message] ?? '—')} · Subtitle: ${esc(item[subMessage] ?? '—')} · Audio: ${esc(item[audioMessage] ?? '—')}</small>
           </div>`).join('')}
           <p class="muted">سلامت: ${esc(item.health_status || '—')} · تعداد خطا: ${fa(item.failure_count || 0)} · آخرین بررسی: ${esc(faDateTime(item.last_checked_at))} · ثبت: ${esc(faDateTime(item.created_at))} · در صورت جایگزینی فایل با محتوای متفاوت، مشخصات و حجم را نیز اصلاح کنید. ربات دریافت باید به کانال دسترسی داشته باشد.</p>
           <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="button button--primary button--sm" type="button" data-save-bot-media="${index}">ذخیره این فایل</button><button class="button button--danger button--sm" type="button" data-delete-bot-media="${index}">حذف این فایل</button></div>
@@ -1071,7 +1073,7 @@
   }
 
   function botMediaChanges(item) {
-    const keys = ['version_label','resolution','audio_type','subtitle_type','season_number','episode_number','episode_title','quality_label','encoder','file_size_bytes','subtitle_file_size_bytes','mime_type','stream_url','playback_subtitle_url','playback_audio_url','is_active','tg_link_primary','tg_link_fallback_1','tg_link_fallback_2','tg_link_fallback_3','subtitle_link_primary','subtitle_link_fallback_1','subtitle_link_fallback_2','subtitle_link_fallback_3'];
+    const keys = ['version_label','resolution','audio_type','subtitle_type','season_number','episode_number','episode_title','quality_label','encoder','file_size_bytes','subtitle_file_size_bytes','audio_file_size_bytes','mime_type','stream_url','playback_subtitle_url','playback_audio_url','is_active','tg_link_primary','tg_link_fallback_1','tg_link_fallback_2','tg_link_fallback_3','subtitle_link_primary','subtitle_link_fallback_1','subtitle_link_fallback_2','subtitle_link_fallback_3','audio_link_primary','audio_link_fallback_1','audio_link_fallback_2','audio_link_fallback_3'];
     const normalize = (value) => value == null ? '' : String(value);
     return Object.fromEntries(keys.filter((key) => key === 'is_active' ? Boolean(item[key]) !== Boolean(item._saved[key]) : normalize(item[key]) !== normalize(item._saved[key])).map((key) => [key, key === 'is_active' ? Boolean(item[key]) : item[key]]));
   }

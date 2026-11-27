@@ -615,3 +615,45 @@ test('bot and manual deliveries use the current site name and preserve custom ca
     for (const row of savedSettings) await query('INSERT INTO app_settings (setting_key,setting_value) VALUES (:key,:value)',{key:row.setting_key,value:row.setting_value});
   }
 });
+
+test('separate audio and subtitle bundle is copied and survives fallback promotion', async () => {
+  const {AdminBotService,parseDirectives} = require('../bots/adminBot');
+  const {downloadBotService} = require('../bots/downloadBot');
+  const {promoteFallback} = require('../services/mediaDelivery');
+  const service=new AdminBotService(), chatId=-1009876543211;
+  const ctx={chat:{id:chatId},from:{id:123456789},reply:async()=>{}};
+  service.scheduleFinalize=()=>{};
+  service.replicateMessage=async (_ctx,msg)=>Object.fromEntries([123,456,789,444].map((c,i)=>[ ['primary','fallback1','fallback2','fallback3'][i], {chatId:`-100${c}`,messageId:msg.message_id,link:`https://t.me/c/${c}/${msg.message_id}`} ]));
+  const old={ensureReady:downloadBotService.ensureReady,copyMedia:downloadBotService.copyMedia,sendSubtitle:downloadBotService.sendSubtitle,sendAudio:downloadBotService.sendAudio};
+  const sent=[];
+  downloadBotService.ensureReady=()=>({});
+  downloadBotService.copyMedia=async(...args)=>{sent.push(['video',...args]);return {message_id:1}};
+  downloadBotService.sendSubtitle=async(...args)=>{sent.push(['subtitle',...args]);return {message_id:2}};
+  downloadBotService.sendAudio=async(...args)=>{sent.push(['audio',...args]);return {message_id:3}};
+  let mediaId;
+  try {
+    await service.handleDirectives(ctx,parseDirectives(`#اثر ${assetId} #نسخه A #نوع دوبله #زیرنویس مجزا #صوت مجزا`));
+    const session=await service.activeSession(chatId);
+    await service.handleMedia(ctx,{message_id:10,document:{file_unique_id:'vv',file_name:'S01E01.720p.mkv',file_size:100}});
+    await service.handleMedia(ctx,{message_id:11,document:{file_unique_id:'ss',file_name:'a.srt',file_size:10}});
+    await service.handleMedia(ctx,{message_id:12,audio:{file_unique_id:'aa',file_name:'a.mp3',file_size:20}});
+    const [bundle]=await query('SELECT * FROM bot_media_bundles WHERE session_id=:id',{id:session.id});
+    assert.ok(bundle.audio_payload); assert.ok(bundle.subtitle_payload);
+    await service.finalizeBundle(bundle.id);
+    const [media]=await query('SELECT * FROM media_links WHERE ingest_key=:key',{key:`bundle:${bundle.bundle_key}`});
+    mediaId=media.id;
+    assert.equal(Number(media.audio_primary_message_id),12); assert.equal(Number(media.subtitle_primary_message_id),11);
+    const delivery=await request('/api/download','POST',{mediaId:media.public_id});
+    assert.equal(delivery.response.status,200,JSON.stringify(delivery.data));
+    assert.equal(delivery.data.audioDelivered,true); assert.equal(delivery.data.subtitleDelivered,true);
+    assert.deepEqual(sent.map(item=>item[0]),['video','subtitle','audio']);
+    assert.equal(sent[2][3],12);
+    await promoteFallback(media.id,media.primary_message_id,media.tg_link_primary,'test');
+    const [after]=await query('SELECT * FROM media_links WHERE id=:id',{id:media.id});
+    assert.equal(after.audio_link_primary,'https://t.me/c/456/12'); assert.equal(Number(after.audio_primary_message_id),12);
+  } finally {
+    Object.assign(downloadBotService,old);
+    if (mediaId) await query('DELETE FROM media_links WHERE id=:id',{id:mediaId});
+    await query('DELETE FROM bot_ingest_sessions WHERE source_chat_id=:chatId',{chatId});
+  }
+});

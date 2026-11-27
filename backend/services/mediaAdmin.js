@@ -15,16 +15,18 @@ const FIELDS = [
   'fallback_2_chat_id', 'fallback_2_message_id', 'fallback_3_chat_id', 'fallback_3_message_id', 'subtitle_link_primary',
   'subtitle_link_fallback_1', 'subtitle_link_fallback_2', 'subtitle_link_fallback_3', 'subtitle_primary_message_id',
   'subtitle_fallback_1_message_id', 'subtitle_fallback_2_message_id', 'subtitle_fallback_3_message_id', 'subtitle_file_size_bytes',
+  'audio_link_primary', 'audio_link_fallback_1', 'audio_link_fallback_2', 'audio_link_fallback_3',
+  'audio_primary_message_id', 'audio_fallback_1_message_id', 'audio_fallback_2_message_id', 'audio_fallback_3_message_id', 'audio_file_size_bytes',
 ];
 const REPLICAS = [
-  { link: 'tg_link_primary', chat: 'primary_chat_id', message: 'primary_message_id', sub: 'subtitle_link_primary', subMessage: 'subtitle_primary_message_id' },
-  { link: 'tg_link_fallback_1', chat: 'fallback_1_chat_id', message: 'fallback_1_message_id', sub: 'subtitle_link_fallback_1', subMessage: 'subtitle_fallback_1_message_id' },
-  { link: 'tg_link_fallback_2', chat: 'fallback_2_chat_id', message: 'fallback_2_message_id', sub: 'subtitle_link_fallback_2', subMessage: 'subtitle_fallback_2_message_id' },
-  { link: 'tg_link_fallback_3', chat: 'fallback_3_chat_id', message: 'fallback_3_message_id', sub: 'subtitle_link_fallback_3', subMessage: 'subtitle_fallback_3_message_id' },
+  { link: 'tg_link_primary', chat: 'primary_chat_id', message: 'primary_message_id', sub: 'subtitle_link_primary', subMessage: 'subtitle_primary_message_id', audio: 'audio_link_primary', audioMessage: 'audio_primary_message_id' },
+  { link: 'tg_link_fallback_1', chat: 'fallback_1_chat_id', message: 'fallback_1_message_id', sub: 'subtitle_link_fallback_1', subMessage: 'subtitle_fallback_1_message_id', audio: 'audio_link_fallback_1', audioMessage: 'audio_fallback_1_message_id' },
+  { link: 'tg_link_fallback_2', chat: 'fallback_2_chat_id', message: 'fallback_2_message_id', sub: 'subtitle_link_fallback_2', subMessage: 'subtitle_fallback_2_message_id', audio: 'audio_link_fallback_2', audioMessage: 'audio_fallback_2_message_id' },
+  { link: 'tg_link_fallback_3', chat: 'fallback_3_chat_id', message: 'fallback_3_message_id', sub: 'subtitle_link_fallback_3', subMessage: 'subtitle_fallback_3_message_id', audio: 'audio_link_fallback_3', audioMessage: 'audio_fallback_3_message_id' },
 ];
 const TEXT = { version_label: [120, true], resolution: [24, true], episode_title: [255, false], quality_label: [80, false], encoder: [100, false], mime_type: [120, false] };
-const INTS = { season_number: [1, 65535], episode_number: [1, 65535], file_size_bytes: [1, Number.MAX_SAFE_INTEGER], subtitle_file_size_bytes: [1, Number.MAX_SAFE_INTEGER] };
-const EDITABLE = new Set([...Object.keys(TEXT), ...Object.keys(INTS), 'stream_url', 'playback_subtitle_url', 'playback_audio_url', 'audio_type', 'subtitle_type', 'is_active', ...REPLICAS.flatMap(r => [r.link, r.sub])]);
+const INTS = { season_number: [1, 65535], episode_number: [1, 65535], file_size_bytes: [1, Number.MAX_SAFE_INTEGER], subtitle_file_size_bytes: [1, Number.MAX_SAFE_INTEGER], audio_file_size_bytes: [1, Number.MAX_SAFE_INTEGER] };
+const EDITABLE = new Set([...Object.keys(TEXT), ...Object.keys(INTS), 'stream_url', 'playback_subtitle_url', 'playback_audio_url', 'audio_type', 'subtitle_type', 'is_active', ...REPLICAS.flatMap(r => [r.link, r.sub, r.audio])]);
 function revision(row) {
   return crypto.createHash('sha256').update(JSON.stringify(FIELDS.map(key => row[key] == null ? null : String(row[key])))).digest('hex');
 }
@@ -92,21 +94,25 @@ async function prepareChanges(row, raw, resolveChat = (name) => downloadBotServi
   for (const r of REPLICAS) {
     const linkChanged = Object.hasOwn(patch, r.link) && patch[r.link] !== row[r.link];
     const subChanged = Object.hasOwn(patch, r.sub) && patch[r.sub] !== row[r.sub];
-    if (!linkChanged && !subChanged) continue;
+    const audioChanged = Object.hasOwn(patch, r.audio) && patch[r.audio] !== row[r.audio];
+    if (!linkChanged && !subChanged && !audioChanged) continue;
     replicaChanged = true;
     let video;
     if (linkChanged) {
       video = patch[r.link] ? await resolveLink(patch[r.link], row[r.link], row[r.chat], resolveChat) : null;
       result[r.link] = video?.url || null; result[r.chat] = video?.chatId || null; result[r.message] = video?.messageId || null;
     }
-    if (subChanged) {
-      const sub = patch[r.sub] ? await resolveLink(patch[r.sub], video?.url || row[r.sub], video?.chatId || row[r.chat], resolveChat) : null;
-      assert(!sub || (result[r.chat] && String(sub.chatId) === String(result[r.chat])), 422, 'SUBTITLE_CHANNEL_MISMATCH', 'زیرنویس هر نسخه باید در همان کانال فایل آن نسخه باشد.');
-      result[r.sub] = sub?.url || null; result[r.subMessage] = sub?.messageId || null;
-    } else if (linkChanged && row[r.sub] && String(result[r.chat] || '') !== String(row[r.chat] || '')) {
-      throw new AppError(422, 'SUBTITLE_CHANNEL_MISMATCH', 'با تغییر کانال فایل، لینک زیرنویس همان نسخه را نیز تغییر دهید یا خالی کنید.');
+    for (const [track, message, label] of [[r.sub, r.subMessage, 'زیرنویس'], [r.audio, r.audioMessage, 'صوت']]) {
+      const trackChanged = Object.hasOwn(patch, track) && patch[track] !== row[track];
+      if (trackChanged) {
+        const parsed = patch[track] ? await resolveLink(patch[track], video?.url || row[track], video?.chatId || row[r.chat], resolveChat) : null;
+        assert(!parsed || (result[r.chat] && String(parsed.chatId) === String(result[r.chat])), 422, 'SUBTITLE_CHANNEL_MISMATCH', `${label} هر نسخه باید در همان کانال فایل باشد.`);
+        result[track] = parsed?.url || null; result[message] = parsed?.messageId || null;
+      } else if (linkChanged && row[track] && String(result[r.chat] || '') !== String(row[r.chat] || '')) {
+        throw new AppError(422, 'SUBTITLE_CHANNEL_MISMATCH', `با تغییر کانال فایل، لینک ${label} همان نسخه را نیز تغییر دهید یا خالی کنید.`);
+      }
+      assert(!result[track] || result[r.link], 422, 'SUBTITLE_CHANNEL_MISMATCH', `${label} بدون فایل همان کانال قابل ثبت نیست.`);
     }
-    assert(!result[r.sub] || result[r.link], 422, 'SUBTITLE_CHANNEL_MISMATCH', 'زیرنویس بدون فایل همان کانال قابل ثبت نیست.');
   }
   if (replicaChanged) assert(!result.tg_link_fallback_2 || result.tg_link_fallback_1, 422, 'INVALID_REPLICAS', 'برای پشتیبان ۲، ابتدا پشتیبان ۱ را وارد کنید.');
   if (replicaChanged) assert(!result.tg_link_fallback_3 || result.tg_link_fallback_2, 422, 'INVALID_REPLICAS', 'برای پشتیبان ۳، ابتدا پشتیبان ۲ را وارد کنید.');

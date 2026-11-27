@@ -73,6 +73,14 @@ async function promoteFallback(mediaId, expectedPrimaryMessageId, expectedPrimar
          subtitle_fallback_1_message_id = subtitle_fallback_2_message_id,
          subtitle_fallback_2_message_id = subtitle_fallback_3_message_id,
          subtitle_fallback_3_message_id = NULL,
+         audio_link_primary = audio_link_fallback_1,
+         audio_link_fallback_1 = audio_link_fallback_2,
+         audio_link_fallback_2 = audio_link_fallback_3,
+         audio_link_fallback_3 = NULL,
+         audio_primary_message_id = audio_fallback_1_message_id,
+         audio_fallback_1_message_id = audio_fallback_2_message_id,
+         audio_fallback_2_message_id = audio_fallback_3_message_id,
+         audio_fallback_3_message_id = NULL,
          health_status = IF(:promotedUrl IS NULL, 'unavailable', 'promoted'),
          failure_count = failure_count + 1,
          last_checked_at = UTC_TIMESTAMP(3),
@@ -108,6 +116,24 @@ async function deliverSubtitleBestEffort(user, media, settings) {
       return await scheduleDeletion(user.tg_chat_id, sent, settings['download.delete_after_minutes']);
     } catch (error) {
       console.warn('Subtitle copy failed; trying next replica:', telegramErrorDescription(error));
+    }
+  }
+  return false;
+}
+
+async function deliverAudioBestEffort(user, media, settings) {
+  const attempts = [
+    [media.primary_chat_id, media.audio_primary_message_id],
+    [media.fallback_1_chat_id, media.audio_fallback_1_message_id],
+    [media.fallback_2_chat_id, media.audio_fallback_2_message_id],
+    [media.fallback_3_chat_id, media.audio_fallback_3_message_id],
+  ].filter((pair) => pair[0] && pair[1]);
+  for (const [chatId, messageId] of attempts) {
+    try {
+      const sent = await downloadBotService.sendAudio(user.tg_chat_id, chatId, messageId);
+      return await scheduleDeletion(user.tg_chat_id, sent, settings['download.delete_after_minutes']);
+    } catch (error) {
+      console.warn('Audio copy failed; trying next replica:', telegramErrorDescription(error));
     }
   }
   return false;
@@ -173,12 +199,14 @@ async function deliverMedia(publicId, user, settings = {}) {
         throw new AppError(503, 'DELETION_QUEUE_UNAVAILABLE', 'ثبت زمان حذف پیام ممکن نشد؛ پیام ارسال‌شده ممکن است فوراً حذف شده باشد.');
       }
       const subtitleDelivered = await deliverSubtitleBestEffort(user, media, settings);
+      const audioDelivered = await deliverAudioBestEffort(user, media, settings);
       await markHealthy(media.id);
       return {
         delivered: true,
         deliveryMethod: 'telegram_copy',
         telegramLink: media.tg_link_primary,
         subtitleDelivered,
+        audioDelivered,
       };
     } catch (error) {
       if (error.code === 'DELETION_QUEUE_UNAVAILABLE') throw error;

@@ -1,0 +1,21 @@
+-- Back up the database, stop workers and apply before deploying. Safe to repeat.
+SET @has_col = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='media_links' AND column_name='audio_link_primary');
+SET @sql = IF(@has_col=0, 'ALTER TABLE media_links ADD COLUMN audio_link_primary TEXT NULL', 'SELECT 1'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @has_col = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='media_links' AND column_name='audio_link_fallback_1');
+SET @sql = IF(@has_col=0, 'ALTER TABLE media_links ADD COLUMN audio_link_fallback_1 TEXT NULL', 'SELECT 1'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @has_col = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='media_links' AND column_name='audio_link_fallback_2');
+SET @sql = IF(@has_col=0, 'ALTER TABLE media_links ADD COLUMN audio_link_fallback_2 TEXT NULL', 'SELECT 1'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @has_col = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='media_links' AND column_name='audio_link_fallback_3');
+SET @sql = IF(@has_col=0, 'ALTER TABLE media_links ADD COLUMN audio_link_fallback_3 TEXT NULL', 'SELECT 1'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @has_col = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='media_links' AND column_name='audio_primary_message_id');
+SET @sql = IF(@has_col=0, 'ALTER TABLE media_links ADD COLUMN audio_primary_message_id BIGINT NULL', 'SELECT 1'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @has_col = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='media_links' AND column_name='audio_fallback_1_message_id');
+SET @sql = IF(@has_col=0, 'ALTER TABLE media_links ADD COLUMN audio_fallback_1_message_id BIGINT NULL', 'SELECT 1'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @has_col = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='media_links' AND column_name='audio_fallback_2_message_id');
+SET @sql = IF(@has_col=0, 'ALTER TABLE media_links ADD COLUMN audio_fallback_2_message_id BIGINT NULL', 'SELECT 1'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @has_col = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='media_links' AND column_name='audio_fallback_3_message_id');
+SET @sql = IF(@has_col=0, 'ALTER TABLE media_links ADD COLUMN audio_fallback_3_message_id BIGINT NULL', 'SELECT 1'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @has_col = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='media_links' AND column_name='audio_file_size_bytes');
+SET @sql = IF(@has_col=0, 'ALTER TABLE media_links ADD COLUMN audio_file_size_bytes BIGINT UNSIGNED NULL', 'SELECT 1'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @has_col = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='bot_media_bundles' AND column_name='audio_payload');
+SET @sql = IF(@has_col=0, 'ALTER TABLE bot_media_bundles ADD COLUMN audio_payload JSON NULL', 'SELECT 1'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
