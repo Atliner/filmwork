@@ -5,6 +5,7 @@ const { query, withTransaction } = require('../config/db');
 const { AppError, assert } = require('../lib/errors');
 const { composeOverview } = require('./adminOverview');
 const mediaAdmin = require('./mediaAdmin');
+const { BOT_URLS, MANUAL_URLS, countInventory, countUrlsSQL } = require('../lib/mediaCounts');
 
 function jsonColumn(value) {
   if (value === null || value === undefined) return null;
@@ -265,7 +266,8 @@ const store = {
         : 'c.created_at DESC';
     const rows = await query(
       `SELECT ${CONTENT_COLUMNS},
-              (SELECT COUNT(*) FROM media_links ml WHERE ml.content_id = c.id AND ml.is_active = TRUE) AS media_count
+              (SELECT COALESCE(SUM(${countUrlsSQL('ml', BOT_URLS)}),0) FROM media_links ml WHERE ml.content_id = c.id) +
+              (SELECT COALESCE(SUM(${countUrlsSQL('vcl', MANUAL_URLS)}),0) FROM content_version_links vcl JOIN content_versions cv ON cv.id = vcl.version_id WHERE cv.content_id = c.id AND vcl.media_link_id IS NULL) AS media_count
        FROM contents c WHERE ${clause} ORDER BY ${order} LIMIT ${limit} OFFSET ${(page - 1) * limit}`,
       params,
     );
@@ -325,15 +327,19 @@ const store = {
       : [];
     // Source records are shown independently of the legacy editable projection.
     const media = await query('SELECT * FROM media_links WHERE content_id = :id ORDER BY id', { id: rows[0].id });
+    const tree = manualTree(versions, links);
+    const inventory = countInventory(media, tree);
     return {
       content: detailRow(rows[0]),
-      versions: manualTree(versions, links),
+      versions: tree,
       manualRevision: manualRevision(versions, links),
       botMedia: media.map(mediaAdmin.dto),
       counts: {
         seasons: rows[0].season_count === null ? null : Number(rows[0].season_count),
         episodes: rows[0].episode_count === null ? null : Number(rows[0].episode_count),
-        mediaLinks: links.length,
+        mediaLinks: inventory.versions,
+        versions: inventory.versions,
+        links: inventory.links,
       },
     };
   },

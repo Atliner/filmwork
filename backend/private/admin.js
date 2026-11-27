@@ -784,6 +784,23 @@
     paintEditor();
   }
 
+  const INVENTORY_BOT_URLS = ['tg_link_primary','tg_link_fallback_1','tg_link_fallback_2','tg_link_fallback_3',
+    'subtitle_link_primary','subtitle_link_fallback_1','subtitle_link_fallback_2','subtitle_link_fallback_3',
+    'audio_link_primary','audio_link_fallback_1','audio_link_fallback_2','audio_link_fallback_3',
+    'stream_url','playback_subtitle_url','playback_audio_url'];
+  function editorInventory(editor) {
+    const media = editor.botMedia || [], manual = (editor.versions || []).flatMap(version => version.links || []);
+    const nonempty = value => String(value ?? '').trim() !== '';
+    return { versions:media.length + manual.length,
+      links:media.reduce((n, row) => n + INVENTORY_BOT_URLS.filter(key => nonempty(row[key])).length, 0)
+        + manual.reduce((n, row) => n + ['streamUrl','subtitleUrl','dubUrl','telegramUrl'].filter(key => nonempty(row[key])).length, 0) };
+  }
+  function updateInventoryStats(editor) {
+    const counts = editorInventory(editor);
+    document.querySelectorAll('[data-inventory-versions]').forEach(node => { node.textContent = faNum(counts.versions); });
+    document.querySelectorAll('[data-inventory-links]').forEach(node => { node.textContent = faNum(counts.links); });
+  }
+
   function paintEditor() {
     const root = $('#view-root');
     const editor = state.editor;
@@ -795,7 +812,7 @@
       { label: 'نوع، سال و ژانر', done: Boolean(draft.contentType && draft.releaseYear && draft.genres) },
       { label: 'پوستر', done: Boolean(draft.posterUrl) },
       { label: 'توضیحات', done: Boolean(draft.description) },
-      { label: 'حداقل یک نسخه با لینک', done: editor.versions.some((version) => version.links.length > 0) },
+      { label: 'حداقل یک نسخه با لینک', done: editorInventory(editor).links > 0 },
       { label: 'انتشار', done: draft.status === 'published' },
     ];
 
@@ -850,8 +867,8 @@
               <div><dt>نوع</dt><dd>${draft.contentType === 'series' ? 'سریال' : 'فیلم'}</dd></div>
               <div><dt>سال</dt><dd>${draft.releaseYear ? fa(draft.releaseYear) : '—'}${draft.lastAirYear ? ` – ${fa(draft.lastAirYear)}` : ''}</dd></div>
               <div><dt>وضعیت</dt><dd><span class="status-badge status-badge--${esc(draft.status)}">${statusLabel(draft.status)}</span></dd></div>
-              <div><dt>نسخه‌ها</dt><dd>${fa(editor.versions.length)}</dd></div>
-              <div><dt>لینک‌ها</dt><dd>${faNum(editor.versions.reduce((sum, version) => sum + version.links.length, 0))}</dd></div>
+              <div><dt>نسخه‌ها</dt><dd data-inventory-versions>${faNum(editorInventory(editor).versions)}</dd></div>
+              <div><dt>لینک‌ها</dt><dd data-inventory-links>${faNum(editorInventory(editor).links)}</dd></div>
             </dl>
             <div class="checklist">
               ${checklist.map((item) => `<span class="${item.done ? 'is-done' : ''}">${item.done ? ICONS.check : ICONS.info} ${item.label}</span>`).join('')}
@@ -1083,7 +1100,7 @@
       <div class="section-card__head">
         <div><h2>${ICONS.layers} کیفیت‌ها و لینک‌ها</h2>
           <p>نوع فایل را انتخاب کنید، عنوان (مثلاً 720p) را بنویسید و نسخه‌ها را بسازید.</p></div>
-        <span class="tag">${fa(editor.versions.length)} نسخه</span>
+        <span class="tag"><span data-inventory-versions>${faNum(editorInventory(editor).versions)}</span> نسخه · <span data-inventory-links>${faNum(editorInventory(editor).links)}</span> لینک</span>
       </div>
       <div class="section-card__body">
         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
@@ -1153,12 +1170,13 @@
   }
 
   function publishStep(draft, editor) {
-    const totalLinks = editor.versions.reduce((sum, version) => sum + version.links.length, 0);
+    const inventory = editorInventory(editor);
+    const totalLinks = inventory.links;
     const missing = [];
     if (!draft.titleFa && !draft.titleEn) missing.push('عنوان');
     if (!draft.posterUrl) missing.push('پوستر');
     if (!draft.releaseYear) missing.push('سال');
-    if (!editor.versions.length) missing.push('نسخه/لینک');
+    if (!inventory.links) missing.push('نسخه/لینک');
     return `<article class="section-card">
       <div class="section-card__head"><div><h2>${ICONS.check} انتشار</h2><p>وضعیت نهایی و جایگاه در صفحه اصلی</p></div></div>
       <div class="section-card__body">
@@ -1179,7 +1197,7 @@
           </div>
         </div>
         <dl class="summary-list">
-          <div><dt>تعداد نسخه</dt><dd>${fa(editor.versions.length)}</dd></div>
+          <div><dt>تعداد نسخه</dt><dd>${faNum(inventory.versions)}</dd></div>
           <div><dt>تعداد لینک</dt><dd>${faNum(totalLinks)}</dd></div>
           <div><dt>دوبله</dt><dd>${draft.hasDub ? 'دارد' : 'ندارد'}</dd></div>
           <div><dt>زیرنویس</dt><dd>${draft.hasSub ? 'دارد' : 'ندارد'}</dd></div>
@@ -2481,6 +2499,7 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
         if (target.matches('[data-bot-field]')) {
           const item = editor.botMedia[Number(target.dataset.botIndex)];
           if (item) item[target.dataset.botField] = target.type === 'checkbox' ? target.checked : target.value;
+          updateInventoryStats(editor);
           return;
         }
         if (target.matches('[data-source-link]')) { editor.sourceLink = target.value; return; }
@@ -2495,6 +2514,7 @@ TELEGRAM_FALLBACK_2_CHAT_ID=-1003234567890`,
           const versionIndex = Number(target.dataset.versionIndex);
           const linkIndex = Number(target.dataset.linkIndex);
           editor.versions[versionIndex].links[linkIndex][target.dataset.linkField] = target.value;
+          updateInventoryStats(editor);
           return;
         }
       }

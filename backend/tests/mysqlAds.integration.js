@@ -657,3 +657,22 @@ test('separate audio and subtitle bundle is copied and survives fallback promoti
     await query('DELETE FROM bot_ingest_sessions WHERE source_chat_id=:chatId',{chatId});
   }
 });
+
+test('admin inventory counts the same bot and manual URL fields in list and detail, excluding linked projections', async () => {
+  const id=crypto.randomUUID(), mediaId=crypto.randomUUID();
+  const c=await query("INSERT INTO contents (asset_uuid,content_type,title,slug,status) VALUES (:id,'movie','count inventory',:id,'published')",{id});
+  const csrf='count-csrf', cookie=`filmwork_admin=${signAdminToken('123456789',csrf)}`;
+  async function admin(path) { const response=await fetch(base+path,{headers:{cookie}}); return {status:response.status,data:await response.json()}; }
+  try {
+    const m=await query(`INSERT INTO media_links (public_id,content_id,version_label,resolution,file_size_bytes,tg_link_primary,tg_link_fallback_1,subtitle_link_primary,audio_link_primary,stream_url,playback_audio_url,is_active)
+      VALUES (:id,:content,'one','720p',10,'https://t.me/c/1/1','https://t.me/c/2/1','https://t.me/c/1/2','https://t.me/c/1/3','https://cdn.test/video','https://cdn.test/audio',0)`,{id:mediaId,content:c.insertId});
+    const v=await query("INSERT INTO content_versions (content_id,kind,title) VALUES (:content,'sub','manual')",{content:c.insertId});
+    await query("INSERT INTO content_version_links (version_id,public_id,telegram_url,stream_url,dub_url) VALUES (:v,:id,'https://t.me/c/3/3','https://cdn.test/b','https://cdn.test/a')",{v:v.insertId,id:crypto.randomUUID()});
+    await query("INSERT INTO content_version_links (version_id,media_link_id,telegram_url,source) VALUES (:v,:m,'https://t.me/c/1/1','telegram_bot')",{v:v.insertId,m:m.insertId});
+    const detail=await admin(`/api/admin/contents/${id}`);
+    const list=await admin('/api/admin/contents?q=count%20inventory');
+    assert.equal(detail.status,200); assert.equal(list.status,200);
+    assert.equal(detail.data.counts.versions,2); assert.equal(detail.data.counts.links,9);
+    assert.equal(list.data.items.find(item=>item.id===id).mediaCount,9);
+  } finally { await query('DELETE FROM contents WHERE id=:id',{id:c.insertId}); }
+});
