@@ -769,6 +769,7 @@
             dubUrl: link.dubUrl || '', telegramUrl: link.telegramUrl || '',
           })),
         })),
+        botMedia: data.botMedia || [],
         meta: null,
         sourceText: '',
         sourceLink: '',
@@ -801,7 +802,7 @@
           <h1>${isCreate ? 'افزودن محتوای جدید' : `ویرایش ${esc(draft.titleFa || draft.titleEn || 'محتوا')}`}</h1>
           <p>${isCreate
     ? 'لینک پست تلگرام یا متن آن را وارد کنید تا فیلدها خودکار پر شوند، سپس بازبینی و ذخیره کنید.'
-    : 'تغییرات را اعمال کنید؛ لینک‌های رسانه و نسخه‌ها هم در همین صفحه به‌روزرسانی می‌شوند.'}</p>
+    : 'مشخصات و نسخه‌های دستی را ویرایش کنید. اطلاعات ربات جداگانه و فقط‌خواندنی نمایش داده می‌شود.'}</p>
         </div>
         <div class="page-head__actions">
           <button class="button button--ghost button--sm" type="button" data-view-nav="content">بازگشت به فهرست</button>
@@ -1023,6 +1024,26 @@
     </article>`;
   }
 
+  function botMediaList(media) {
+    if (!media?.length) return '';
+    const fields = [
+      ['شناسه', 'public_id'], ['نسخه', 'version_label'], ['فصل', 'season_number'],
+      ['قسمت', 'episode_number'], ['عنوان قسمت', 'episode_title'], ['نوع صدا', 'audio_type'],
+      ['نوع زیرنویس', 'subtitle_type'], ['رزولوشن', 'resolution'], ['کیفیت', 'quality_label'],
+      ['انکودر', 'encoder'], ['حجم فایل (بایت)', 'file_size_bytes'], ['نوع فایل', 'mime_type'],
+      ['پخش آنلاین', 'stream_url'], ['لینک اصلی', 'tg_link_primary'], ['لینک پشتیبان ۱', 'tg_link_fallback_1'],
+      ['لینک پشتیبان ۲', 'tg_link_fallback_2'], ['چت اصلی', 'primary_chat_id'], ['پیام اصلی', 'primary_message_id'],
+      ['چت پشتیبان ۱', 'fallback_1_chat_id'], ['پیام پشتیبان ۱', 'fallback_1_message_id'],
+      ['چت پشتیبان ۲', 'fallback_2_chat_id'], ['پیام پشتیبان ۲', 'fallback_2_message_id'],
+      ['لینک زیرنویس اصلی', 'subtitle_link_primary'], ['لینک زیرنویس پشتیبان ۱', 'subtitle_link_fallback_1'],
+      ['لینک زیرنویس پشتیبان ۲', 'subtitle_link_fallback_2'], ['پیام زیرنویس اصلی', 'subtitle_primary_message_id'],
+      ['پیام زیرنویس پشتیبان ۱', 'subtitle_fallback_1_message_id'], ['پیام زیرنویس پشتیبان ۲', 'subtitle_fallback_2_message_id'],
+      ['حجم زیرنویس (بایت)', 'subtitle_file_size_bytes'], ['سلامت', 'health_status'],
+    ];
+    return `<div class="callout">${ICONS.info}<span>فایل‌های فعال ربات به‌طور خودکار در زیر نمایش داده می‌شوند. این بخش فعلاً فقط خواندنی است؛ ویرایش و حذف دوطرفه هنوز پشتیبانی نمی‌شود. نسخه‌هایی که قبلاً با دکمهٔ دریافت وارد شده‌اند ممکن است جداگانه در بخش دستی هم دیده شوند؛ ویرایش یا حذف آن‌ها فایل ربات را تغییر نمی‌دهد.</span></div>
+      <div class="version-list"><h3>فایل‌های ربات (${fa(media.length)})</h3>${media.map((item) => `<details class="version-card"><summary class="version-card__head">${esc(item.version_label || item.resolution || 'فایل')} · ${esc(item.resolution || '')} ${item.episode_number ? `· قسمت ${esc(item.episode_number)}` : ''}</summary><div class="version-card__body"><dl class="summary-list">${fields.filter(([, key]) => item[key] !== null && item[key] !== undefined && item[key] !== '').map(([label, key]) => `<div><dt>${esc(label)}</dt><dd dir="auto" style="overflow-wrap:anywhere">${esc(item[key])}</dd></div>`).join('')}</dl></div></details>`).join('')}</div>`;
+  }
+
   function versionsStep(editor) {
     return `<article class="section-card">
       <div class="section-card__head">
@@ -1041,8 +1062,10 @@
             <input class="input" dir="ltr" data-quality-input value="${esc(editor.qualities)}" placeholder="1080p، 720p، 480p"></label>
           <button class="button button--primary button--sm" type="button" data-create-versions>${ICONS.plus} ایجاد نسخه‌ها</button>
         </div>
-        <div class="callout">${ICONS.info}<span>لینک‌های پخش آنلاین، زیرنویس، دوبله و تلگرام را برای هر ردیف وارد کنید یا بگذارید ربات مدیریت آن‌ها را از تلگرام پر کند. برای سریال، فصل و شماره قسمت را مشخص کنید.</span></div>
+        <div class="callout">${ICONS.info}<span>لینک‌های پخش آنلاین، زیرنویس، دوبله و تلگرام را برای ردیف‌های دستی وارد کنید. این بخش هنوز با فایل‌های ربات همگام نیست؛ برای سریال، فصل و شماره قسمت را مشخص کنید.</span></div>
 
+        ${botMediaList(editor.botMedia)}
+        <h3>نسخه‌های قابل ویرایش پنل</h3>
         <div class="version-list">
           ${editor.versions.length ? editor.versions.map((version, index) => versionCard(version, index, editor)).join('')
     : `<div class="version-empty">

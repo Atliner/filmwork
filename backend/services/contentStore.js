@@ -304,6 +304,20 @@ const store = {
          ORDER BY COALESCE(season_number, 0), COALESCE(episode_number, 0), id`,
       )
       : [];
+    // Read the source of truth directly. This is deliberately separate from the
+    // editable version tree: replacing that tree must not rewrite bot replicas.
+    const media = await query(
+      `SELECT public_id, season_number, episode_number, episode_title, version_label,
+              audio_type, subtitle_type, resolution, quality_label, encoder, file_size_bytes,
+              mime_type, stream_url, tg_link_primary, tg_link_fallback_1, tg_link_fallback_2,
+              primary_chat_id, primary_message_id, fallback_1_chat_id, fallback_1_message_id,
+              fallback_2_chat_id, fallback_2_message_id, subtitle_link_primary,
+              subtitle_link_fallback_1, subtitle_link_fallback_2, subtitle_primary_message_id,
+              subtitle_fallback_1_message_id, subtitle_fallback_2_message_id,
+              subtitle_file_size_bytes, health_status
+       FROM media_links WHERE content_id = :id AND is_active = TRUE ORDER BY id`,
+      { id: rows[0].id },
+    );
     const byVersion = new Map();
     for (const link of links) {
       const key = String(link.version_id);
@@ -313,6 +327,7 @@ const store = {
     return {
       content: detailRow(rows[0]),
       versions: versions.map((version) => versionDto(version, byVersion.get(String(version.id)) || [])),
+      botMedia: media,
       counts: {
         seasons: rows[0].season_count === null ? null : Number(rows[0].season_count),
         episodes: rows[0].episode_count === null ? null : Number(rows[0].episode_count),

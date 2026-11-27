@@ -438,3 +438,26 @@ test('persistent Telegram deletion queue claims due work once across workers and
   assert.deepEqual(messages.sort((a,b) => a[1]-b[1]), [[777001,1001],[777001,1002]]);
   assert.equal((await query('SELECT id FROM telegram_deletion_queue WHERE chat_id = 777001')).length, 0);
 });
+
+test('admin detail automatically lists active bot media and all replica data without modifying it', async () => {
+  const contentId = (await query('SELECT id FROM contents WHERE asset_uuid = :assetId', {assetId}))[0].id;
+  const id = crypto.randomUUID();
+  const added = await query(`INSERT INTO media_links (public_id, content_id, season_number, episode_number, version_label, audio_type,
+    subtitle_type, resolution, quality_label, encoder, file_size_bytes, tg_link_primary, tg_link_fallback_1, tg_link_fallback_2,
+    primary_chat_id, primary_message_id, subtitle_link_primary, subtitle_primary_message_id)
+    VALUES (:id, :contentId, 1, 2, 'Sample', 'soft_sub', 'separate', '720p', 'WEB-DL', 'encoder', 123456,
+    'https://t.me/c/123/10', 'https://t.me/c/456/20', 'https://t.me/c/789/30', -100123, 10, 'https://t.me/c/123/11', 11)`, {id, contentId});
+  try {
+    const { store } = require('../services/contentStore');
+    const detail = await store.getContent(assetId);
+    const media = detail.botMedia.find(item => item.public_id === id);
+    assert.ok(media);
+    assert.equal(media.tg_link_fallback_2, 'https://t.me/c/789/30');
+    assert.equal(Number(media.subtitle_primary_message_id), 11);
+    assert.equal(media.encoder, 'encoder');
+    assert.equal(Number(media.file_size_bytes), 123456);
+    assert.equal((await query('SELECT id FROM content_version_links WHERE media_link_id = :id', {id: added.insertId})).length, 0);
+    await query('UPDATE media_links SET is_active = FALSE WHERE id = :id', {id: added.insertId});
+    assert.ok(!(await store.getContent(assetId)).botMedia.some(item => item.public_id === id));
+  } finally { await query('DELETE FROM media_links WHERE id = :id', {id: added.insertId}); }
+});
